@@ -1,0 +1,12 @@
+pyproject.toml
+setup.py
+nsosim/__init__.py
+nsosim/articular_surfaces.py
+nsosim/comak_osim_update.py
+nsosim/nsm_fitting.py
+nsosim/utils.py
+nsosim/wraps.py
+nsosim.egg-info/PKG-INFO
+nsosim.egg-info/SOURCES.txt
+nsosim.egg-info/dependency_links.txt
+nsosim.egg-info/top_level.txt

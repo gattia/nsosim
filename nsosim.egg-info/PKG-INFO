@@ -1,0 +1,12 @@
+Metadata-Version: 2.1
+Name: nsosim
+Version: 0.0.1
+Summary: Library for pesonalized biomechanical models
+Author-email: Anthony Gatti <aagatti@stanford.edu>
+License: MIT
+Keywords: python
+Classifier: Development Status :: 3 - Alpha
+Classifier: Topic :: Scientific/Engineering
+Classifier: Programming Language :: Python :: 3
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown

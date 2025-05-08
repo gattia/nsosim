@@ -1,0 +1,6 @@
+pyvista
+numpy
+vtk
+mskt
+#NSM
+scipy

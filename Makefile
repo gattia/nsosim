@@ -1,0 +1,56 @@
+.PHONY: build install requirements requirements-mamba requirements-conda install-dev dev dev-mamba dev-conda docs test lint autoformat clean coverage
+
+requirements:
+	python -m pip install -r requirements.txt
+
+requirements-mamba:
+	mamba install --file requirements.txt
+
+requirements-conda:
+	conda install --file requirements.txt
+
+build:
+	python -m build -o wheelhouse
+
+install:
+	pip install .
+
+install-dev: 
+	pip install --editable .
+
+dev:
+	python -m pip install --upgrade -r requirements-dev.txt
+
+dev-mamba:
+	mamba install --file requirements-dev.txt
+
+dev-conda:
+	conda install --file requirements-dev.txt
+
+# docs:
+# 	pdoc --output-dir docs/ --html --force NSM
+# 	mv docs/NSM/* docs/
+# 	rm -rf docs/NSM
+
+
+# test:
+# 	set -e
+# 	pytest
+
+lint:
+	set -e
+	isort -c .
+	black --check --config pyproject.toml .
+
+autoformat:
+	set -e
+	isort .
+	black --config pyproject.toml .
+
+clean:
+	rm -rf build dist *.egg-info  
+
+# coverage: 
+# 	coverage run -m pytest
+# 	# Make the html version of the coverage results. 
+# 	coverage html 
