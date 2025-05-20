@@ -44,6 +44,24 @@ def remove_intersecting_vertices(mesh1, mesh2, ray_length=1.0, overlap_buffer=0.
 
 
 def get_n_largest(surface, n=1):
+    """
+    Extracts the n largest connected components from a surface mesh.
+
+    The function identifies connected regions within the input surface, sorts them by the
+    number of cells (as a proxy for area), and returns a new surface containing only
+    the n largest regions.
+
+    Args:
+        surface (pyvista.PolyData): The input surface mesh from which to extract components.
+        n (int, optional): The number of largest components to extract. Defaults to 1.
+
+    Returns:
+        pyvista.PolyData: A new surface mesh containing the n largest connected components.
+
+    Raises:
+        AssertionError: If the input `surface` or the intermediate `subregions`
+                        are not pyvista.PolyData objects.
+    """
     subregions = surface.connectivity('all')
     unique_regions = np.unique(subregions['RegionId'])
     # getting the first "n" because the outputs are sorted by # of cells
@@ -57,14 +75,26 @@ def get_n_largest(surface, n=1):
 
 def remove_cart_in_bone(cartilage_mesh, bone_mesh):
     """
-    Remove cartilage points that are inside the bone and clean up the resulting mesh.
-    
+    Removes portions of a cartilage mesh that are located inside a bone mesh.
+
+    This function identifies and removes vertices (and their associated cells) from the
+    cartilage mesh that fall within the volume of the bone mesh. The determination
+    is based on calculating the surface error (distance) from the cartilage to the
+    bone; negative or zero distances indicate points inside or on the bone surface.
+
     Args:
-    cartilage_mesh (Mesh, pyvista.PolyData, or vtk.vtkPolyData): The articular surface mesh
-    bone_mesh (Mesh, pyvista.PolyData, or vtk.vtkPolyData): The bone surface mesh
-    
+        cartilage_mesh (pymskt.mesh.Mesh, pyvista.PolyData, or vtk.vtkPolyData):
+            The cartilage mesh to be cleaned.
+        bone_mesh (pymskt.mesh.Mesh, pyvista.PolyData, or vtk.vtkPolyData):
+            The bone mesh used as the reference for removal.
+
     Returns:
-    Mesh or pyvista.PolyData: The cleaned cartilage mesh (type matches input)
+        pymskt.mesh.Mesh or pyvista.PolyData: The cleaned cartilage mesh, with parts
+            inside the bone removed. The return type matches the input type of
+            `cartilage_mesh`.
+
+    Raises:
+        TypeError: If `cartilage_mesh` or `bone_mesh` are not of the expected types.
     """
     # Check and convert input types
     def convert_to_mesh(mesh, mesh_name):
@@ -110,17 +140,23 @@ def remove_cart_in_bone(cartilage_mesh, bone_mesh):
 
 def remove_isolated_cells(input_mesh):
     """
-    Remove isolated cells from a mesh that have only one edge neighbor.
-    
-    Parameters:
-    -----------
-    input_mesh : Mesh, pyvista.PolyData, or vtk.vtkPolyData
-        The input mesh to clean.
-    
+    Removes isolated cells from a mesh iteratively.
+
+    An isolated cell is defined as a cell that has only one edge neighbor.
+    The function repeatedly identifies and removes such cells until no more
+    isolated cells are found. The mesh is then cleaned to remove unused points.
+
+    Args:
+        input_mesh (pymskt.mesh.Mesh, pyvista.PolyData, or vtk.vtkPolyData):
+            The input mesh to clean.
+
     Returns:
-    --------
-    cleaned_mesh : Same type as input_mesh or pyvista.PolyData
-        The cleaned mesh with isolated cells removed.
+        pymskt.mesh.Mesh or pyvista.PolyData: The cleaned mesh with isolated
+            cells removed. The return type matches the input type of `input_mesh`,
+            or pyvista.PolyData if the input was vtk.vtkPolyData.
+
+    Raises:
+        TypeError: If `input_mesh` is not of the expected types.
     """
     # Type checking and conversion
     if isinstance(input_mesh, Mesh):
@@ -163,6 +199,31 @@ def remove_isolated_cells(input_mesh):
 
 
 def extract_articular_surface(bone_mesh, ray_length=10.0, smooth_iter=100, n_largest=1):
+    """
+    Extracts articular surfaces from cartilage meshes associated with a bone mesh.
+
+    For each cartilage mesh linked to the `bone_mesh`:
+    1.  Identifies cartilage vertices that do not intersect the bone (using ray tracing).
+    2.  Extracts the `n_largest` connected components from the resulting surface.
+    3.  Removes any remaining cartilage portions that are inside the bone.
+    4.  Removes isolated cells from the boundaries.
+    5.  Smoothes the final articular surface.
+
+    Args:
+        bone_mesh (pymskt.mesh.Mesh): The bone mesh, which should have a
+            `list_cartilage_meshes` attribute containing associated cartilage meshes
+            (as pymskt.mesh.Mesh objects).
+        ray_length (float, optional): The length of the rays used for intersection
+            testing. Defaults to 10.0.
+        smooth_iter (int, optional): The number of smoothing iterations to apply to
+            the final articular surface. Defaults to 100.
+        n_largest (int, optional): The number of largest connected components to
+            keep after initial intersection removal. Defaults to 1.
+
+    Returns:
+        list[pyvista.PolyData]: A list of `pyvista.PolyData` objects, each
+            representing an extracted and processed articular surface.
+    """
     list_articular_surfaces = []
 
     for cart_mesh in bone_mesh.list_cartilage_meshes:
@@ -205,6 +266,38 @@ def create_articular_surfaces(
     ray_length=10,
     smooth_iter=100
 ):
+    """
+    Creates an articular surface from a bone and a cartilage mesh.
+
+    This function processes a given bone and cartilage mesh to extract the
+    articular surface of the cartilage. Steps include:
+    1.  Optionally resampling the cartilage mesh to a target triangle density.
+    2.  Resampling the bone mesh (if `bone_clusters` is specified).
+    3.  Assigning the (potentially resampled) cartilage mesh to the bone mesh.
+    4.  Extracting the articular surface using `extract_articular_surface`.
+    5.  Scaling the resulting articular surface points from mm to meters.
+
+    Args:
+        bone_mesh_osim (pymskt.mesh.Mesh): The bone mesh.
+        cart_mesh_osim (pymskt.mesh.Mesh): The cartilage mesh.
+        n_largest (int, optional): Number of largest connected components to keep.
+            Defaults to 1.
+        bone_clusters (int, optional): Target number of points for resampling the
+            bone mesh. If None, bone mesh is not resampled. Defaults to None.
+        cart_clusters (int, optional): Target number of points for resampling the
+            cartilage mesh. If `triangle_density` is also provided, this value
+            will be calculated and override this argument. Defaults to None.
+        triangle_density (float, optional): Target triangle density (triangles/mm^2)
+            for the cartilage mesh. If provided, `cart_clusters` will be calculated
+            based on this. Defaults to 4,000,000.
+        ray_length (float, optional): Ray length for `extract_articular_surface`.
+            Defaults to 10.
+        smooth_iter (int, optional): Smoothing iterations for `extract_articular_surface`.
+            Defaults to 100.
+
+    Returns:
+        pyvista.PolyData: The extracted and processed articular surface, scaled to meters.
+    """
     
     # UPDATE TO CHECK RANGE OF DENSITIES AND MESH SIZE
     # MAKE SURE THEY MATCH, OR RAISE WARNING. 
@@ -261,6 +354,30 @@ def create_articular_surfaces(
     return articular_surfaces
 
 def compute_overlap_metrics(pat_articular_surfaces, fem_articular_surfaces):
+    """
+    Computes overlap metrics between patellar and femoral articular surfaces.
+
+    Calculates:
+    1.  Percentage of patellar surface points that are close to the femoral surface
+        (distance > 0 after ray casting).
+    2.  Absolute vertical overlap (in the y-direction) between the two surfaces.
+    3.  Total vertical extent of the patellar articular surface.
+    4.  Percentage of vertical overlap relative to the total vertical extent of
+        the patellar surface.
+
+    Args:
+        pat_articular_surfaces (pymskt.mesh.Mesh or pyvista.PolyData):
+            The patellar articular surface.
+        fem_articular_surfaces (pymskt.mesh.Mesh or pyvista.PolyData):
+            The femoral articular surface.
+
+    Returns:
+        tuple: A tuple containing:
+            - percent_non_zero (float): Percentage of patellar surface not overlapping.
+            - vert_overlap (float): Absolute vertical overlap (y-direction).
+            - total_vert (float): Total vertical extent of patellar surface.
+            - percent_vert_overlap (float): Percentage vertical overlap.
+    """
     if not isinstance(pat_articular_surfaces, Mesh):
         pat_articular_surfaces = Mesh(pat_articular_surfaces)
         
@@ -294,6 +411,46 @@ def optimize_patella_position(
     contact_area_adjustment = np.array([0, 0.001, 0]),
     return_move_down=False
 ):
+    """
+    Optimizes the patella's vertical position based on overlap with femoral cartilage.
+
+    The function adjusts the patella's position downwards if overlap metrics
+    (percentage of vertical overlap, absolute vertical overlap, or contact area)
+    fall below specified thresholds.
+
+    Args:
+        pat_articular_surfaces (pymskt.mesh.Mesh or pyvista.PolyData):
+            The patellar articular surface. This mesh's points will be modified.
+        fem_articular_surfaces (pymskt.mesh.Mesh or pyvista.PolyData):
+            The femoral articular surface, used as a reference for overlap.
+        pat_mesh_osim (pymskt.mesh.Mesh): The full patella bone mesh. This mesh's
+            points will also be modified in conjunction with `pat_articular_surfaces`.
+        patella_adjust_rel_vert_overlap (float, optional): Target minimum
+            percentage of vertical overlap. If current overlap is less, patella is
+            moved down. Defaults to None (no adjustment based on this criterion).
+            Example: 0.4 (for 40%).
+        patella_adjust_abs_vert_overlap (float, optional): Target minimum
+            absolute vertical overlap (in mesh units, typically meters). If current
+            overlap is less, patella is moved down. Defaults to None.
+            Example: 0.012 (for 1.2 cm).
+        patella_adjust_contact_area (float, optional): Target minimum percentage
+            of non-zero contact area (patellar surface points close to femoral
+            surface). If current area is less, patella is iteratively moved down.
+            Defaults to None. Example: 0.2 (for 20%).
+        contact_area_adjustment (np.ndarray, optional): The vector by which to
+            move the patella down in each iteration if adjusting for contact area.
+            Defaults to np.array([0, 0.001, 0]) (1 mm down in y).
+        return_move_down (bool, optional): If True, also returns the total
+            displacement vector applied to the patella. Defaults to False.
+
+    Returns:
+        tuple:
+            - pat_articular_surfaces (pymskt.mesh.Mesh or pyvista.PolyData):
+                The modified patellar articular surface.
+            - pat_mesh_osim (pymskt.mesh.Mesh): The modified full patella bone mesh.
+            - move_down_total (np.ndarray, optional): If `return_move_down` is True,
+                this is the total 3D vector representing the patella's displacement.
+    """
     # determine how much of the patella cartilage is overlapping
     # with the femoral cartilage. Depending on the degree of overlap,
     # move the patella downward. 

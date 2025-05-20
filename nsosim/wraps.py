@@ -2,6 +2,32 @@ import numpy as np
 from scipy.optimize import leastsq
 
 class wrap_surface:
+    """
+    Represents a wrapping surface object in an OpenSim model.
+
+    This class stores parameters that define a muscle or ligament wrapping surface,
+    such as its name, the body it's attached to, its geometric type (e.g.,
+    'WrapCylinder', 'WrapEllipsoid'), orientation, translation, and dimensions.
+
+    Attributes:
+        name (str): The name of the wrap surface.
+        body (str): The name of the body segment this wrap surface is attached to
+            (e.g., 'femur_r', 'tibia_proximal_r').
+        type_ (str): The type of wrapping object (e.g., 'WrapCylinder',
+            'WrapEllipsoid').
+        xyz_body_rotation (numpy.ndarray): A 3-element array representing the
+            Euler angles (in radians, typically X-Y-Z order) for the orientation
+            of the wrap surface relative to its parent body.
+        translation (numpy.ndarray): A 3-element array representing the x, y, z
+            translation of the wrap surface's origin relative to its parent body.
+        radius (float, optional): The radius of the wrap surface, applicable if
+            `type_` is 'WrapCylinder'.
+        length (float, optional): The length of the wrap surface, applicable if
+            `type_` is 'WrapCylinder'.
+        dimensions (numpy.ndarray, optional): A 3-element array representing the
+            dimensions (e.g., radii along x, y, z axes) of the wrap surface,
+            applicable if `type_` is 'WrapEllipsoid'.
+    """
     def __init__(self, name, body, type_, xyz_body_rotation, translation, radius, length, dimensions):
         self.name = name
         self.body = body
@@ -13,6 +39,25 @@ class wrap_surface:
         self.dimensions = dimensions
 
 def knee_ext_r_wrap(pts_indices, fem_interpolated_pts_osim, ME, LE):
+    """
+    Creates a 'WrapCylinder' for the knee extensors (KnExt_at_fem_r) on the right femur.
+
+    The cylinder is defined based on a set of interpolated points on the femur
+    and the positions of the medial (ME) and lateral (LE) epicondyles.
+    The cylinder's axis is implicitly aligned with the OpenSim model's axes,
+    and its radius and length are derived from the provided points.
+
+    Args:
+        pts_indices (list or numpy.ndarray): Indices into `fem_interpolated_pts_osim`
+            that define the relevant points for this wrap object.
+        fem_interpolated_pts_osim (numpy.ndarray): Nx3 array of point coordinates on
+            the femur in the OpenSim coordinate system.
+        ME (numpy.ndarray): 3-element array for the medial epicondyle coordinates.
+        LE (numpy.ndarray): 3-element array for the lateral epicondyle coordinates.
+
+    Returns:
+        wrap_surface: A `wrap_surface` object representing the defined cylinder.
+    """
     pts = fem_interpolated_pts_osim[pts_indices,:]
     h = 2 * np.abs(ME[2] - LE[2])
     x0 = pts.mean(axis=0)
@@ -32,6 +77,23 @@ def knee_ext_r_wrap(pts_indices, fem_interpolated_pts_osim, ME, LE):
 
 
 def knee_ext_vasint_r_wrap(pts_indices, fem_interpolated_pts_osim, ME, LE):
+    """
+    Creates a 'WrapCylinder' for the vastus intermedius (KnExt_vasint_at_fem_r)
+    on the right femur.
+
+    Similar to `knee_ext_r_wrap`, this defines a cylinder based on interpolated
+    femoral points and epicondyle positions. It's intended for a specific part
+    of the knee extensor mechanism.
+
+    Args:
+        pts_indices (list or numpy.ndarray): Indices into `fem_interpolated_pts_osim`.
+        fem_interpolated_pts_osim (numpy.ndarray): Nx3 array of femur points (OSIM space).
+        ME (numpy.ndarray): Medial epicondyle coordinates.
+        LE (numpy.ndarray): Lateral epicondyle coordinates.
+
+    Returns:
+        wrap_surface: A `wrap_surface` object for the vastus intermedius cylinder.
+    """
     pts = fem_interpolated_pts_osim[pts_indices,:]
     h = 2 * np.abs(ME[2] - LE[2])
     x0 = pts.mean(axis=0)
@@ -51,6 +113,23 @@ def knee_ext_vasint_r_wrap(pts_indices, fem_interpolated_pts_osim, ME, LE):
 
 
 def gastroc_condyles_r_wrap(pts_indices, fem_interpolated_pts_osim, ME, LE):
+    """
+    Creates a 'WrapEllipsoid' for the gastrocnemius attachment at the femoral
+    condyles (Gastroc_at_Condyles_r) on the right femur.
+
+    The ellipsoid is defined based on a set of interpolated points on the femur
+    and the medial (ME) and lateral (LE) epicondyles. Its position, dimensions,
+    and orientation are calculated from these points.
+
+    Args:
+        pts_indices (list or numpy.ndarray): Indices into `fem_interpolated_pts_osim`.
+        fem_interpolated_pts_osim (numpy.ndarray): Nx3 array of femur points (OSIM space).
+        ME (numpy.ndarray): Medial epicondyle coordinates.
+        LE (numpy.ndarray): Lateral epicondyle coordinates.
+
+    Returns:
+        wrap_surface: A `wrap_surface` object for the gastrocnemius ellipsoid.
+    """
     # I_orig = pts_dict['femur']['Gastroc_at_Condyles_r']
     pts = fem_interpolated_pts_osim[pts_indices,:]
 
@@ -87,6 +166,25 @@ def gastroc_condyles_r_wrap(pts_indices, fem_interpolated_pts_osim, ME, LE):
     return wrap_
 
 def capsule_r_wrap(pts_indices, fem_interpolated_pts_osim, ME, LE):
+    """
+    Creates a 'WrapCylinder' for the knee joint capsule (Capsule_r) attached
+    to the right distal femur (femur_distal_r).
+
+    The cylinder is defined by fitting to a cloud of interpolated points on the
+    femur. The medial (ME) and lateral (LE) epicondyles help define its height
+    and initial position for the fitting process. The orientation and radius are
+    determined by a least-squares fit to the points.
+
+    Args:
+        pts_indices (list or numpy.ndarray): Indices into `fem_interpolated_pts_osim`
+            representing points on the capsule attachment area.
+        fem_interpolated_pts_osim (numpy.ndarray): Nx3 array of femur points (OSIM space).
+        ME (numpy.ndarray): Medial epicondyle coordinates.
+        LE (numpy.ndarray): Lateral epicondyle coordinates.
+
+    Returns:
+        wrap_surface: A `wrap_surface` object for the capsule cylinder.
+    """
     # I_orig = pts_dict['femur']['Capsule_r']
     pts = fem_interpolated_pts_osim[pts_indices,:]
 
@@ -124,6 +222,23 @@ def capsule_r_wrap(pts_indices, fem_interpolated_pts_osim, ME, LE):
     return wrap_
 
 def med_l_r_wrap(pts_indices, tib_interpolated_pts_osim):
+    """
+    Creates a 'WrapEllipsoid' for the medial collateral ligament (Med_Lig_r)
+    on the right proximal tibia (tibia_proximal_r).
+
+    The ellipsoid's dimensions, position, and orientation are determined based
+    on a specific set of interpolated points on the tibia.
+
+    Args:
+        pts_indices (list or numpy.ndarray): Indices into `tib_interpolated_pts_osim`
+            defining the relevant points for this ligament wrap object.
+        tib_interpolated_pts_osim (numpy.ndarray): Nx3 array of point coordinates on
+            the tibia in the OpenSim coordinate system.
+
+    Returns:
+        wrap_surface: A `wrap_surface` object representing the defined ellipsoid
+            for the medial ligament.
+    """
     # I_orig = pts_dict['tibia']['Med_Lig_r']
     pts = tib_interpolated_pts_osim[pts_indices,:]
 
@@ -156,6 +271,20 @@ def med_l_r_wrap(pts_indices, tib_interpolated_pts_osim):
     return wrap_
 
 def med_ligp_r_wrap(pts_indices, tib_interpolated_pts_osim):
+    """
+    Creates a 'WrapEllipsoid' for the posterior part of the medial collateral
+    ligament (Med_LigP_r) on the right proximal tibia (tibia_proximal_r).
+
+    The ellipsoid's parameters (dimensions, position, orientation) are derived
+    from a specified set of interpolated points on the tibia.
+
+    Args:
+        pts_indices (list or numpy.ndarray): Indices into `tib_interpolated_pts_osim`.
+        tib_interpolated_pts_osim (numpy.ndarray): Nx3 array of tibia points (OSIM space).
+
+    Returns:
+        wrap_surface: A `wrap_surface` object for the posterior medial ligament ellipsoid.
+    """
     #I_orig = pts_dict['tibia']['Med_LigP_r']
     pts = tib_interpolated_pts_osim[pts_indices,:]
 
@@ -185,6 +314,24 @@ def med_ligp_r_wrap(pts_indices, tib_interpolated_pts_osim):
     return wrap_
 
 def pat_ten_wrap(pts_indices, pat_interpolated_pts_osim):
+    """
+    Creates a 'WrapEllipsoid' for the patellar tendon (PatTen_r) attachment
+    on the right patella (patella_r).
+
+    The ellipsoid is defined based on a set of interpolated points on the patella.
+    Its position and dimensions are calculated from these points. The orientation
+    is assumed to be aligned with the patella's body axes (zero rotation).
+
+    Args:
+        pts_indices (list or numpy.ndarray): Indices into `pat_interpolated_pts_osim`
+            defining the relevant points for this wrap object.
+        pat_interpolated_pts_osim (numpy.ndarray): Nx3 array of point coordinates on
+            the patella in the OpenSim coordinate system.
+
+    Returns:
+        wrap_surface: A `wrap_surface` object representing the defined ellipsoid
+            for the patellar tendon.
+    """
     #I_orig = pts_dict['patella']['PatTen_r']
     pts = pat_interpolated_pts_osim[pts_indices, :]
 

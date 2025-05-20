@@ -29,6 +29,64 @@ def align_bone_osim_fit_nsm(
     femur_transform=None,
     femur_acs_inverse=None
 ):
+    """
+    Aligns a single bone (femur, tibia, or patella) and its cartilage, then fits an NSM.
+
+    The process involves:
+    1. Loading the subject's bone mesh.
+    2. If it's the femur and `acs_align` is True, aligns it to a predefined
+       anatomical coordinate system (ACS).
+    3. Rigidly registers the bone to a reference bone mesh. For non-femur bones,
+       it applies transformations derived from the femur's alignment and registration.
+    4. Loads and processes the associated cartilage mesh(es), applying the same
+       transformations.
+    5. Saves intermediate aligned bone and cartilage meshes.
+    6. Fits a Neural Shape Model (NSM) to the aligned bone and cartilage meshes.
+    7. Stores the NSM reconstruction results (latent vector, meshes, parameters)
+       in the input dictionary `dict_bone`.
+
+    Args:
+        bone (str): The name of the bone (e.g., 'femur', 'tibia', 'patella').
+        dict_bone (dict): A dictionary containing paths and parameters for the bone,
+            including subject and reference mesh filenames, and NSM model paths.
+            This dictionary is updated in place.
+        folder_bones (str): Path to the directory containing the subject's raw mesh files.
+        folder_save (str): Path to the directory where aligned and NSM-reconstructed
+            meshes will be saved.
+        rigid_reg_type (str, optional): Type of rigid registration ('rigid' or
+            'similarity'). Defaults to 'rigid'.
+        acs_align (bool, optional): Whether to perform ACS alignment for the femur.
+            Defaults to False.
+        save_intermediate_cartilage (bool, optional): Whether to save the aligned
+            cartilage mesh. Defaults to True.
+        intermediate_cartilage_exists_ok (bool, optional): If True, allows overwriting
+            existing intermediate cartilage files. Defaults to True.
+        intermediate_cart_name (str, optional): Filename template for the saved
+            intermediate cartilage mesh. Defaults to '{bone}_cart.vtk'.
+        n_samples_latent_recon (int, optional): Number of samples for latent space
+            reconstruction during NSM fitting. Defaults to 20_000.
+        num_iter (int, optional): Number of iterations for NSM fitting. If None,
+            uses model's default. Defaults to None.
+        convergence_patience (int, optional): Patience for NSM fitting convergence.
+            Defaults to 50.
+        scale_jointly (bool, optional): Whether to scale bone and cartilage jointly
+            during NSM fitting. Defaults to False.
+        femur_transform (numpy.ndarray, optional): 4x4 transformation matrix from
+            femur registration, applied to non-femur bones. Required if `bone` is not 'femur'.
+        femur_acs_inverse (numpy.ndarray, optional): 4x4 inverse ACS transformation
+            from femur, applied to non-femur bones if `acs_align` was True for femur.
+            Required if `bone` is not 'femur' and `acs_align` was used for femur.
+
+    Returns:
+        dict: The updated `dict_bone` containing NSM fitting results and transformations.
+
+    Raises:
+        AssertionError: If `femur_transform` or `femur_acs_inverse` are not provided
+            when required for non-femur bones.
+        ValueError: If cartilage filename in `dict_bone` is not a string or list, or
+            if an intermediate cartilage file exists and `intermediate_cartilage_exists_ok`
+            is False.
+    """
     subject_bone = Mesh(os.path.join(folder_bones, dict_bone['subject']['bone_filename']))
     # mean_ = np.mean(subject_bone.point_coords, axis=0)
 
@@ -148,6 +206,39 @@ def align_knee_osim_fit_nsm(
     rigid_reg_type='rigid',
     acs_align=False
 ):
+    """
+    Aligns all knee bones (femur, tibia, patella) and their cartilages, then fits NSMs.
+
+    This function iterates through each bone specified in `dict_bones` (typically
+    femur, tibia, patella) and calls `align_bone_osim_fit_nsm` for each one.
+    Transformations from the femur (ACS alignment and registration) are passed
+    to the other bones to ensure consistent alignment of the entire knee joint.
+
+    After NSM fitting for each bone, it saves:
+    - The alignment transformation parameters (linear transform, scale, center) as a JSON file.
+    - The NSM latent vector as a .npy file.
+    - The NSM-reconstructed bone and cartilage meshes in VTK format (in mm).
+
+    Args:
+        dict_bones (dict): A dictionary where keys are bone names (e.g., 'femur')
+            and values are dictionaries compatible with `align_bone_osim_fit_nsm`'s
+            `dict_bone` argument.
+        folder_subject_bones (str): Path to the directory containing the subject's
+            raw mesh files.
+        folder_save_bones (str): Path to the base directory where aligned and
+            NSM-reconstructed meshes and related files will be saved (subdirectories
+            will be created for each bone).
+        n_samples_latent_recon (int, optional): Number of samples for latent space
+            reconstruction. Defaults to 20_000.
+        convergence_patience (int, optional): Patience for NSM fitting convergence.
+            Defaults to 10.
+        rigid_reg_type (str, optional): Type of rigid registration. Defaults to 'rigid'.
+        acs_align (bool, optional): Whether to perform ACS alignment for the femur.
+            Defaults to False.
+
+    Returns:
+        dict: The updated `dict_bones` with results from NSM fitting for all bones.
+    """
 
     for bone, dict_ in dict_bones.items():
         print('bone')
@@ -209,6 +300,44 @@ def interpolate_ref_points_nsm_space(
     subject_latent,
 
 ):
+    """
+    Interpolates points from a reference mesh to a subject's NSM latent space.
+
+    Given a reference mesh, its transformation to a reference NSM space, the
+    reference NSM latent vector, an NSM model, and a subject's NSM latent vector,
+    this function finds the corresponding 3D point locations in the subject's
+    NSM space for each point on the reference mesh.
+
+    Steps:
+    1.  Loads the reference mesh (IV or VTK format).
+    2.  Loads transformation parameters (ICP transform, center, scale) that map the
+        reference mesh to the reference NSM space.
+    3.  Transforms the reference mesh points into the reference NSM space.
+    4.  Loads the reference NSM latent vector.
+    5.  Uses latent space interpolation (`pymskt.mesh.interpolate.interpolate_points`)
+        to find the positions of these points given the subject's latent vector.
+
+    Args:
+        ref_mesh_path (str): Path to the reference mesh file (.iv or .vtk).
+        path_ref_transform_file (str): Path to a JSON file containing the transformation
+            parameters (`transform_matrix`, `mean_orig`, `orig_scale`) for the
+            reference mesh to reference NSM space.
+        path_ref_latent (str): Path to a .npy file containing the reference NSM latent vector.
+        model: The trained NSM model object (e.g., from `NSM.models`).
+        subject_latent (numpy.ndarray or list): The NSM latent vector for the target subject.
+
+    Returns:
+        dict: A dictionary containing:
+            - 'interpolated_points' (numpy.ndarray): The interpolated point coordinates
+              in the subject's NSM space.
+            - 'center' (numpy.ndarray): The centering vector used for the reference mesh
+              transformation.
+            - 'scale' (numpy.ndarray): The scaling factor used for the reference mesh
+              transformation.
+
+    Raises:
+        ValueError: If `ref_mesh_path` has an unrecognized file extension.
+    """
     if ref_mesh_path.endswith('.iv'):
         ref_mesh = read_iv(ref_mesh_path)
     elif ref_mesh_path.endswith('.vtk'):
@@ -277,6 +406,29 @@ def interp_ref_to_subject_to_osim(
     dict_bones,
     folder_nsm_files,
 ):
+    """
+    Interpolates reference points to a subject's NSM space and then to OSIM space.
+
+    This function orchestrates the process of taking predefined points on a
+    reference bone model, finding their corresponding locations on a subject-specific
+    NSM reconstruction, and finally transforming these locations into the OpenSim (OSIM)
+    coordinate system.
+
+    Args:
+        bone (str): The name of the bone (e.g., 'femur', 'tibia').
+        ref_center (numpy.ndarray): The original centering vector of the reference mesh
+            before it was transformed to the NSM reference space.
+        folder_ref_bones (str): Path to the directory containing reference bone files
+            (e.g., ACLC_mean_Femur.iv).
+        dict_bones (dict): Dictionary containing the subject's NSM fitting results,
+            including the model, latent vector, and transformation parameters.
+        folder_nsm_files (str): Path to the directory containing NSM-related files for
+            the reference model (alignment JSON, latent vector .npy).
+
+    Returns:
+        numpy.ndarray: The interpolated point coordinates transformed into the
+            OSIM coordinate system.
+    """
     # Set femur params
     bone_filename = f'ACLC_mean_{bone.capitalize()}.iv'
     bone_ref_mesh_path = os.path.join(folder_ref_bones, bone_filename)
@@ -310,6 +462,26 @@ def apply_transform(
     scale,
     center,
 ):
+    """
+    Applies a transformation (ICP, scaling, centering) to a set of points.
+
+    This is typically used to transform points from a canonical/normalized space
+    (e.g., NSM space) to a subject-specific or original mesh space.
+
+    The transformation sequence is:
+    1. Apply the ICP transformation (a 4x4 matrix).
+    2. Undo centering (subtract the center vector).
+    3. Undo scaling (divide by the scale factor).
+
+    Args:
+        points (numpy.ndarray): Nx3 array of points to transform.
+        icp_transform (numpy.ndarray): 4x4 ICP transformation matrix.
+        scale (float or numpy.ndarray): Scaling factor.
+        center (numpy.ndarray): 3D centering vector.
+
+    Returns:
+        numpy.ndarray: Nx3 array of transformed points.
+    """
     points_ = points.copy()
     
     # E first apply the transform, and then apply centering 
@@ -332,6 +504,26 @@ def undo_transform(
     scale,
     center,
 ):
+    """
+    Reverses a transformation (ICP, scaling, centering) applied to a set of points.
+
+    This is typically used to transform points from a subject-specific or original
+    mesh space back to a canonical/normalized space (e.g., NSM space).
+
+    The inverse transformation sequence is:
+    1. Apply scaling (multiply by the scale factor).
+    2. Apply centering (add the center vector).
+    3. Apply the inverse of the ICP transformation.
+
+    Args:
+        points (numpy.ndarray): Nx3 array of points to transform.
+        icp_transform (numpy.ndarray): 4x4 ICP transformation matrix.
+        scale (float or numpy.ndarray): Scaling factor.
+        center (numpy.ndarray): 3D centering vector.
+
+    Returns:
+        numpy.ndarray: Nx3 array of transformed points.
+    """
     points_ = points.copy()
     # apple inverse scaling
     points_ *= scale
@@ -348,6 +540,24 @@ def convert_nsm_recon_to_OSIM_(
     points_,
     ref_mesh_orig_center,
 ):
+    """
+    Converts points from a (typically NSM-reconstructed) space to OpenSim (OSIM) coordinates.
+
+    This specific version of the conversion involves:
+    1. Adding back an original reference mesh centering bias.
+    2. Scaling from millimeters to meters.
+    3. Flipping the Y and X axes (y -> -y, x -> -x).
+    4. Applying a rotation matrix to map from the MRI-based coordinate system
+       (after flips) to the OSIM coordinate system (X_mri -> Y_osim, Y_mri -> Z_osim, Z_mri -> X_osim).
+
+    Args:
+        points_ (numpy.ndarray): Nx3 array of points in the source space (e.g., mm, NSM-aligned).
+        ref_mesh_orig_center (numpy.ndarray): The original centering vector that was
+            subtracted from the reference mesh before NSM processing.
+
+    Returns:
+        numpy.ndarray: Nx3 array of points in OSIM coordinates (meters).
+    """
     #remove bias from reference femur mesh 
     points_ += ref_mesh_orig_center
 
@@ -374,8 +584,21 @@ def convert_OSIM_to_nsm_(
     ref_mesh_orig_center,
 ):
     """
-    inverse of the convert_nsm_recon_to_OSIM_ function
-    Undoes the axis changes, mm to m conversion, and the center bias
+    Converts points from OpenSim (OSIM) coordinates back to an NSM-reconstructable space.
+
+    This is the inverse of `convert_nsm_recon_to_OSIM_`. It involves:
+    1. Inverting the OSIM to MRI-based coordinate system rotation.
+    2. Flipping the X and Y axes back (x -> -x, y -> -y).
+    3. Scaling from meters to millimeters.
+    4. Subtracting the original reference mesh centering bias.
+
+    Args:
+        points_ (numpy.ndarray): Nx3 array of points in OSIM coordinates (meters).
+        ref_mesh_orig_center (numpy.ndarray): The original centering vector that was
+            subtracted from the reference mesh before NSM processing.
+
+    Returns:
+        numpy.ndarray: Nx3 array of points in the source space (e.g., mm, NSM-aligned).
     """
     # invert the rotation. (MRI: x -> y, y -> z, z -> x)
     R_MRI_to_osim = np.array([
@@ -405,6 +628,29 @@ def convert_nsm_recon_to_OSIM(
     center,
     ref_mesh_orig_center,
 ):
+    """
+    Converts NSM-reconstructed points to the OpenSim (OSIM) coordinate system.
+
+    This function combines `undo_transform` (to go from canonical NSM space to
+    the subject's aligned physical space in mm) and then `convert_nsm_recon_to_OSIM_`
+    (to go from that physical space to OSIM coordinates in meters).
+
+    Args:
+        points (numpy.ndarray): Nx3 array of points in the canonical NSM space.
+        icp_transform (vtk.vtkIterativeClosestPointTransform or numpy.ndarray):
+            The ICP transformation applied during NSM fitting. Can be a VTK object
+            or a 4x4 numpy array.
+        scale (float or numpy.ndarray): Scaling factor from NSM fitting.
+        center (numpy.ndarray): Centering vector from NSM fitting.
+        ref_mesh_orig_center (numpy.ndarray): The original centering vector of the
+            reference mesh before it was transformed to the NSM reference space.
+
+    Returns:
+        numpy.ndarray: Nx3 array of points in OSIM coordinates (meters).
+
+    Raises:
+        ValueError: If `icp_transform` is not a valid type.
+    """
     if isinstance(icp_transform, vtk.vtkIterativeClosestPointTransform):
         icp_transform = get_linear_transform_matrix(icp_transform)
     elif isinstance(icp_transform, np.ndarray):
@@ -425,6 +671,30 @@ def convert_OSIM_to_nsm(
     center,
     ref_mesh_orig_center,
 ):
+    """
+    Converts points from OpenSim (OSIM) coordinate system to NSM space.
+
+    This function is the inverse of `convert_nsm_recon_to_OSIM`. It combines
+    `convert_OSIM_to_nsm_` (to go from OSIM coordinates to the subject's aligned
+    physical space in mm) and then `apply_transform` (to go from that physical
+    space to the canonical NSM space).
+
+    Args:
+        points (numpy.ndarray): Nx3 array of points in OSIM coordinates (meters).
+        icp_transform (vtk.vtkIterativeClosestPointTransform or numpy.ndarray):
+            The ICP transformation applied during NSM fitting. Can be a VTK object
+            or a 4x4 numpy array.
+        scale (float or numpy.ndarray): Scaling factor from NSM fitting.
+        center (numpy.ndarray): Centering vector from NSM fitting.
+        ref_mesh_orig_center (numpy.ndarray): The original centering vector of the
+            reference mesh before it was transformed to the NSM reference space.
+
+    Returns:
+        numpy.ndarray: Nx3 array of points in the canonical NSM space.
+
+    Raises:
+        ValueError: If `icp_transform` is not a valid type.
+    """
     if isinstance(icp_transform, vtk.vtkIterativeClosestPointTransform):
         icp_transform = get_linear_transform_matrix(icp_transform)
     elif isinstance(icp_transform, np.ndarray):
@@ -445,6 +715,35 @@ def nsm_recon_to_osim(
     bone_clusters=20_000,
     cart_clusters=None,
 ):
+    """
+    Transforms NSM-reconstructed bone and cartilage meshes to OSIM coordinates.
+
+    Takes the bone and cartilage meshes from NSM reconstruction (which are typically
+    in a centered, scaled, and possibly ICP-aligned space in mm), converts their
+    point coordinates to the OSIM coordinate system (meters) using
+    `convert_nsm_recon_to_OSIM_`. Optionally resamples the meshes to a target
+    number of points/clusters.
+
+    Args:
+        bone (str): The name of the bone (e.g., 'femur', 'tibia'). Used to access
+            the correct meshes from `dict_bones`.
+        dict_bones (dict): Dictionary containing the subject's NSM fitting results,
+            including `bone_mesh_nsm` and `cart_mesh_nsm` for the specified `bone`.
+        fem_ref_center (numpy.ndarray): The original centering vector of the reference
+            femur mesh. This is used by `convert_nsm_recon_to_OSIM_` for all bones
+            assuming a consistent reference frame was used.
+        bone_clusters (int, optional): Target number of points for resampling the
+            bone mesh after coordinate conversion. If None, no resampling. Defaults to 20_000.
+        cart_clusters (int, optional): Target number of points for resampling the
+            cartilage mesh after coordinate conversion. If None, no resampling. Defaults to None.
+
+    Returns:
+        tuple: A tuple containing:
+            - bone_mesh_osim (pymskt.mesh.Mesh): The bone mesh with points in OSIM
+              coordinates, optionally resampled.
+            - cart_mesh_osim (pymskt.mesh.Mesh): The cartilage mesh with points in
+              OSIM coordinates, optionally resampled.
+    """
     bone_mesh = dict_bones[bone]['subject']['bone_mesh_nsm'].copy()
     cart_mesh = dict_bones[bone]['subject']['cart_mesh_nsm'].copy()
     

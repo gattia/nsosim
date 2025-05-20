@@ -5,6 +5,20 @@ import xml.etree.ElementTree as ET
 
 # helper to get fem/tib offsets
 def get_femur_r_offset(root):
+    """
+    Retrieves the femur's right side offset from an OpenSim model XML structure.
+
+    Parses the XML tree to find the translation vector of the PhysicalOffsetFrame
+    associated with the WeldJoint named 'femur_femur_distal_r'.
+
+    Args:
+        root (xml.etree.ElementTree.Element): The root element of the parsed
+            OpenSim model XML (typically the <OpenSimDocument> tag or its child <Model>).
+
+    Returns:
+        numpy.ndarray: A 1D array of floats representing the x, y, z translation
+            offset of the right femur.
+    """
     JointSet = root.find('JointSet')[0]
     femur_r_offset = np.fromstring(
         JointSet.findall("./WeldJoint[@name='femur_femur_distal_r']/frames/PhysicalOffsetFrame/translation")[0].text,
@@ -12,6 +26,20 @@ def get_femur_r_offset(root):
     return femur_r_offset
 
 def get_tibia_r_offset(root):
+    """
+    Retrieves the tibia's right side offset from an OpenSim model XML structure.
+
+    Parses the XML tree to find the translation vector of the PhysicalOffsetFrame
+    associated with the WeldJoint named 'tibia_tibia_proximal_r'.
+
+    Args:
+        root (xml.etree.ElementTree.Element): The root element of the parsed
+            OpenSim model XML (typically the <OpenSimDocument> tag or its child <Model>).
+
+    Returns:
+        numpy.ndarray: A 1D array of floats representing the x, y, z translation
+            offset of the right tibia.
+    """
     JointSet = root.find('JointSet')[0]
     tibia_r_offset = np.fromstring(
         JointSet.findall("./WeldJoint[@name='tibia_tibia_proximal_r']/frames/PhysicalOffsetFrame/translation")[0].text,
@@ -29,6 +57,23 @@ def update_comak_bodyset_stl(
         pat_cart_filename='patella_articular_surface_osim.stl'
 
     ):
+    """
+    Updates the mesh file paths for body visualization geometry in an OpenSim model.
+
+    Modifies the <mesh_file> tags within the <BodySet> for femur_distal_r,
+    tibia_proximal_r, and patella_r bodies, and their respective cartilage components.
+    This primarily affects how the model is visualized, not the contact simulation.
+
+    Args:
+        root (xml.etree.ElementTree.Element): The root element of the <Model> tag
+            in the OpenSim XML file.
+        fem_mesh_filename (str, optional): Filename for the femur bone mesh.
+        fem_cart_filename (str, optional): Filename for the femur cartilage mesh.
+        tib_mesh_filename (str, optional): Filename for the tibia bone mesh.
+        tib_cart_filename (str, optional): Filename for the tibia cartilage mesh.
+        pat_mesh_filename (str, optional): Filename for the patella bone mesh.
+        pat_cart_filename (str, optional): Filename for the patella cartilage mesh.
+    """
     # update body set geometry (used for visualization only)
     BodySet = root.find('BodySet')[0]
     BodySet.findall("./Body[@name='femur_distal_r']/attached_geometry/Mesh[@name='femur_bone']/mesh_file")[0].text = \
@@ -54,6 +99,23 @@ def update_comak_contact_geometry_stl(
         pat_cart_filename='patella_articular_surface_osim.stl'
 
 ):
+    """
+    Updates the mesh file paths for contact geometry in an OpenSim model.
+
+    Modifies the <mesh_file> and <mesh_back_file> tags for Smith2018ContactMesh
+    elements associated with femur, tibia, and patella cartilages. These meshes
+    are used by the contact algorithm during simulation.
+
+    Args:
+        root (xml.etree.ElementTree.Element): The root element of the <Model> tag
+            in the OpenSim XML file.
+        fem_mesh_filename (str, optional): Filename for the femur bone mesh (backing surface).
+        fem_cart_filename (str, optional): Filename for the femur cartilage mesh (contact surface).
+        tib_mesh_filename (str, optional): Filename for the tibia bone mesh (backing surface).
+        tib_cart_filename (str, optional): Filename for the tibia cartilage mesh (contact surface).
+        pat_mesh_filename (str, optional): Filename for the patella bone mesh (backing surface).
+        pat_cart_filename (str, optional): Filename for the patella cartilage mesh (contact surface).
+    """
     # update contact geometry (used in simulation)
     ContactSet = root.find('ContactGeometrySet')[0]
     ContactSet.findall("./Smith2018ContactMesh[@name='femur_cartilage']/mesh_file")[0].text = \
@@ -74,6 +136,22 @@ def update_wrap_objects(
         root,
         list_results
 ):
+    """
+    Updates the properties of wrapping objects in an OpenSim model.
+
+    Iterates through a list of wrap surface objects and updates their
+    `xyz_body_rotation`, `translation`, and type-specific properties (radius, length
+    for WrapCylinder; dimensions for WrapEllipsoid) in the OpenSim model XML.
+    Offsets for femur and tibia wrap objects are adjusted based on their respective
+    body offsets in the model.
+
+    Args:
+        root (xml.etree.ElementTree.Element): The root element of the <Model> tag
+            in the OpenSim XML file.
+        list_results (list): A list of `wrap_surface` objects (or similar objects
+            with attributes: `body`, `type_`, `name`, `xyz_body_rotation`,
+            `translation`, and potentially `radius`, `length`, `dimensions`).
+    """
     BodySet = root.find('BodySet')[0]
     
     # update wrapping surfaces
@@ -107,6 +185,18 @@ def update_wrap_objects(
 
 # update patella location
 def update_patella_location(root, mean_patella):
+    """
+    Updates the default translations for the patellofemoral (pf_r) joint.
+
+    Modifies the <default_value> for the `pf_tx_r`, `pf_ty_r`, and `pf_tz_r`
+    coordinates of the `pf_r` CustomJoint in the OpenSim model XML.
+
+    Args:
+        root (xml.etree.ElementTree.Element): The root element of the <Model> tag
+            in the OpenSim XML file.
+        mean_patella (list or numpy.ndarray): A list or array of three floats
+            representing the new default x, y, z translations for the patella.
+    """
     # update patella location using ET.XMLParser
     # 
     """
@@ -137,6 +227,28 @@ def update_muscle_attachments(
         tib_interpolated_pts_osim,
         pat_interpolated_pts_osim,
 ):
+    """
+    Updates the locations of muscle attachment points in an OpenSim model.
+
+    Iterates through a DataFrame of muscle points and updates their `location`
+    in the OpenSim model XML. The new locations are taken from provided arrays
+    of interpolated points for the femur, tibia, and patella. Offsets for
+    femur and tibia attachments are adjusted based on their respective body offsets.
+
+    Note: Currently, this function might have specific logic for patella attachments.
+
+    Args:
+        root (xml.etree.ElementTree.Element): The root element of the <Model> tag
+            in the OpenSim XML file.
+        muscle_df (pandas.DataFrame): DataFrame containing muscle attachment
+            information, expected to have columns like `name`, `node`, `segment`.
+        fem_interpolated_pts_osim (numpy.ndarray): Array of interpolated points on
+            the femur in OSIM coordinates.
+        tib_interpolated_pts_osim (numpy.ndarray): Array of interpolated points on
+            the tibia in OSIM coordinates.
+        pat_interpolated_pts_osim (numpy.ndarray): Array of interpolated points on
+            the patella in OSIM coordinates.
+    """
     tibia_r_offset = get_tibia_r_offset(root)
     femur_r_offset = get_femur_r_offset(root)
     
@@ -174,6 +286,29 @@ def update_ligament_attachments(
     tib_interpolated_pts_osim,
     pat_interpolated_pts_osim
 ):
+    """
+    Updates the locations of ligament attachment points in an OpenSim model.
+
+    Iterates through a DataFrame of ligament points and updates their `location`
+    in the OpenSim model XML. The new locations are taken from provided arrays
+    of interpolated points for the femur, tibia, and patella. Offsets for
+    femur and tibia attachments are adjusted. Specific adjustments for points
+    originally on the fibula (shifting them based on tibia dimensions) are also handled.
+
+    Args:
+        root (xml.etree.ElementTree.Element): The root element of the <Model> tag
+            in the OpenSim XML file.
+        ligament_df (pandas.DataFrame): DataFrame containing ligament attachment
+            information, expected to have columns like `name`, `node`, `segment`, `shift`.
+        tib_mesh_osim (pymskt.mesh.Mesh or similar): The tibia mesh, used to calculate
+            ML (medial-lateral) and AP (anterior-posterior) dimensions for shifting fibular points.
+        fem_interpolated_pts_osim (numpy.ndarray): Array of interpolated points on
+            the femur in OSIM coordinates.
+        tib_interpolated_pts_osim (numpy.ndarray): Array of interpolated points on
+            the tibia in OSIM coordinates.
+        pat_interpolated_pts_osim (numpy.ndarray): Array of interpolated points on
+            the patella in OSIM coordinates.
+    """
     tibia_r_offset = get_tibia_r_offset(root)
     femur_r_offset = get_femur_r_offset(root)
     
@@ -229,6 +364,34 @@ def update_osim_model(
     tib_mesh_osim,
     new_model_name=f'custom_nsm_model_{time.strftime("%b_%d_%Y")}'
 ):
+    """
+    Updates an entire OpenSim model XML structure with new geometry and attachments.
+
+    This function orchestrates several updates:
+    1.  Sets a new model name.
+    2.  Updates BodySet STL file paths for visualization (`update_comak_bodyset_stl`).
+    3.  Updates ContactGeometrySet STL file paths for simulation (`update_comak_contact_geometry_stl`).
+    4.  Updates wrap object properties (`update_wrap_objects`).
+    5.  Updates muscle attachment locations (`update_muscle_attachments`).
+    6.  Updates ligament attachment locations (`update_ligament_attachments`).
+    7.  Updates the default patella location (`update_patella_location`).
+
+    Args:
+        path_model (str): Path to the original OpenSim model (.osim) file.
+        list_results (list): List of wrap surface objects for `update_wrap_objects`.
+        muscle_df (pandas.DataFrame): DataFrame for `update_muscle_attachments`.
+        ligament_df (pandas.DataFrame): DataFrame for `update_ligament_attachments`.
+        fem_interpolated_pts_osim (numpy.ndarray): Femur points for attachments.
+        tib_interpolated_pts_osim (numpy.ndarray): Tibia points for attachments.
+        pat_interpolated_pts_osim (numpy.ndarray): Patella points for attachments.
+        mean_patella (list or numpy.ndarray): New patella default position.
+        tib_mesh_osim (pymskt.mesh.Mesh): Tibia mesh for ligament adjustments.
+        new_model_name (str, optional): Name for the updated model. Defaults to a
+            timestamped name.
+
+    Returns:
+        xml.etree.ElementTree.ElementTree: The modified XML tree of the OpenSim model.
+    """
     parser = ET.XMLParser(target=ET.TreeBuilder(insert_comments=True)) # keep comments
     tree = ET.parse(path_model, parser)
     root = tree.getroot()[0]
@@ -258,6 +421,17 @@ def update_osim_model(
     return tree
 
 def update_ligament_stiffness(path_model, ligament, stiffness):
+    """
+    Updates the linear stiffness of a specific ligament in an OpenSim model file.
+
+    Parses the OpenSim model XML, finds the specified ligament by name, and updates
+    its <linear_stiffness> value. The changes are written back to the same file.
+
+    Args:
+        path_model (str): Path to the OpenSim model (.osim) file to be modified.
+        ligament (str): The name of the `Blankevoort1991Ligament` to update.
+        stiffness (float or int): The new linear stiffness value.
+    """
     parser = ET.XMLParser(target=ET.TreeBuilder(insert_comments=True)) # keep comments
     tree = ET.parse(path_model, parser)
     root = tree.getroot()[0]
