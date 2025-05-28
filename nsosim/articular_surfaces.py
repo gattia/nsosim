@@ -256,6 +256,85 @@ def extract_articular_surface(bone_mesh, ray_length=10.0, smooth_iter=100, n_lar
     
     return list_articular_surfaces
 
+def extract_meniscus_articulating_surface(
+    meniscus_mesh: pv.PolyData,
+    articulating_bone_mesh: pv.PolyData,
+    ray_length: float = 10.0,
+    n_largest: int = 1,
+    smooth_iter: int = 15,
+    boundary_smoothing: bool = False  # False allows boundaries to be smoothed
+) -> pv.PolyData:
+    """
+    Extracts and processes an articulating surface of a meniscus.
+
+    This function first defines the meniscus surface based on proximity to an
+    articulating bone (e.g., femur for superior surface, tibia for inferior).
+    It then applies post-processing steps:
+    1. Keeps the largest connected component of the resulting surface.
+    2. Ensures the result is a surface mesh (PolyData).
+    3. Removes isolated cells/vertices.
+    4. Smoothes the final surface.
+
+    Args:
+        meniscus_mesh: The pv.PolyData object of the meniscus (e.g., medial or lateral meniscus).
+        articulating_bone_mesh: The pv.PolyData object of the bone it articulates with 
+                                (e.g., femur for superior surface, tibia for inferior surface).
+        ray_length: Length of rays for `remove_intersecting_vertices`. Rays are projected inward
+                   from the `articulating_bone_mesh` to define the surface on the `meniscus_mesh`.
+        n_largest: The number of largest connected components to keep after initial processing.
+                   Typically 1.
+        smooth_iter: Number of smoothing iterations for the `smooth` filter.
+        boundary_smoothing: Argument for PyVista's `smooth` method. If False (default here),
+                            boundaries are allowed to be smoothed. If True, boundaries are fixed.
+
+    Returns:
+        pv.PolyData: The processed articulating surface of the meniscus.
+    """
+    
+    # Step 1: Define the initial articulating surface using remove_intersecting_vertices
+    # This function projects rays from the articulating_bone_mesh to the meniscus_mesh
+    # to define the contact interface.
+    # (Assuming remove_intersecting_vertices is available)
+    surface = remove_intersecting_vertices(
+        source_mesh=meniscus_mesh,       # The mesh to be clipped/modified (meniscus)
+        target_mesh=articulating_bone_mesh, # The mesh used as the reference/clipper (femur/tibia)
+        ray_length=-ray_length,
+    )
+    if not isinstance(surface, pv.PolyData):
+        # This assertion helps catch issues early if remove_intersecting_vertices
+        # doesn't return the expected type.
+        raise TypeError(f"Expected pv.PolyData from remove_intersecting_vertices, got {type(surface)}")
+
+    # Step 2: Keep the n-largest connected components
+    # (Assuming get_n_largest is available)
+    processed_surface = get_n_largest(surface, n=n_largest)
+    
+    # Step 3: Ensure the result is a surface mesh (PolyData)
+    # get_n_largest might return an UnstructuredGrid, so extract surface if necessary.
+    if not isinstance(processed_surface, pv.PolyData):
+        processed_surface = processed_surface.extract_surface()
+        
+    if not isinstance(processed_surface, pv.PolyData):
+         raise TypeError(f"Expected pv.PolyData after get_n_largest and extract_surface, got {type(processed_surface)}")
+
+    # Step 4: Remove isolated cells
+    # This helps clean up small artifacts or disconnected parts of the mesh.
+    # (Assuming remove_isolated_cells is available)
+    processed_surface = remove_isolated_cells(processed_surface)
+    if not isinstance(processed_surface, pv.PolyData):
+        raise TypeError(f"Expected pv.PolyData after remove_isolated_cells, got {type(processed_surface)}")
+
+    # Step 5: Smooth the surface
+    # The boundary_smoothing=False argument allows the edges of the surface to be smoothed.
+    processed_surface = processed_surface.smooth(
+        n_iter=smooth_iter, 
+        boundary_smoothing=boundary_smoothing
+    )
+    if not isinstance(processed_surface, pv.PolyData):
+        raise TypeError(f"Expected pv.PolyData after smooth, got {type(processed_surface)}")
+        
+    return processed_surface
+
 def create_articular_surfaces(
     bone_mesh_osim,
     cart_mesh_osim,

@@ -170,7 +170,7 @@ def align_bone_osim_fit_nsm(
 
     # DO THE NSM FITTING
     print('Fitting NSM')
-    nsm_latent, nsm_bone_mesh, nsm_cart_mesh, mesh_result = fit_nsm(
+    recon_output = fit_nsm(
         path_model_state=dict_bone['model']['path_model_state'],
         path_model_config=dict_bone['model']['path_model_config'],
         list_paths_meshes=paths_meshes,
@@ -179,6 +179,11 @@ def align_bone_osim_fit_nsm(
         convergence_patience=convergence_patience,
         scale_jointly=scale_jointly
     )
+
+    nsm_latent = recon_output['latent']
+    nsm_bone_mesh = recon_output['bone_mesh']
+    nsm_cart_mesh = recon_output.get('cart_mesh') # Use .get() in case cart_mesh is not always present
+    mesh_result = recon_output['mesh_result']
 
 
     # SAVE THE RECONSTRUCTED MESHES - IN THE DICT, AND BOTH IN mm AND m
@@ -194,6 +199,10 @@ def align_bone_osim_fit_nsm(
             dict_bone['subject']['acs_inverse'] = femur_acs_inverse
         else:
             dict_bone['subject']['acs_inverse'] = None
+        # if meniscus was fitted with the nsm model... then add it to the dict. 
+        if 'med_men_mesh' in recon_output.keys():
+            dict_bone['subject']['med_men_mesh_nsm'] = recon_output['med_men_mesh']
+            dict_bone['subject']['lat_men_mesh_nsm'] = recon_output['lat_men_mesh']
 
     return dict_bone
 

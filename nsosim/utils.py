@@ -2,11 +2,12 @@ import pyvista as pv
 import numpy as np
 import re
 from pymskt.mesh.anatomical import FemurACS
+from pymskt.mesh import Mesh
 from NSM.models import TriplanarDecoder, Decoder
 from NSM.reconstruct import reconstruct_mesh
 import torch
 import json
-
+import os
 
 def load_model(config, path_model_state, model_type='triplanar'):
     """
@@ -80,15 +81,128 @@ def load_model(config, path_model_state, model_type='triplanar'):
     model.eval()
     return model
 
+
+def clip_bone_end(mesh_orig, bone_type='femur', max_z_rel_x=0.7):
+    if bone_type not in ['femur', 'tibia']:
+        return mesh_orig
+    
+    # Always center (both approaches can use this)
+    centroid = np.mean(mesh_orig.points, axis=0)
+    mesh_orig.point_coords -= centroid
+    
+    # Calculate dimensions 
+    bounds = mesh_orig.bounds
+    x_dimension = bounds[1] - bounds[0]
+    y_dimension = bounds[3] - bounds[2] 
+    z_dimension = bounds[5] - bounds[4]
+    
+    # Unified offset calculation (both approaches use same logic)
+    if z_dimension > max_z_rel_x * y_dimension:
+        offset = max_z_rel_x * x_dimension
+    else:
+        offset = 0.95 * z_dimension
+    
+    # Calculate clip value based on bone type
+    is_femur = bone_type == 'femur'
+    clip_value = (bounds[4] + offset) if is_femur else (bounds[5] - offset)
+    
+    # Clip (same for both approaches)
+    mesh_orig.clip("z", value=clip_value, invert=is_femur, inplace=True)
+    
+    # Translate back
+    mesh_orig.point_coords += centroid
+    
+    return mesh_orig
+
+def read_iv(file_path):
+    """
+    Reads an Inventor .iv file and returns a PyVista PolyData object.
+
+    .iv files typically store geometry in a human-readable format. This function
+    parses the "Coordinate3" and "IndexedFaceSet" sections to extract vertex
+    coordinates and face connectivity.
+
+    Args:
+        file_path (str): The path to the .iv file.
+
+    Returns:
+        pyvista.PolyData: A PyVista mesh object created from the .iv file data.
+
+    Raises:
+        ValueError: If the "Coordinate3" or "IndexedFaceSet" sections are not
+                    found, or if parsing fails.
+    """
+    with open(file_path, 'r') as f:
+        lines = f.readlines()
+
+    coord_start_idx = -1
+    coord_end_idx = -1
+    face_start_idx = -1
+    face_end_idx = -1
+
+    for i, line in enumerate(lines):
+        if "Coordinate3" in line and "point" in line:
+            coord_start_idx = i + 1
+        elif coord_start_idx != -1 and "]" in line and coord_end_idx == -1:
+            coord_end_idx = i
+        elif "IndexedFaceSet" in line and "coordIndex" in line:
+            face_start_idx = i + 1
+        elif face_start_idx != -1 and "]" in line and face_end_idx == -1:
+            face_end_idx = i
+
+    if coord_start_idx == -1 or coord_end_idx == -1:
+        raise ValueError("Could not find Coordinate3 point data in .iv file.")
+    if face_start_idx == -1 or face_end_idx == -1:
+        raise ValueError("Could not find IndexedFaceSet coordIndex data in .iv file.")
+
+    # Extract coordinates
+    points_str = "".join(lines[coord_start_idx:coord_end_idx])
+    points_str = points_str.replace('\n', '').replace('[', '').replace(']', '')
+    points_list = [float(p) for p in re.split(r'[\s,]+', points_str) if p]
+    points = np.array(points_list).reshape(-1, 3)
+
+    # Extract face indices
+    faces_str = "".join(lines[face_start_idx:face_end_idx])
+    faces_str = faces_str.replace('\n', '').replace('[', '').replace(']', '')
+    # Split by comma, then handle potential extra spaces and filter out -1 (end of face marker)
+    faces_list_str = [f.strip() for f in faces_str.split(',') if f.strip()]
+    
+    faces_connectivity = []
+    current_face = []
+    count = 0
+    for val_str in faces_list_str:
+        if val_str == "-1":
+            if current_face: # ensure current_face is not empty
+                # Prepend the number of points in the face
+                faces_connectivity.extend([len(current_face)] + current_face)
+                current_face = []
+            count = 0 # reset point counter for the new face
+        else:
+            try:
+                current_face.append(int(val_str))
+                count +=1
+            except ValueError:
+                print(f"Warning: Could not convert '{val_str}' to int. Skipping.")
+                continue # skip if conversion fails
+    
+    # Ensure the last face is added if the file doesn't end with -1 explicitly for the last face index list
+    if current_face:
+        faces_connectivity.extend([len(current_face)] + current_face)
+
+    mesh = pv.PolyData(points, faces=np.array(faces_connectivity))
+    return mesh
+
 def recon_mesh(
     mesh_paths,
     model,
     model_config,
     n_samples_latent_recon=None,
     num_iter=None,
-    scale_jointly=True,
+    scale_jointly=None,
     convergence_patience=None,
-    verbose=False
+    verbose=False,
+    clip_bone=True,
+    clip_bone_max_z_rel_x=0.7,
 ):
     """
     Reconstructs meshes using a Neural Shape Model (NSM) by fitting to target meshes.
@@ -118,6 +232,8 @@ def recon_mesh(
             `model_config` or a default. Defaults to None.
         verbose (bool, optional): If True, prints progress information during
             reconstruction. Defaults to False.
+        clip_bone (bool, optional): If True, clips the bone to the max_z_rel_x. Defaults to True.
+        clip_bone_max_z_rel_x (float, optional): The max z relative to x to clip the bone. Defaults to 0.7.
 
     Returns:
         tuple: A tuple containing:
@@ -128,6 +244,23 @@ def recon_mesh(
               `reconstruct_mesh` call, including the latent vector, meshes, and
               registration parameters.
     """
+    
+    if scale_jointly is not None:
+        raise ValueError('scale_jointly is deprecated, it is automatically extracted from the model config')
+    
+    if clip_bone and model_config['bone'] in ['femur', 'tibia']:
+        if mesh_paths[0] is None:
+            print('No bone mesh provided, skipping clipping')
+        else:
+            print(f'Clipping bone mesh: {model_config["bone"]}')
+            # load the mesh, do the clip, save a temp clipped mesh
+            temp_bone_mesh_path = mesh_paths[0] + '_temp.vtk'
+            orig_bone_mesh_path = mesh_paths[0]
+            orig_bone_mesh = Mesh(orig_bone_mesh_path)
+            clipped_bone_mesh = clip_bone_end(orig_bone_mesh, bone_type=model_config['bone'], max_z_rel_x=clip_bone_max_z_rel_x)
+            clipped_bone_mesh.save_mesh(temp_bone_mesh_path)
+            mesh_paths[0] = temp_bone_mesh_path
+        
 
     mesh_result = reconstruct_mesh(
         path=mesh_paths,
@@ -143,14 +276,15 @@ def recon_mesh(
         n_lr_updates=model_config['n_lr_updates_recon'],
         return_latent=True,
         register_similarity=True,
-        scale_jointly=scale_jointly,
+        scale_jointly=model_config['scale_jointly'],
         scale_all_meshes=True,
-        objects_per_decoder=2,
+        mesh_to_scale=model_config['mesh_to_scale'],
+        objects_per_decoder=model_config['objects_per_decoder'],
         batch_size_latent_recon=model_config['batch_size_latent_recon'],
         get_rand_pts=model_config['get_rand_pts_recon'],
         n_pts_random=model_config['n_pts_random_recon'],
         sigma_rand_pts=model_config['sigma_rand_pts_recon'],
-        n_samples_latent_recon=n_samples_latent_recon, 
+        n_samples_latent_recon=n_samples_latent_recon,
 
         calc_symmetric_chamfer=False,
         calc_assd=False,
@@ -166,86 +300,48 @@ def recon_mesh(
         verbose=verbose,
         return_registration_params=True,
     )
+    
+    if clip_bone and (model_config['bone'] in ['femur', 'tibia']) and (mesh_paths[0] is not None):
+        # delete the temp clipped mesh
+        os.remove(temp_bone_mesh_path)
 
     # Save the meshes
     bone_mesh = mesh_result['mesh'][0]
     cart_mesh = mesh_result['mesh'][1]
+    if len(mesh_result['mesh']) == 4:
+        med_men_mesh = mesh_result['mesh'][2]
+        lat_men_mesh = mesh_result['mesh'][3]
 
     # get latent
     latent = mesh_result['latent'].detach().cpu().numpy().tolist()
 
-    return latent, bone_mesh, cart_mesh, mesh_result
+    output_dict = {
+        'latent': latent,
+        'bone_mesh': bone_mesh,
+        'cart_mesh': cart_mesh,
+        'mesh_result': mesh_result
+    }
 
-def read_iv(file_path):
-    """
-    Reads a 3D mesh from an Inventor (.iv) file format.
-
-    Parses the .iv file to extract vertex coordinates and face connectivity
-    information (coordinate indices). It then constructs and returns a
-    `pyvista.PolyData` object representing the mesh.
-
-    Args:
-        file_path (str): The path to the .iv mesh file.
-
-    Returns:
-        pyvista.PolyData: A PyVista mesh object created from the .iv file data.
-
-    Note:
-        This parser relies on specific formatting within the .iv file, particularly
-        for the 'point' and 'coordIndex' sections. It uses regular expressions
-        to find and extract this data.
-    """
-    pts_list = []
-    cns_list = []
-
-    re.IGNORECASE = True
-    with open(file_path,'r') as f:
-        txt = f.read()
+    if len(mesh_result['mesh']) == 4:
+        output_dict['med_men_mesh'] = med_men_mesh
+        output_dict['lat_men_mesh'] = lat_men_mesh
         
-        # vertices
-        m1 = re.search('point\s(.*)\[',txt)
-        m2 = re.search('\]\s\}.*\n\s Ind',txt)
-        ptstxt = txt[m1.span()[1]+1:m2.span()[0]]
-        # tokens = re.findall(r'[-+]?(?:\d*\.*\d+)\s[-+]?(?:\d*\.*\d+)\s[-+]?(?:\d*\.*\d+),',ptstxt)
-        tokens = re.findall(r'-?\ *\d+\.?\d*(?:[Ee]\ *-?\ *\d+)?\s-?\ *\d+\.?\d*(?:[Ee]\ *-?\ *\d+)?\s-?\ *\d+\.?\d*(?:[Ee]\ *-?\ *\d+)?,',ptstxt)
-        for i in range(len(tokens)):
-            pts_list.append(re.findall("-?\ *\d+\.?\d*(?:[Ee]\ *-?\ *\d+)?",tokens[i]))
-            
-        # faces
-        m1 = re.search('coordIndex\s(.*)\[',txt)
-        txt2 = txt[m1.span()[1]+1:]
-        m2 = re.search('\]\s\}',txt2)
-        cnstxt = txt2[:m2.span()[0]]
-        tokens = re.findall(r'[-+]?(?:\d+),\s[-+]?(?:\d+),\s[-+]?(?:\d+)',cnstxt)
-        for i in range(len(tokens)):
-            cns_list.append(re.findall(r'[-+]?(?:\d+)',tokens[i]))
-            
-    pts = np.array(pts_list,dtype=np.float32)
-    cns = np.array(cns_list,dtype=np.int64)
-    cns = np.concatenate((3*np.ones((cns.shape[0],1),dtype=int),cns),axis=1)
-    cns = cns.reshape(-1)
-    
-    mesh = pv.PolyData(pts,cns)
+    return output_dict
 
-    return mesh
-
-def load_preprocess_ref_mesh(path, z_rel_x, bone):
+def load_preprocess_opensim_ref_mesh(path, z_rel_x, bone):
     """
-    Loads a reference mesh from an .iv file and preprocesses it.
+    Loads a reference mesh from a file and preprocesses it.
 
     The preprocessing steps include:
-    1. Reading the .iv file.
-    2. For 'femur' or 'tibia', clipping the mesh along the Z-axis based on `z_rel_x`
-       and the mesh's X-axis point-to-point (ptp) distance. The clipping origin
-       and inversion depend on whether it's a femur or tibia.
-    3. Filling holes and smoothing the clipped mesh (for femur/tibia).
-    4. Flipping the Y and X coordinates (y = -y, x = -x).
-    5. Scaling the points by 1000 (e.g., meters to millimeters).
-    6. Centering the mesh by subtracting the mean of its point coordinates.
-    7. Casting point coordinates to `np.float64`.
+    1. Reading the file using Mesh().
+    2. For 'femur' or 'tibia', clipping the mesh using clip_bone_end function.
+    3. Flipping the Y and X coordinates (y = -y, x = -x).
+    4. Scaling the points by 1000 (e.g., meters to millimeters).
+    5. Centering the mesh by subtracting the mean of its point coordinates.
+    6. Casting point coordinates to `np.float64`.
 
     Args:
-        path (str): Path to the .iv reference mesh file.
+        path (str): Path to the reference mesh file.
         z_rel_x (float): A factor used to determine the Z-clipping range relative
             to the X-axis extent of the mesh. Used for femur and tibia.
         bone (str): The name of the bone ('femur', 'tibia', or other). This affects
@@ -257,31 +353,97 @@ def load_preprocess_ref_mesh(path, z_rel_x, bone):
             - mean_ (numpy.ndarray): The mean vector that was subtracted to center
               the mesh (after scaling to mm and flipping axes).
     """
-    ref_ = read_iv(path)
+    ref_ = Mesh(path)
+    
 
+    
+    # flip the coorindates to align as expected with MRI axes before clipping etc.
+    # +y -> +z
+    # +x -> -y
+    # +z -> -x
+    point_coords = ref_.point_coords.copy()
+    ref_.point_coords[:,2] = point_coords[:,1] * 1 
+    ref_.point_coords[:,1] = point_coords[:,0] * -1
+    ref_.point_coords[:,0] = point_coords[:,2] * -1
+    
     if bone in ['femur', 'tibia']:
-        ref_ptp = np.ptp(ref_.points, axis=0)[0]
-        range_ = z_rel_x * ref_ptp #(ref_ptp * subject_z_rel_x) / 2
-        range_ = range_ if bone == 'femur' else range_ * -1
-        invert = bone == 'femur'
-        origin = ref_.points.min(axis=0) if bone == 'femur' else ref_.points.max(axis=0)
+        print(f'Clipping {bone} mesh')
+        ref_ = clip_bone_end(ref_, bone_type=bone, max_z_rel_x=z_rel_x)
 
-        ref_ = ref_.clip(normal='z', origin=origin, value=range_, invert=invert)
-        ref_ = ref_.fill_holes(hole_size=0.03)
-        ref_ = ref_.smooth(100, feature_smoothing=False)
+    
 
-    ref_.points[:,1] = ref_.points[:,1] * -1 
-    ref_.points[:,0] = ref_.points[:,0] * -1
+    ref_.point_coords = ref_.point_coords * 1000
 
-    ref_.points = ref_.points * 1000
+    mean_ = np.mean(ref_.point_coords, axis=0)
 
-    mean_ = np.mean(ref_.points, axis=0)
+    ref_.point_coords = ref_.point_coords - mean_
 
-    ref_.points = ref_.points - mean_
-
-    ref_.points = ref_.points.astype(np.float64)
+    ref_.point_coords = ref_.point_coords.astype(np.float64)
     
     return ref_, mean_
+
+def load_preprocess_opensim_ref_menisci(med_meniscus_path, lat_meniscus_path):
+    """
+    Loads and preprocesses medial and lateral meniscus meshes.
+
+    The preprocessing steps include:
+    1. Loading both medial and lateral meniscus meshes using Mesh().
+    2. Combining them temporarily to calculate the overall centroid.
+    3. Applying the same transformations to both individual meshes:
+       - Flipping the Y and X coordinates (y = -y, x = -x)
+       - Scaling the points by 1000 (e.g., meters to millimeters)
+       - Centering using the combined centroid
+    4. Casting point coordinates to `np.float64`.
+
+    Args:
+        med_meniscus_path (str): Path to the medial meniscus mesh file.
+        lat_meniscus_path (str): Path to the lateral meniscus mesh file.
+
+    Returns:
+        tuple: A tuple containing:
+            - med_meniscus_processed (pyvista.PolyData): The preprocessed medial meniscus mesh.
+            - lat_meniscus_processed (pyvista.PolyData): The preprocessed lateral meniscus mesh.
+            - mean_ (numpy.ndarray): The mean vector that was subtracted to center
+              both meshes (after scaling to mm and flipping axes).
+    """
+    # Load both meniscus meshes
+    med_meniscus = Mesh(med_meniscus_path)
+    lat_meniscus = Mesh(lat_meniscus_path)
+    
+    # flip the coorindates to align as expected with MRI axes before clipping etc.
+    # +y -> +z
+    # +x -> -y
+    # +z -> -x
+    point_coords = med_meniscus.point_coords.copy()
+    med_meniscus.point_coords[:,2] = point_coords[:,1] * 1 
+    med_meniscus.point_coords[:,1] = point_coords[:,0] * -1
+    med_meniscus.point_coords[:,0] = point_coords[:,2] * -1
+    med_meniscus.point_coords = med_meniscus.point_coords * 1000
+    
+    point_coords = lat_meniscus.point_coords.copy()
+    lat_meniscus.point_coords[:,2] = point_coords[:,1] * 1 
+    lat_meniscus.point_coords[:,1] = point_coords[:,0] * -1
+    lat_meniscus.point_coords[:,0] = point_coords[:,2] * -1
+    lat_meniscus.point_coords = lat_meniscus.point_coords * 1000
+    
+    # Create a temporary combined mesh to calculate the overall centroid
+    # Extract PyVista PolyData objects and combine them properly
+    combined_mesh_pv = med_meniscus.mesh + lat_meniscus.mesh
+    combined_menisci = Mesh(combined_mesh_pv)
+    
+    # Calculate the mean from the combined mesh
+    mean_ = np.mean(combined_menisci.point_coords, axis=0)
+    
+    # Now apply the same transformations to each individual mesh
+    # Medial meniscus
+    med_meniscus.point_coords = med_meniscus.point_coords - mean_
+    med_meniscus.point_coords = med_meniscus.point_coords.astype(np.float64)
+    
+    # Lateral meniscus  
+    lat_meniscus.point_coords = lat_meniscus.point_coords - mean_
+    lat_meniscus.point_coords = lat_meniscus.point_coords.astype(np.float64)
+    
+    return med_meniscus, lat_meniscus, mean_
 
 def acs_align_femur(femur):
     """
@@ -323,7 +485,7 @@ def fit_nsm(
         n_samples_latent_recon=20_000,
         num_iter=None,
         convergence_patience=10,
-        scale_jointly=False
+        dict_update_params=None
 ):
     """
     Fits a Neural Shape Model (NSM) to a list of target meshes.
@@ -356,19 +518,26 @@ def fit_nsm(
     """
     with open(path_model_config, 'r') as f:
         model_config = json.load(f)
+    
+    if dict_update_params is not None:
+        for key, value in dict_update_params.items():
+            model_config[key] = value
 
     model = load_model(model_config, path_model_state, model_type='triplanar')
 
-    latent, bone_mesh, cart_mesh, result_mesh  = recon_mesh(
+    
+    recon_output = recon_mesh(
         list_paths_meshes,
         model,
         model_config,
         n_samples_latent_recon=n_samples_latent_recon,
         num_iter=num_iter,
         convergence_patience=convergence_patience,
-        scale_jointly=scale_jointly
     )
 
-    result_mesh['model'] = model
+    # Add the model to the mesh_result dictionary within recon_output
+    recon_output['mesh_result']['model'] = model
 
-    return latent, bone_mesh, cart_mesh, result_mesh
+    # recon_output now contains all necessary information, including the model
+    # and meniscus meshes if they were returned by recon_mesh.
+    return recon_output
