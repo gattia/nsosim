@@ -12,6 +12,13 @@ from pymskt.mesh.meshTransform import get_linear_transform_matrix
 from NSM.mesh.interpolate import interpolate_points
 
 
+
+OSIM_TO_NSM_TRANSFORM = np.array([
+    [0,  -1,  0],  # x -> -y
+    [0, 0,  1],  # y -> z
+    [-1, 0,  0]   # z -> -x
+])
+
 def align_bone_osim_fit_nsm(
     bone,
     dict_bone,
@@ -307,7 +314,8 @@ def interpolate_ref_points_nsm_space(
     path_ref_latent,
     model,
     subject_latent,
-
+    surface_idx=0,
+    n_steps=100,
 ):
     """
     Interpolates points from a reference mesh to a subject's NSM latent space.
@@ -348,9 +356,10 @@ def interpolate_ref_points_nsm_space(
         ValueError: If `ref_mesh_path` has an unrecognized file extension.
     """
     if ref_mesh_path.endswith('.iv'):
+        raise NotImplementedError('IV files deprecated')
         ref_mesh = read_iv(ref_mesh_path)
     elif ref_mesh_path.endswith('.vtk'):
-        pv.PolyData(ref_mesh_path)
+        ref_mesh = pv.PolyData(ref_mesh_path)
     else:
         raise ValueError('Ref mesh path not recognized')
     
@@ -362,14 +371,12 @@ def interpolate_ref_points_nsm_space(
         center = np.array(dict_transforms['mean_orig'])
         scale = np.array(dict_transforms['orig_scale'])
     
-    # add a column of 1s to the points - so that we can apply the transform (4x4)
+    # Convert from OSIM to NSM coordinates
     ref_points = ref_mesh.points.copy()
-    ref_points[:,1] = -ref_points[:,1]
-    ref_points[:,0] = -ref_points[:,0]
-    ref_points *= 1000
-    ref_points -= center
+    ref_points = convert_OSIM_to_nsm_(ref_points, center)
     ref_points = ref_points.astype(np.float64)
 
+    # padding ones to apply the transform (4x4)
     ref_points = np.concatenate((ref_points, np.ones((ref_points.shape[0],1))), axis=1)
     
     # apply the transform
@@ -386,14 +393,13 @@ def interpolate_ref_points_nsm_space(
     if len(subject_latent.shape) == 2:
         subject_latent = subject_latent[0,:]
     
-
     interpolated_points = interpolate_points(
         model,
         latent_ref[0,:],
         subject_latent,
-        n_steps=100,
+        n_steps=n_steps,
         points1=ref_points_nsm_space,
-        surface_idx=0,
+        surface_idx=surface_idx,
         verbose=False,
         spherical=True
     )
@@ -409,11 +415,13 @@ def interpolate_ref_points_nsm_space(
     # return interpolated_points
 
 def interp_ref_to_subject_to_osim(
-    bone,
+    path_surface,
+    surface_name,
     ref_center,
-    folder_ref_bones,
     dict_bones,
     folder_nsm_files,
+    surface_idx=0,
+    n_steps=100,
 ):
     """
     Interpolates reference points to a subject's NSM space and then to OSIM space.
@@ -439,27 +447,26 @@ def interp_ref_to_subject_to_osim(
             OSIM coordinate system.
     """
     # Set femur params
-    bone_filename = f'ACLC_mean_{bone.capitalize()}.iv'
-    bone_ref_mesh_path = os.path.join(folder_ref_bones, bone_filename)
-    ref_bone_mesh = read_iv(bone_ref_mesh_path)
-    path_transform_file = os.path.join(folder_nsm_files, bone, f'ref_{bone}_alignment.json')
-    path_ref_latent = os.path.join(folder_nsm_files, bone, f'latent_{bone}.npy')
+    path_transform_file = os.path.join(folder_nsm_files, surface_name, f'ref_{surface_name}_alignment.json')
+    path_ref_latent = os.path.join(folder_nsm_files, surface_name, f'latent_{surface_name}.npy')
 
     # get interpolated ref femur points
     ref_results = interpolate_ref_points_nsm_space(
-        ref_mesh_path=bone_ref_mesh_path,
+        ref_mesh_path=path_surface,
         path_ref_transform_file=path_transform_file,
         path_ref_latent=path_ref_latent,
-        model=dict_bones[bone]['subject']['recon_dict']['model'],
-        subject_latent=dict_bones[bone]['subject']['recon_latent'],
+        model=dict_bones[surface_name]['subject']['recon_dict']['model'],
+        subject_latent=dict_bones[surface_name]['subject']['recon_latent'],
+        surface_idx=surface_idx,
+        n_steps=n_steps,
     )
 
     # convert interpolated points to OSIM space
     interpolated_pts_osim = convert_nsm_recon_to_OSIM(
         points=ref_results['interpolated_points'],
-        icp_transform=dict_bones[bone]['subject']['recon_dict']['icp_transform'],
-        scale=dict_bones[bone]['subject']['recon_dict']['scale'],
-        center=dict_bones[bone]['subject']['recon_dict']['center'],
+        icp_transform=dict_bones[surface_name]['subject']['recon_dict']['icp_transform'],
+        scale=dict_bones[surface_name]['subject']['recon_dict']['scale'],
+        center=dict_bones[surface_name]['subject']['recon_dict']['center'],
         ref_mesh_orig_center=ref_center
     )
 
@@ -555,9 +562,7 @@ def convert_nsm_recon_to_OSIM_(
     This specific version of the conversion involves:
     1. Adding back an original reference mesh centering bias.
     2. Scaling from millimeters to meters.
-    3. Flipping the Y and X axes (y -> -y, x -> -x).
-    4. Applying a rotation matrix to map from the MRI-based coordinate system
-       (after flips) to the OSIM coordinate system (X_mri -> Y_osim, Y_mri -> Z_osim, Z_mri -> X_osim).
+    3. Applying a combined coordinate transformation and rotation to OSIM space.
 
     Args:
         points_ (numpy.ndarray): Nx3 array of points in the source space (e.g., mm, NSM-aligned).
@@ -567,24 +572,13 @@ def convert_nsm_recon_to_OSIM_(
     Returns:
         numpy.ndarray: Nx3 array of points in OSIM coordinates (meters).
     """
-    #remove bias from reference femur mesh 
+    # add back bias from reference mesh 
     points_ += ref_mesh_orig_center
 
     # convert from mm to m
     points_ /= 1000
 
-    # swap the axis orentations (x -> -x, y -> -y)
-    points_[:,1] = -points_[:,1]
-    points_[:,0] = -points_[:,0]
-
-    # rotate the points to the osim coordinate system (MRI: x -> y, y -> z, z -> x)
-    R_MRI_to_osim = np.array([
-        [0,1,0],
-        [0,0,1],
-        [1,0,0]
-    ])
-
-    points_osim = points_ @ R_MRI_to_osim.T
+    points_osim = points_ @ OSIM_TO_NSM_TRANSFORM.T
 
     return points_osim
 
@@ -596,10 +590,9 @@ def convert_OSIM_to_nsm_(
     Converts points from OpenSim (OSIM) coordinates back to an NSM-reconstructable space.
 
     This is the inverse of `convert_nsm_recon_to_OSIM_`. It involves:
-    1. Inverting the OSIM to MRI-based coordinate system rotation.
-    2. Flipping the X and Y axes back (x -> -x, y -> -y).
-    3. Scaling from meters to millimeters.
-    4. Subtracting the original reference mesh centering bias.
+    1. Applying the inverse combined coordinate transformation and rotation.
+    2. Scaling from meters to millimeters.
+    3. Subtracting the original reference mesh centering bias.
 
     Args:
         points_ (numpy.ndarray): Nx3 array of points in OSIM coordinates (meters).
@@ -609,27 +602,18 @@ def convert_OSIM_to_nsm_(
     Returns:
         numpy.ndarray: Nx3 array of points in the source space (e.g., mm, NSM-aligned).
     """
-    # invert the rotation. (MRI: x -> y, y -> z, z -> x)
-    R_MRI_to_osim = np.array([
-        [0,1,0],
-        [0,0,1],
-        [1,0,0]
-    ])
-
-    points_ = points_ @ R_MRI_to_osim # apply
-    
-    # flip x and y axes
-    points_[:,1] = -points_[:,1]
-    points_[:,0] = -points_[:,0]
+    # Inverse of the combined transformation matrix
+    # This is the inverse of the combined coordinate swapping + MRI to OSIM rotation
+    points_ = points_ @ OSIM_TO_NSM_TRANSFORM
     
     # scale from m to mm
     points_ *= 1000
     
-    # remove bias from reference femur mesh 
+    # remove bias from reference mesh 
     points_ -= ref_mesh_orig_center
 
     return points_
-   
+
 def convert_nsm_recon_to_OSIM(
     points,
     icp_transform,
