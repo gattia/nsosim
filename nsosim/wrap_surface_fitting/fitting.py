@@ -1,0 +1,930 @@
+"""
+Wrap surface fitting using PyTorch optimization with support for both PCA and geometric initialization.
+
+Example usage with geometric initialization:
+    # For cylinder fitting with geometric initialization
+    cylinder_fitter = CylinderFitter(
+        lr=1e-2, 
+        epochs=1000, 
+        initialization='geometric',  # Use geometric instead of PCA
+        alpha=1.0, 
+        beta=0.1
+    )
+    
+    center, sizes, rotation = cylinder_fitter.fit(
+        points=bone_points,
+        labels=inside_outside_labels,
+        sdf=sdf_values,
+        mesh=labeled_mesh,           # Required for geometric init
+        surface_name="femur_1"       # Required for geometric init
+    )
+    
+    # For ellipsoid fitting with geometric initialization  
+    ellipsoid_fitter = EllipsoidFitter(
+        initialization='geometric'
+    )
+    
+    center, axes, rotation = ellipsoid_fitter.fit(
+        points=bone_points,
+        labels=inside_outside_labels,
+        mesh=labeled_mesh,
+        surface_name="patella_1"
+    )
+
+Geometric initialization uses the pre-labeled near-surface points to fit 
+shape parameters directly from surface geometry, which should be more accurate
+than PCA for cases with sparse inside points.
+"""
+
+import torch
+import torch.nn.functional as F
+import numpy as np
+import matplotlib.pyplot as plt
+from abc import ABC, abstractmethod
+import warnings
+import logging
+from . import surface_param_estimation
+
+logger = logging.getLogger(__name__)  # This will be 'nsosim.wrap_surface_fitting.fitting'
+
+class RotationUtils:
+    """Quaternion and rotation utilities with improved numerical stability."""
+    
+    @staticmethod
+    def quat_from_rot(R: torch.Tensor) -> torch.Tensor:
+        """Convert rotation matrix to quaternion (w, x, y, z) with improved numerical stability."""
+        assert R.shape == (3, 3), f"Expected (3, 3) rotation matrix, got {R.shape}"
+        
+        # Shepperd's method for numerical stability
+        t = torch.trace(R)
+        
+        if t > 0:
+            s = torch.sqrt(t + 1.0) * 2
+            w = 0.25 * s
+            x = (R[2, 1] - R[1, 2]) / s
+            y = (R[0, 2] - R[2, 0]) / s  
+            z = (R[1, 0] - R[0, 1]) / s
+        else:
+            diag = torch.diagonal(R)
+            i = torch.argmax(diag)
+            
+            if i == 0:
+                s = torch.sqrt(1.0 + R[0, 0] - R[1, 1] - R[2, 2]) * 2
+                w = (R[2, 1] - R[1, 2]) / s
+                x = 0.25 * s
+                y = (R[0, 1] + R[1, 0]) / s
+                z = (R[0, 2] + R[2, 0]) / s
+            elif i == 1:
+                s = torch.sqrt(1.0 + R[1, 1] - R[0, 0] - R[2, 2]) * 2
+                w = (R[0, 2] - R[2, 0]) / s
+                x = (R[0, 1] + R[1, 0]) / s
+                y = 0.25 * s
+                z = (R[1, 2] + R[2, 1]) / s
+            else:
+                s = torch.sqrt(1.0 + R[2, 2] - R[0, 0] - R[1, 1]) * 2
+                w = (R[1, 0] - R[0, 1]) / s
+                x = (R[0, 2] + R[2, 0]) / s
+                y = (R[1, 2] + R[2, 1]) / s
+                z = 0.25 * s
+        
+        quat = torch.stack([w, x, y, z])
+        return quat / quat.norm(p=2)  # Ensure unit quaternion
+        
+    @staticmethod
+    def rot_from_quat(q: torch.Tensor) -> torch.Tensor:
+        """Convert quaternion (w,x,y,z) to 3x3 rotation matrix."""
+        assert q.shape == (4,), f"Expected shape (4,) for quaternion (w,x,y,z), got {q.shape}"
+        
+        # Normalize quaternion to handle numerical drift
+        q = q / (q.norm(p=2) + 1e-8)  # Add small epsilon to prevent division by zero
+        w, x, y, z = q
+        
+        return torch.stack([
+            torch.stack([1 - 2*(y*y + z*z), 2*(x*y - w*z),     2*(x*z + w*y)], dim=0),
+            torch.stack([2*(x*y + w*z),     1 - 2*(x*x + z*z), 2*(y*z - w*x)], dim=0),
+            torch.stack([2*(x*z - w*y),     2*(y*z + w*x),     1 - 2*(x*x + y*y)], dim=0)
+        ], dim=0)
+
+
+def sd_cylinder(points, center, radius, half_length, rotation_matrix):
+    """Signed distance function for finite cylinder.
+    
+    Args:
+        points: (N, 3) tensor of points
+        center: (3,) tensor cylinder center
+        radius: scalar tensor cylinder radius  
+        half_length: scalar tensor cylinder half-length
+        rotation_matrix: (3, 3) tensor rotation matrix (local→world, so we use .T)
+        
+    Returns:
+        (N,) tensor of signed distances
+    """
+    # Transform points to cylinder local coordinates
+    p = (points - center) @ rotation_matrix.T                 # world → local
+    
+    # Distance from axis and from caps
+    radial_dist = torch.linalg.norm(p[..., :2], dim=-1) - radius
+    axial_dist = torch.abs(p[..., 2]) - half_length
+    
+    q = torch.stack([radial_dist, axial_dist], dim=-1)       # (..., 2)
+
+    # Combine inside/outside distances
+    outside = torch.clamp(q, min=0).norm(dim=-1)
+    inside = torch.clamp(q.max(dim=-1).values, max=0)
+    return outside + inside
+
+
+def sd_normalised(points, center, axes, rotation_matrix):
+    """Signed distance function for ellipsoid (returns real distances).
+    
+    Args:
+        points: (N, 3) tensor of points
+        center: (3,) tensor ellipsoid center
+        axes: (3,) tensor ellipsoid semi-axes (a, b, c)
+        rotation_matrix: (3, 3) tensor rotation matrix
+        
+    Returns:
+        (N,) tensor of signed distances (real distances, not normalized)
+    """
+    # Transform points to ellipsoid local coordinates
+    local_points = (points - center) @ rotation_matrix
+    
+    # Normalize by semi-axes (add small epsilon to prevent division by zero)
+    axes_safe = torch.clamp(axes, min=1e-8)
+    normalized_points = local_points / axes_safe
+    
+    # Distance from origin in normalized space
+    r = torch.norm(normalized_points, dim=1)
+    
+    # Convert back to real distance by scaling with average_axis_length
+    # This gives approximate real signed distance
+    avg_axis_length = axes_safe.mean()
+    
+    # Real SDF: < 0 inside, > 0 outside (in world units)
+    return (r - 1.0) * avg_axis_length
+
+
+class BaseShapeFitter(ABC):
+    """Base class for shape fitting with common optimization logic."""
+    
+    def __init__(self, lr=5e-3, epochs=1500, device='cpu', use_lbfgs=False, lbfgs_epochs=100, 
+                 alpha=1.0, beta=0.1, gamma=0.1, lbfgs_lr=1, 
+                 margin_decay_type='exponential', initialization='geometric'):
+        self.lr = lr
+        self.epochs = epochs
+        self.device = device
+        self.use_lbfgs = use_lbfgs
+        self.lbfgs_epochs = lbfgs_epochs
+        self.lbfgs_lr = lbfgs_lr
+        self.alpha = alpha  # Weight for margin loss
+        self.beta = beta    # Weight for distance loss
+        self.gamma = gamma  # Weight for surface points loss
+        self.margin_decay_type = margin_decay_type  # Type of margin decay
+        self.initialization = initialization  # 'pca' or 'geometric'
+        
+    def _prepare_data(self, points, labels):
+        """Convert to tensors and validate."""
+        if len(points) != len(labels):
+            raise ValueError(f"Points ({len(points)}) and labels ({len(labels)}) must have same length")
+        
+        x = torch.as_tensor(points, dtype=torch.float32, device=self.device)
+        y = torch.as_tensor(labels > 0, dtype=torch.bool, device=self.device)
+        
+        if x.shape[1] != 3:
+            raise ValueError(f"Points must be 3D, got shape {x.shape}")
+            
+        return x, y
+        
+    def _compute_loss(self, d, y, margin):
+        """Squared-hinge margin loss."""
+        mask_in, mask_out = y, ~y
+        
+        # Handle empty masks gracefully
+        loss_in = (F.relu(d + margin)[mask_in] ** 2).mean() if mask_in.any() else torch.tensor(0.0, device=self.device)
+        loss_out = (F.relu(-d + margin)[mask_out] ** 2).mean() if mask_out.any() else torch.tensor(0.0, device=self.device)
+        
+        return loss_in + loss_out
+    
+    def _compute_distance_loss(self, sdf_fitted, sdf_ground_truth, sigma=1.0, use_weighting=False):
+        """Correlation-based distance loss with optional surface proximity weighting.
+        
+        Args:
+            sdf_fitted: Fitted SDF values from the current shape parameters
+            sdf_ground_truth: Ground truth SDF values to the original surface  
+            sigma: Controls surface proximity weighting (smaller = more surface focus)
+            use_weighting: Whether to use surface proximity weighting
+            
+        Returns:
+            torch.Tensor: Correlation-based loss (1 - correlation)
+        """
+        if use_weighting:
+            # Surface proximity weights: strongest at sdf=0, decays with distance
+            abs_dist = torch.abs(sdf_ground_truth)
+            weights = torch.exp(-(abs_dist / sigma)**2)
+            
+            # Compute weighted means
+            weighted_sum = weights.sum()
+            mean_fitted = (weights * sdf_fitted).sum() / (weighted_sum + 1e-8)
+            mean_gt = (weights * sdf_ground_truth).sum() / (weighted_sum + 1e-8)
+            
+            # Center the values
+            centered_fitted = sdf_fitted - mean_fitted  
+            centered_gt = sdf_ground_truth - mean_gt
+            
+            # Weighted correlation coefficient
+            weighted_cov = (weights * centered_fitted * centered_gt).sum()
+            weighted_var_fitted = (weights * centered_fitted**2).sum()
+            weighted_var_gt = (weights * centered_gt**2).sum()
+            
+            # Pearson correlation coefficient (weighted)
+            correlation = weighted_cov / (torch.sqrt(weighted_var_fitted * weighted_var_gt) + 1e-8)
+        else:
+            # Unweighted correlation
+            mean_fitted = sdf_fitted.mean()
+            mean_gt = sdf_ground_truth.mean()
+            
+            # Center the values
+            centered_fitted = sdf_fitted - mean_fitted
+            centered_gt = sdf_ground_truth - mean_gt
+            
+            # Standard correlation coefficient
+            covariance = (centered_fitted * centered_gt).mean()
+            var_fitted = (centered_fitted**2).mean()
+            var_gt = (centered_gt**2).mean()
+            
+            # Pearson correlation coefficient
+            correlation = covariance / (torch.sqrt(var_fitted * var_gt) + 1e-8)
+        
+        # Only reward positive correlations, penalize negative ones maximally
+        positive_correlation = torch.clamp(correlation, min=0.0)
+        
+        # Convert to loss: perfect positive correlation = 0, negative correlation = 1
+        return 1.0 - positive_correlation
+    
+    @abstractmethod
+    def _initialize_parameters(self, points_inside, mesh=None, surface_name=None):
+        """Initialize shape-specific parameters.
+        
+        Args:
+            points_inside: Points classified as inside the shape
+            mesh: Mesh object (required for geometric initialization)
+            surface_name: Surface name (required for geometric initialization)
+        
+        Returns:
+            tuple: Initial parameters for the shape
+        """
+        pass
+    
+    @abstractmethod
+    def _initialize_parameters_pca(self, points_inside):
+        """Initialize parameters using PCA method.
+        
+        Returns:
+            tuple: Initial parameters for the shape
+        """
+        pass
+    
+    @abstractmethod  
+    def _initialize_parameters_geometric(self, mesh, surface_name):
+        """Initialize parameters using geometric surface analysis method.
+        
+        Args:
+            mesh: Mesh object with near-surface point labels
+            surface_name: Name of the surface to analyze
+        
+        Returns:
+            tuple: Initial parameters for the shape
+        """
+        pass
+    
+    @abstractmethod
+    def _create_parameters(self, initial_params):
+        """Create torch.nn.Parameters from initial values.
+        
+        Returns:
+            list: List of parameters for optimizer
+        """
+        pass
+    
+    @abstractmethod
+    def _compute_sdf(self, points, parameters):
+        """Compute signed distance function for the shape.
+        
+        Args:
+            points: Input points
+            parameters: Current parameter values
+            
+        Returns:
+            torch.Tensor: Signed distances
+        """
+        pass
+    
+    @abstractmethod
+    def _compute_shape_loss(self, sdf, labels, sdf_ground_truth, near_surface_points_tensor, margin, epoch):
+        """Compute shape-specific loss (may include normalization, decay, etc.).
+        
+        Should combine margin loss, distance loss, and surface points loss 
+        using self.alpha, self.beta, and self.gamma.
+        
+        Args:
+            sdf: Signed distance values for main points
+            labels: Inside/outside labels for main points
+            sdf_ground_truth: Ground truth SDF values to original surface for main points
+            near_surface_points_tensor: Tensor of near-surface points (optional)
+            margin: Loss margin
+            epoch: Current epoch (for decay, etc.)
+            
+        Returns:
+            torch.Tensor: Combined loss value
+        """
+        pass
+    
+    @abstractmethod
+    def _extract_results(self, parameters):
+        """Extract final fitted parameters.
+        
+        Returns:
+            tuple: Final shape parameters
+        """
+        pass
+    
+    def _setup_plotting(self, plot):
+        """Setup plotting if requested. Override for custom plotting."""
+        if plot:
+            return {'losses': [], 'type': 'simple'}
+        return None
+    
+    def _update_plotting(self, plot_data, loss_val, epoch, _):
+        """Update plotting during training. Override for custom plotting."""
+        if plot_data is not None:
+            plot_data['losses'].append(loss_val)
+    
+    def _finalize_plotting(self, plot_data, plot):
+        """Finalize plotting after training. Override for custom plotting."""
+        if plot and plot_data and plot_data['losses']:
+            plt.figure(figsize=(8, 4))
+            plt.plot(plot_data['losses'])
+            plt.xlabel('Epoch')
+            plt.ylabel('Loss')
+            plt.title(f'{self.__class__.__name__} Loss')
+            plt.yscale('log')
+            plt.grid(True, alpha=0.3)
+            plt.show()
+    
+    def _compute_margin_decay(self, margin, epoch, decay_type=None):
+        """Compute decayed margin value for coarse-to-fine optimization.
+        
+        Args:
+            margin: Initial margin value
+            epoch: Current epoch
+            decay_type: Type of decay ('exponential', 'linear', 'cosine', None for instance default)
+            
+        Returns:
+            float: Decayed margin value
+        """
+        if decay_type is None:
+            decay_type = self.margin_decay_type
+            
+        progress = epoch / self.epochs  # 0 to 1
+        
+        if decay_type == 'exponential':
+            # Exponential decay to ~1% of original margin
+            decay_factor = np.exp(-4 * progress)  # e^(-4) ≈ 0.018
+        elif decay_type == 'linear':
+            # Linear decay to zero
+            decay_factor = 1 - progress
+        elif decay_type == 'cosine':
+            # Cosine annealing (smooth S-curve)
+            decay_factor = 0.5 * (1 + np.cos(np.pi * progress))
+        elif decay_type is None:
+            decay_factor = 1
+        else:
+            raise ValueError(f"Unknown decay_type: {decay_type}")
+            
+        # Ensure minimum margin to prevent numerical issues
+        min_margin = margin * 0.0001  # 0.1% of original
+        decayed_margin = max(margin * decay_factor, min_margin)
+        
+        return decayed_margin
+    
+    def fit(self, points, labels, sdf=None, margin=0.05, plot=False, mesh=None, surface_name=None, near_surface_points=None):
+        """Template method for fitting shapes to classified points.
+        
+        Args:
+            points: Input points
+            labels: Inside/outside labels  
+            sdf: Ground truth SDF values to original surface (optional)
+            margin: Loss margin
+            plot: Whether to plot training progress
+            mesh: Mesh object (required for geometric initialization)
+            surface_name: Surface name (required for geometric initialization)
+            near_surface_points: Optional (N, 3) array/tensor of points known to be near the surface
+        """
+        # 1. Prepare data
+        x, y = self._prepare_data(points, labels)
+        
+        # Prepare ground truth SDF if provided
+        if sdf is not None:
+            if len(sdf) != len(points):
+                raise ValueError(f"SDF ({len(sdf)}) and points ({len(points)}) must have same length")
+            sdf_tensor = torch.as_tensor(sdf, dtype=torch.float32, device=self.device)
+        else:
+            sdf_tensor = None
+        
+        # Prepare near_surface_points if provided
+        near_surface_points_tensor = None
+        if near_surface_points is not None:
+            if len(near_surface_points) > 0:
+                near_surface_points_tensor = torch.as_tensor(near_surface_points, dtype=torch.float32, device=self.device)
+                if near_surface_points_tensor.shape[1] != 3:
+                    raise ValueError(f"near_surface_points must be 3D, got shape {near_surface_points_tensor.shape}")
+            else:
+                warnings.warn("near_surface_points was provided but is empty.")
+        
+        # 2. Initialize parameters
+        inside = x[y]
+        if len(inside) == 0:
+            raise ValueError("No inside points found for shape fitting")
+        
+        if len(inside) < 3:
+            warnings.warn(f"Very few inside points ({len(inside)}) for robust fitting")
+            
+        # Check initialization requirements
+        if self.initialization == 'geometric':
+            if mesh is None or surface_name is None:
+                warnings.warn("Geometric initialization requires mesh and surface_name. Falling back to PCA.")
+                self.initialization = 'pca'
+            
+        try:
+            initial_params = self._initialize_parameters(inside, mesh, surface_name)
+        except Exception as e:
+            raise ValueError(f"Failed to initialize parameters: {e}")
+        
+        # 3. Create parameters and optimizer
+        parameters = self._create_parameters(initial_params)
+        opt = torch.optim.Adam(parameters, lr=self.lr)
+        
+        # 4. Setup plotting
+        plot_data = self._setup_plotting(plot)
+        
+        # 5. Training loop
+        best_loss = float('inf')
+        patience_counter = 0
+        patience = 100  # Early stopping
+        
+        for epoch in range(self.epochs):
+            opt.zero_grad()
+            
+            # Store current parameters for loss computation
+            self._current_parameters = parameters
+            
+            try:
+                # Compute SDF and loss
+                d = self._compute_sdf(x, parameters)
+                loss = self._compute_shape_loss(d, y, sdf_tensor, near_surface_points_tensor, margin, epoch)
+                
+                # Check for NaN/inf
+                if not torch.isfinite(loss):
+                    warnings.warn(f"Non-finite loss at epoch {epoch}, stopping optimization")
+                    break
+                
+                loss.backward()
+                
+                # Gradient clipping for stability
+                # torch.nn.utils.clip_grad_norm_(parameters, max_norm=1.0)
+                
+                opt.step()
+                
+                # Early stopping
+                if loss.item() < best_loss:
+                    best_loss = loss.item()
+                    patience_counter = 0
+                else:
+                    patience_counter += 1
+                    
+                if patience_counter >= patience:
+                    logger.info(f"Early stopping at epoch {epoch}")
+                    break
+                
+                # Update plotting
+                self._update_plotting(plot_data, loss.item(), epoch, None)
+                
+            except Exception as e:
+                warnings.warn(f"Error at epoch {epoch}: {e}")
+                break
+        
+        # 6. Finalize plotting
+        # self._finalize_plotting(plot_data, plot)
+        
+        # 6.5. Optional L-BFGS refinement stage
+        if self.use_lbfgs:
+            logger.info(f"Starting L-BFGS refinement for {self.lbfgs_epochs} steps...")
+            
+            # Create L-BFGS optimizer with reasonable parameters per step
+            lbfgs_opt = torch.optim.LBFGS(parameters, lr=self.lbfgs_lr,  # Default learning rate
+                                        max_iter=20,  # Iterations per step (default)
+                                        max_eval=25,  # Function evals per step (default is max_iter * 1.25)
+                                        tolerance_grad=1e-6, tolerance_change=1e-8,
+                                        history_size=100, line_search_fn='strong_wolfe')
+            
+            # Store initial loss for comparison
+            with torch.no_grad():
+                self._current_parameters = parameters
+                initial_d = self._compute_sdf(x, parameters)
+                initial_loss = self._compute_shape_loss(initial_d, y, sdf_tensor, near_surface_points_tensor, margin, self.epochs)
+                logger.info(f"L-BFGS starting loss: {initial_loss.item():.6f}")
+            
+            # Define closure once outside the loop
+            def closure():
+                lbfgs_opt.zero_grad()
+                self._current_parameters = parameters
+                
+                try:
+                    d = self._compute_sdf(x, parameters)
+                    loss = self._compute_shape_loss(d, y, sdf_tensor, near_surface_points_tensor, margin, self.epochs)
+                    
+                    if torch.isfinite(loss):
+                        loss.backward()
+                        return loss
+                    else:
+                        return torch.tensor(float('inf'), device=self.device)
+                        
+                except Exception as e:
+                    logger.warning(f"L-BFGS closure error: {e}")
+                    return torch.tensor(float('inf'), device=self.device)
+            
+            # Multiple L-BFGS steps with plotting between them
+            for lbfgs_step in range(self.lbfgs_epochs):
+                try:
+                    # Perform one L-BFGS optimization step
+                    loss = lbfgs_opt.step(closure)
+                    current_loss = loss.item() if loss is not None else float('inf')
+                    
+                    # Plot after each L-BFGS step (these are actual optimization progress points)
+                    self._update_plotting(plot_data, current_loss, epoch + 1 + lbfgs_step, "L-BFGS")
+                    
+                    if lbfgs_step % 10 == 0 or lbfgs_step < 5:
+                        logger.debug(f"L-BFGS step {lbfgs_step+1}/{self.lbfgs_epochs}: loss={current_loss:.6f}")
+                    
+                    # Early stopping if loss becomes non-finite
+                    if not torch.isfinite(torch.tensor(current_loss)):
+                        logger.warning(f"L-BFGS stopping at step {lbfgs_step} due to non-finite loss")
+                        break
+                        
+                except Exception as e:
+                    logger.warning(f"L-BFGS step {lbfgs_step} failed: {e}")
+                    break
+            
+            # Final loss after L-BFGS
+            with torch.no_grad():
+                self._current_parameters = parameters
+                final_d = self._compute_sdf(x, parameters) 
+                final_loss = self._compute_shape_loss(final_d, y, sdf_tensor, near_surface_points_tensor, margin, self.epochs)
+                logger.info(f"L-BFGS final loss: {final_loss.item():.6f}")
+                improvement = ((initial_loss - final_loss) / initial_loss * 100).item()
+                logger.info(f"L-BFGS improvement: {improvement:.2f}%")
+            
+            logger.info("L-BFGS refinement completed successfully")
+            
+            # Re-finalize plotting after L-BFGS
+            self._finalize_plotting(plot_data, plot)
+        
+        # 7. Extract and return results
+        return self._extract_results(parameters)
+
+
+class CylinderFitter(BaseShapeFitter):
+    """Cylinder fitting using PCA initialization and PyTorch optimization."""
+    
+    def _initialize_parameters_pca(self, points_inside):
+        """Cylinder-specific PCA: align principal axis with +z, estimate params in local coords."""
+        if len(points_inside) < 3:
+            raise ValueError("Need at least 3 points for PCA initialization")
+            
+        c0 = points_inside.mean(0)
+        X = points_inside - c0
+        
+        # Check for degenerate case
+        if X.var(dim=0).min() < 1e-10:
+            warnings.warn("Points appear to be colinear or coplanar")
+        
+        # Principal axis = first column of V
+        try:
+            _, _, V = torch.pca_lowrank(X, q=1)
+            axis = V[:, 0]
+            axis = axis / (axis.norm() + 1e-8)  # Avoid division by zero
+        except Exception:
+            # Fallback to using largest variance direction
+            axis = torch.tensor([0, 0, 1.], device=self.device)
+        
+        # Rotation that maps axis -> +z
+        z = torch.tensor([0, 0, 1.], device=self.device)
+        v = torch.cross(axis, z, dim=0)
+        s = v.norm()
+        c = torch.dot(axis, z)
+        
+        if s < 1e-6:  # already aligned or anti-aligned
+            if c < 0:  # anti-aligned, need 180° rotation
+                R0 = torch.diag(torch.tensor([1, -1, -1], dtype=torch.float32, device=self.device))
+            else:
+                R0 = torch.eye(3, device=self.device)
+        else:
+            # Rodrigues' rotation formula
+            vx = torch.tensor([
+                [0, -v[2], v[1]],
+                [v[2], 0, -v[0]],
+                [-v[1], v[0], 0]
+            ], device=self.device)
+            R0 = torch.eye(3, device=self.device) + vx + vx @ vx * ((1 - c) / (s ** 2))
+        
+        # Local coords & extents
+        u_local = X @ R0
+        half_len0 = torch.clamp(u_local[:, 2].abs().max() * 1.05, min=1e-3)
+        radius0 = torch.clamp(torch.sqrt(u_local[:, 0] ** 2 + u_local[:, 1] ** 2).mean(), min=1e-3)
+        
+        return c0, radius0, half_len0, R0
+    
+    def _initialize_parameters(self, points_inside, mesh=None, surface_name=None):
+        """Route to appropriate initialization method based on self.initialization."""
+        if self.initialization == 'geometric':
+            logger.info(f"Initializing cylinder using geometric method for {surface_name}")
+            return self._initialize_parameters_geometric(mesh, surface_name)
+        else:  # 'pca' or fallback
+            return self._initialize_parameters_pca(points_inside)
+    
+    def _initialize_parameters_geometric(self, mesh, surface_name):
+        """Initialize parameters using geometric surface analysis method."""
+        try:
+            # Get near-surface points from pre-labeled mesh data
+            near_surface_points = surface_param_estimation.get_near_surface_points_from_mesh(mesh, surface_name)
+            
+            logger.debug(f"Near-surface points for {surface_name}: {len(near_surface_points)} points")
+            logger.debug(f"Point coordinate ranges:")
+            logger.debug(f"  X: [{near_surface_points[:, 0].min():.4f}, {near_surface_points[:, 0].max():.4f}]")
+            logger.debug(f"  Y: [{near_surface_points[:, 1].min():.4f}, {near_surface_points[:, 1].max():.4f}]")
+            logger.debug(f"  Z: [{near_surface_points[:, 2].min():.4f}, {near_surface_points[:, 2].max():.4f}]")
+            
+            if len(near_surface_points) < 6:
+                raise ValueError(f"Not enough near-surface points ({len(near_surface_points)}) for geometric cylinder fitting")
+            
+            # Convert to torch tensor
+            points_tensor = torch.from_numpy(near_surface_points).float().to(self.device)
+            
+            # Fit cylinder using geometric method
+            cylinder_params = surface_param_estimation.fit_cylinder_geometric(points_tensor)
+            
+            if not cylinder_params['success']:
+                raise ValueError("Geometric cylinder fitting failed")
+            
+            # Extract parameters in the format expected by CylinderFitter
+            center = cylinder_params['center'].to(self.device)
+            radius = cylinder_params['radius'].to(self.device)
+            half_length = cylinder_params['half_length'].to(self.device)
+            rotation = cylinder_params['rotation'].to(self.device)
+            
+            logger.debug(f"Geometric cylinder parameters for {surface_name}:")
+            logger.debug(f"  Center: [{center[0]:.4f}, {center[1]:.4f}, {center[2]:.4f}]")
+            logger.debug(f"  Radius: {radius:.4f}")
+            logger.debug(f"  Half-length: {half_length:.4f}")
+            
+            return center, radius, half_length, rotation
+            
+        except Exception as e:
+            warnings.warn(f"Geometric initialization failed: {e}. Falling back to PCA.")
+            # We need points_inside for PCA fallback, but we don't have them here
+            # Let's create some dummy inside points from the surface points
+            near_surface_points = surface_param_estimation.get_near_surface_points_from_mesh(mesh, surface_name)
+            points_tensor = torch.from_numpy(near_surface_points).float().to(self.device)
+            # Use a subset as "inside" points for PCA
+            return self._initialize_parameters_pca(points_tensor[:len(points_tensor)//2])
+    
+    def _create_parameters(self, initial_params):
+        center0, radius0, half_len0, R0 = initial_params
+        center = torch.nn.Parameter(center0)
+        log_r = torch.nn.Parameter(torch.clamp(radius0, min=1e-6).log())
+        log_h = torch.nn.Parameter(torch.clamp(half_len0, min=1e-6).log())
+        quat = torch.nn.Parameter(RotationUtils.quat_from_rot(R0))
+        return [center, log_r, log_h, quat]
+    
+    def _compute_sdf(self, points, parameters):
+        center, log_r, log_h, quat = parameters
+        R = RotationUtils.rot_from_quat(quat)
+        r = torch.exp(torch.clamp(log_r, max=10))  # Prevent overflow
+        h = torch.exp(torch.clamp(log_h, max=10))
+        return sd_cylinder(points, center, r, h, R)
+    
+    def _compute_shape_loss(self, sdf, labels, sdf_ground_truth, near_surface_points_tensor, margin, epoch):
+        # Apply margin decay for coarse-to-fine optimization
+        margin_decayed = self._compute_margin_decay(margin, epoch)
+        
+        center, log_r, log_h, quat = self._current_parameters
+        r = torch.exp(torch.clamp(log_r, max=10))  # Prevent overflow
+        # d_norm_r is the sdf normalized by radius, useful for logging or relative analysis
+        d_norm_r = sdf / (r + 1e-8) 
+        # Squared-hinge margin loss now uses the world-unit sdf directly for an absolute margin
+        margin_loss = self._compute_loss(sdf, labels, margin_decayed)
+        
+        # Distance loss (only if ground truth provided)
+        distance_loss = torch.tensor(0.0, device=self.device)
+        if sdf_ground_truth is not None:
+            distance_loss = self._compute_distance_loss(sdf, sdf_ground_truth, sigma=1.0)
+        
+        # Surface points loss (only if near_surface_points_tensor provided)
+        surface_points_loss = torch.tensor(0.0, device=self.device)
+        if near_surface_points_tensor is not None and len(near_surface_points_tensor) > 0:
+            # Compute SDF for near-surface points using current parameters
+            sdf_surface = self._compute_sdf(near_surface_points_tensor, self._current_parameters)
+            # We want these points to be on the surface, so their SDF should be close to 0
+            surface_points_loss = (sdf_surface ** 2).mean()
+
+        logger.info(
+            f"Epoch {epoch}: Margin={margin_decayed:.6f} (decay={margin_decayed/margin:.3f}), "
+            f"MarginLoss={margin_loss:.6f}, DistLoss={distance_loss:.6f}, SurfLoss={surface_points_loss:.6f}"
+        )
+        
+        # Hybrid loss: alpha * margin_loss + beta * distance_loss + gamma * surface_points_loss
+        return self.alpha * margin_loss + self.beta * distance_loss + self.gamma * surface_points_loss
+    
+    def _extract_results(self, parameters):
+        center, log_r, log_h, quat = parameters
+        return (center.detach(),
+                torch.stack([torch.exp(log_r), torch.exp(log_h)]),
+                RotationUtils.rot_from_quat(quat.detach()))
+
+
+class EllipsoidFitter(BaseShapeFitter):
+    """Ellipsoid fitting using PCA initialization and PyTorch optimization."""
+    
+    def _initialize_parameters_pca(self, points_inside):
+        """Ellipsoid-specific PCA: all 3 components become ellipsoid semi-axes."""
+        if len(points_inside) < 3:
+            raise ValueError("Need at least 3 points for PCA initialization")
+            
+        c0 = points_inside.mean(0)
+        X = points_inside - c0
+        
+        # Check for degenerate case
+        if X.var(dim=0).min() < 1e-10:
+            warnings.warn("Points appear to be colinear or coplanar")
+        
+        try:
+            # PCA to get the principal axes
+            _, _, Vt = torch.pca_lowrank(X, q=3)
+            R0 = Vt.t()  # columns = local axes
+            
+            # Compute extents along principal axes
+            u_local = X @ R0
+            a0 = torch.clamp(u_local.abs().max(0).values * 1.05, min=1e-3)
+        except Exception:
+            # Fallback to axis-aligned ellipsoid
+            R0 = torch.eye(3, device=self.device)
+            a0 = torch.clamp(X.abs().max(0).values * 1.05, min=1e-3)
+        
+        return c0, a0, R0
+    
+    def _initialize_parameters(self, points_inside, mesh=None, surface_name=None):
+        """Route to appropriate initialization method based on self.initialization."""
+        if self.initialization == 'geometric':
+            logger.info(f"Initializing ellipsoid using geometric method for {surface_name}")
+            return self._initialize_parameters_geometric(mesh, surface_name)
+        else:  # 'pca' or fallback
+            return self._initialize_parameters_pca(points_inside)
+    
+    def _initialize_parameters_geometric(self, mesh, surface_name):
+        """Initialize parameters using geometric surface analysis method."""
+        try:
+            # Get near-surface points from pre-labeled mesh data
+            near_surface_points = surface_param_estimation.get_near_surface_points_from_mesh(mesh, surface_name)
+            
+            logger.debug(f"Near-surface points for {surface_name}: {len(near_surface_points)} points")
+            logger.debug(f"Point coordinate ranges:")
+            logger.debug(f"  X: [{near_surface_points[:, 0].min():.4f}, {near_surface_points[:, 0].max():.4f}]")
+            logger.debug(f"  Y: [{near_surface_points[:, 1].min():.4f}, {near_surface_points[:, 1].max():.4f}]")
+            logger.debug(f"  Z: [{near_surface_points[:, 2].min():.4f}, {near_surface_points[:, 2].max():.4f}]")
+            
+            if len(near_surface_points) < 9:
+                raise ValueError(f"Not enough near-surface points ({len(near_surface_points)}) for geometric ellipsoid fitting")
+            
+            # Convert to torch tensor
+            points_tensor = torch.from_numpy(near_surface_points).float().to(self.device)
+            
+            # Fit ellipsoid using geometric method
+            ellipsoid_params = surface_param_estimation.fit_ellipsoid_algebraic(points_tensor)
+            
+            if not ellipsoid_params['success']:
+                raise ValueError("Geometric ellipsoid fitting failed")
+            
+            # Extract parameters in the format expected by EllipsoidFitter
+            center = ellipsoid_params['center'].to(self.device)
+            axes = ellipsoid_params['axes'].to(self.device)
+            rotation = ellipsoid_params['rotation'].to(self.device)
+            
+            logger.debug(f"Geometric ellipsoid parameters for {surface_name}:")
+            logger.debug(f"  Center: [{center[0]:.4f}, {center[1]:.4f}, {center[2]:.4f}]")
+            logger.debug(f"  Axes: [{axes[0]:.4f}, {axes[1]:.4f}, {axes[2]:.4f}]")
+            
+            return center, axes, rotation
+            
+        except Exception as e:
+            warnings.warn(f"Geometric initialization failed: {e}. Falling back to PCA.")
+            # We need points_inside for PCA fallback, but we don't have them here
+            # Let's create some dummy inside points from the surface points
+            near_surface_points = surface_param_estimation.get_near_surface_points_from_mesh(mesh, surface_name)
+            points_tensor = torch.from_numpy(near_surface_points).float().to(self.device)
+            # Use a subset as "inside" points for PCA
+            return self._initialize_parameters_pca(points_tensor[:len(points_tensor)//2])
+    
+    def _create_parameters(self, initial_params):
+        center0, axes0, R0 = initial_params
+        center = torch.nn.Parameter(center0)
+        log_axes = torch.nn.Parameter(torch.clamp(axes0, min=1e-6).log())
+        
+        # Fix the quaternion normalization bug
+        quat_unnorm = RotationUtils.quat_from_rot(R0)
+        quat = torch.nn.Parameter(quat_unnorm)  # Already normalized in quat_from_rot
+        
+        return [center, log_axes, quat]
+    
+    def _compute_sdf(self, points, parameters):
+        center, log_axes, quat = parameters
+        
+        # Use the utility function instead of duplicating code
+        R = RotationUtils.rot_from_quat(quat)
+        axes = torch.exp(torch.clamp(log_axes, max=10))  # Prevent overflow
+        
+        return sd_normalised(points, center, axes, R)
+    
+    def _compute_shape_loss(self, sdf, labels, sdf_ground_truth, near_surface_points_tensor, margin, epoch):
+        # Apply margin decay for coarse-to-fine optimization
+        margin_decayed = self._compute_margin_decay(margin, epoch)
+        
+        # Margin loss
+        margin_loss = self._compute_loss(sdf, labels, margin_decayed)
+        
+        # Distance loss (only if ground truth provided)
+        distance_loss = torch.tensor(0.0, device=self.device)
+        if sdf_ground_truth is not None:
+            distance_loss = self._compute_distance_loss(sdf, sdf_ground_truth, sigma=1.0)
+        
+        # Surface points loss (only if near_surface_points_tensor provided)
+        surface_points_loss = torch.tensor(0.0, device=self.device)
+        if near_surface_points_tensor is not None and len(near_surface_points_tensor) > 0:
+            # Compute SDF for near-surface points using current parameters
+            sdf_surface = self._compute_sdf(near_surface_points_tensor, self._current_parameters)
+            # We want these points to be on the surface, so their SDF should be close to 0
+            surface_points_loss = (sdf_surface ** 2).mean()
+
+        logger.info(
+            f"Epoch {epoch}: Margin={margin_decayed:.6f} (decay={margin_decayed/margin:.3f}), "
+            f"MarginLoss={margin_loss:.6f}, DistLoss={distance_loss:.6f}, SurfLoss={surface_points_loss:.6f}"
+        )
+        
+        # Hybrid loss: alpha * margin_loss + beta * distance_loss + gamma * surface_points_loss
+        return self.alpha * margin_loss + self.beta * distance_loss + self.gamma * surface_points_loss
+    
+    def _setup_plotting(self, plot):
+        """Setup live plotting for ellipsoid."""
+        if plot:
+            plt.ion()
+            fig, ax = plt.subplots(figsize=(6, 3))
+            line, = ax.plot([], [], lw=1.5)
+            ax.set_xlabel('iter')
+            ax.set_ylabel('squared-hinge loss')
+            ax.set_yscale('log')
+            ax.grid(True, alpha=0.3)
+            return {'losses': [], 'fig': fig, 'ax': ax, 'line': line, 'type': 'live'}
+        return None
+    
+    def _update_plotting(self, plot_data, loss_val, epoch, stage):
+        """Update live plotting during training."""
+        if plot_data is not None and plot_data.get('type') == 'live':
+            plot_data['losses'].append(loss_val)
+            
+            # During L-BFGS, plot more frequently (every step or every few steps)
+            if stage == "L-BFGS":
+                # Plot every L-BFGS step since there are typically fewer of them
+                should_plot = True
+            else:
+                # Regular training: plot every 50 epochs or at the last epoch
+                should_plot = (epoch + 1) % 50 == 0 or epoch == self.epochs - 1
+            
+            if should_plot:
+                plot_data['line'].set_data(range(len(plot_data['losses'])), plot_data['losses'])
+                plot_data['ax'].relim()
+                plot_data['ax'].autoscale_view()
+                plot_data['fig'].canvas.draw()
+                plot_data['fig'].canvas.flush_events()
+    
+    def _finalize_plotting(self, plot_data, plot):
+        """Finalize live plotting."""
+        if plot and plot_data and plot_data.get('type') == 'live':
+            plt.ioff()
+            plt.show()
+    
+    def _extract_results(self, parameters):
+        center, log_axes, quat = parameters
+        
+        # Use utility function instead of duplicating code
+        R = RotationUtils.rot_from_quat(quat.detach())
+        
+        return center.detach(), torch.exp(log_axes).detach(), R

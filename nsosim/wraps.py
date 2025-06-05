@@ -38,6 +38,43 @@ class wrap_surface:
         self.length = length
         self.dimensions = dimensions
 
+def _create_knee_ext_cylinder_wrap(name, pts_indices, fem_interpolated_pts_osim, ME, LE):
+    """
+    Helper function to create a 'WrapCylinder' for knee extensors on the right femur.
+
+    The cylinder is defined based on a set of interpolated points on the femur
+    and the positions of the medial (ME) and lateral (LE) epicondyles.
+    The cylinder's axis is implicitly aligned with the OpenSim model's axes,
+    and its radius and length are derived from the provided points.
+
+    Args:
+        name (str): The name to assign to the wrap surface.
+        pts_indices (list or numpy.ndarray): Indices into `fem_interpolated_pts_osim`
+            that define the relevant points for this wrap object.
+        fem_interpolated_pts_osim (numpy.ndarray): Nx3 array of point coordinates on
+            the femur in the OpenSim coordinate system.
+        ME (numpy.ndarray): 3-element array for the medial epicondyle coordinates.
+        LE (numpy.ndarray): 3-element array for the lateral epicondyle coordinates.
+
+    Returns:
+        wrap_surface: A `wrap_surface` object representing the defined cylinder.
+    """
+    pts = fem_interpolated_pts_osim[pts_indices,:]
+    h = 2 * np.abs(ME[2] - LE[2])
+    x0 = pts.mean(axis=0)
+    r = pts[:,0].max() - x0[0]
+    wrap_ = wrap_surface(
+        name=name,
+        body='femur_r',
+        type_='WrapCylinder',
+        xyz_body_rotation=np.array([0,0,0]),
+        translation=x0,
+        radius=r,
+        length=h,
+        dimensions=None
+    )
+    return wrap_
+
 def knee_ext_r_wrap(pts_indices, fem_interpolated_pts_osim, ME, LE):
     """
     Creates a 'WrapCylinder' for the knee extensors (KnExt_at_fem_r) on the right femur.
@@ -58,22 +95,7 @@ def knee_ext_r_wrap(pts_indices, fem_interpolated_pts_osim, ME, LE):
     Returns:
         wrap_surface: A `wrap_surface` object representing the defined cylinder.
     """
-    pts = fem_interpolated_pts_osim[pts_indices,:]
-    h = 2 * np.abs(ME[2] - LE[2])
-    x0 = pts.mean(axis=0)
-    r = pts[:,0].max() - x0[0]
-    wrap_ = wrap_surface(
-        name='KnExt_at_fem_r',
-        body='femur_r',
-        type_='WrapCylinder',
-        xyz_body_rotation=np.array([0,0,0]),
-        translation=x0,
-        radius=r,
-        length=h,
-        dimensions=None
-    )
-
-    return wrap_
+    return _create_knee_ext_cylinder_wrap('KnExt_at_fem_r', pts_indices, fem_interpolated_pts_osim, ME, LE)
 
 
 def knee_ext_vasint_r_wrap(pts_indices, fem_interpolated_pts_osim, ME, LE):
@@ -94,22 +116,7 @@ def knee_ext_vasint_r_wrap(pts_indices, fem_interpolated_pts_osim, ME, LE):
     Returns:
         wrap_surface: A `wrap_surface` object for the vastus intermedius cylinder.
     """
-    pts = fem_interpolated_pts_osim[pts_indices,:]
-    h = 2 * np.abs(ME[2] - LE[2])
-    x0 = pts.mean(axis=0)
-    r = pts[:,0].max() - x0[0]
-    wrap_ = wrap_surface(
-        name='KnExt_vasint_at_fem_r',
-        body='femur_r',
-        type_='WrapCylinder',
-        xyz_body_rotation=np.array([0,0,0]),
-        translation=x0,
-        radius=r,
-        length=h,
-        dimensions=None
-    )
-
-    return wrap_
+    return _create_knee_ext_cylinder_wrap('KnExt_vasint_at_fem_r', pts_indices, fem_interpolated_pts_osim, ME, LE)
 
 
 def gastroc_condyles_r_wrap(pts_indices, fem_interpolated_pts_osim, ME, LE):
