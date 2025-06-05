@@ -355,8 +355,6 @@ def load_preprocess_opensim_ref_mesh(path, z_rel_x, bone):
     """
     ref_ = Mesh(path)
     
-
-    
     # flip the coorindates to align as expected with MRI axes before clipping etc.
     # +y -> +z
     # +x -> -y
