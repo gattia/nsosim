@@ -19,6 +19,12 @@ Example usage with geometric initialization:
         surface_name="femur_1"       # Required for geometric init
     )
     
+    # For cylinder fitting with random axis perturbation (useful for robustness testing)
+    cylinder_fitter = CylinderFitter(
+        initialization='geometric',
+        random_axis_degrees=10.0     # Add up to ±10° random rotation to initial axis
+    )
+    
     # For ellipsoid fitting with geometric initialization  
     ellipsoid_fitter = EllipsoidFitter(
         initialization='geometric'
@@ -30,6 +36,43 @@ Example usage with geometric initialization:
         mesh=labeled_mesh,
         surface_name="patella_1"
     )
+
+Example usage with learning rate scheduling:
+    # Cylinder fitting with cosine annealing schedule
+    cylinder_fitter = CylinderFitter(
+        lr=1e-2, 
+        epochs=1500,
+        lr_schedule='cosine',
+        lr_schedule_params={'T_max': 1500, 'eta_min': 1e-6}
+    )
+    
+    # Cylinder fitting with exponential decay
+    cylinder_fitter = CylinderFitter(
+        lr=5e-3,
+        epochs=1000, 
+        lr_schedule='exponential',
+        lr_schedule_params={'gamma': 0.995}  # 0.5% decay per epoch
+    )
+    
+    # Cylinder fitting with adaptive plateau-based reduction
+    cylinder_fitter = CylinderFitter(
+        lr=1e-2,
+        epochs=2000,
+        lr_schedule='plateau',
+        lr_schedule_params={
+            'factor': 0.5,      # Reduce by half
+            'patience': 25,     # Wait 25 epochs
+            'threshold': 1e-4   # Minimum improvement
+        }
+    )
+
+Available learning rate schedules:
+    - 'cosine': Cosine annealing with smooth decay
+    - 'exponential': Exponential decay by constant factor
+    - 'step': Step decay at regular intervals  
+    - 'multistep': Step decay at specific epochs
+    - 'plateau': Adaptive reduction when loss plateaus
+    - None: No scheduling (constant learning rate)
 
 Geometric initialization uses the pre-labeled near-surface points to fit 
 shape parameters directly from surface geometry, which should be more accurate
@@ -92,11 +135,15 @@ class RotationUtils:
         
     @staticmethod
     def rot_from_quat(q: torch.Tensor) -> torch.Tensor:
-        """Convert quaternion (w,x,y,z) to 3x3 rotation matrix."""
+        """Convert quaternion (w,x,y,z) to 3x3 rotation matrix.
+        
+        Note: Assumes quaternion is already normalized. Normalization should be 
+        done outside the forward pass to avoid gradient contamination.
+        """
         assert q.shape == (4,), f"Expected shape (4,) for quaternion (w,x,y,z), got {q.shape}"
         
-        # Normalize quaternion to handle numerical drift
-        q = q / (q.norm(p=2) + 1e-8)  # Add small epsilon to prevent division by zero
+        # Use quaternion directly without normalization to preserve gradient flow
+        # Normalization should be enforced after optimizer steps, not during forward pass
         w, x, y, z = q
         
         return torch.stack([
@@ -104,6 +151,88 @@ class RotationUtils:
             torch.stack([2*(x*y + w*z),     1 - 2*(x*x + z*z), 2*(y*z - w*x)], dim=0),
             torch.stack([2*(x*z - w*y),     2*(y*z + w*x),     1 - 2*(x*x + y*y)], dim=0)
         ], dim=0)
+
+    @staticmethod
+    def axis_angle_from_rot(R: torch.Tensor) -> torch.Tensor:
+        """Convert rotation matrix to axis-angle representation (3D vector).
+        
+        Args:
+            R: (3, 3) rotation matrix
+            
+        Returns:
+            torch.Tensor: (3,) axis-angle vector where direction is rotation axis 
+                         and magnitude is rotation angle in radians
+        """
+        assert R.shape == (3, 3), f"Expected (3, 3) rotation matrix, got {R.shape}"
+        
+        # Compute rotation angle from trace
+        trace = torch.trace(R)
+        angle = torch.acos(torch.clamp((trace - 1) / 2, -1 + 1e-7, 1 - 1e-7))
+        
+        # Handle small angle case (near identity)
+        if angle.abs() < 1e-6:
+            return torch.zeros(3, device=R.device, dtype=R.dtype)
+        
+        # Handle 180 degree rotation case
+        if angle.abs() > np.pi - 1e-6:
+            # Find the eigenvector corresponding to eigenvalue 1
+            # This is the rotation axis for 180-degree rotation
+            eig_vals, eig_vecs = torch.linalg.eigh(R)
+            # Find index of eigenvalue closest to 1
+            idx = torch.argmin(torch.abs(eig_vals - 1))
+            axis = eig_vecs[:, idx]
+            
+            # Ensure consistent sign
+            if axis[0] < 0 or (axis[0] == 0 and axis[1] < 0) or (axis[0] == 0 and axis[1] == 0 and axis[2] < 0):
+                axis = -axis
+                
+            return axis * angle
+        
+        # General case: extract axis from skew-symmetric part
+        axis = torch.stack([
+            R[2, 1] - R[1, 2],
+            R[0, 2] - R[2, 0], 
+            R[1, 0] - R[0, 1]
+        ]) / (2 * torch.sin(angle))
+        
+        return axis * angle
+    
+    @staticmethod
+    def rot_from_axis_angle(axis_angle: torch.Tensor) -> torch.Tensor:
+        """Convert axis-angle vector to rotation matrix using Rodrigues' formula.
+        
+        Args:
+            axis_angle: (3,) axis-angle vector
+            
+        Returns:
+            torch.Tensor: (3, 3) rotation matrix
+        """
+        assert axis_angle.shape == (3,), f"Expected (3,) axis-angle vector, got {axis_angle.shape}"
+        
+        angle = torch.norm(axis_angle)
+        
+        # Handle zero rotation case
+        if angle < 1e-8:
+            return torch.eye(3, device=axis_angle.device, dtype=axis_angle.dtype)
+        
+        # Normalize axis
+        axis = axis_angle / angle
+        
+        # Rodrigues' rotation formula
+        K = torch.tensor([
+            [0, -axis[2], axis[1]],
+            [axis[2], 0, -axis[0]], 
+            [-axis[1], axis[0], 0]
+        ], device=axis_angle.device, dtype=axis_angle.dtype)
+        
+        cos_angle = torch.cos(angle)
+        sin_angle = torch.sin(angle)
+        
+        R = (torch.eye(3, device=axis_angle.device, dtype=axis_angle.dtype) + 
+             sin_angle * K + 
+             (1 - cos_angle) * torch.mm(K, K))
+        
+        return R
 
 
 def sd_cylinder(points, center, radius, half_length, rotation_matrix):
@@ -169,7 +298,8 @@ class BaseShapeFitter(ABC):
     
     def __init__(self, lr=5e-3, epochs=1500, device='cpu', use_lbfgs=False, lbfgs_epochs=100, 
                  alpha=1.0, beta=0.1, gamma=0.1, lbfgs_lr=1, 
-                 margin_decay_type='exponential', initialization='geometric'):
+                 margin_decay_type='exponential', initialization='geometric',
+                 lr_schedule=None, lr_schedule_params=None):
         self.lr = lr
         self.epochs = epochs
         self.device = device
@@ -181,6 +311,10 @@ class BaseShapeFitter(ABC):
         self.gamma = gamma  # Weight for surface points loss
         self.margin_decay_type = margin_decay_type  # Type of margin decay
         self.initialization = initialization  # 'pca' or 'geometric'
+        
+        # Learning rate scheduling
+        self.lr_schedule = lr_schedule  # 'cosine', 'exponential', 'step', 'plateau', or None
+        self.lr_schedule_params = lr_schedule_params or {}  # Parameters for the scheduler
         
     def _prepare_data(self, points, labels):
         """Convert to tensors and validate."""
@@ -196,14 +330,30 @@ class BaseShapeFitter(ABC):
         return x, y
         
     def _compute_loss(self, d, y, margin):
-        """Squared-hinge margin loss."""
-        mask_in, mask_out = y, ~y
+        """Squared-hinge margin loss with proper inside/outside penalties.
         
-        # Handle empty masks gracefully
-        loss_in = (F.relu(d + margin)[mask_in] ** 2).mean() if mask_in.any() else torch.tensor(0.0, device=self.device)
-        loss_out = (F.relu(-d + margin)[mask_out] ** 2).mean() if mask_out.any() else torch.tensor(0.0, device=self.device)
+        For points labeled as "inside": penalize if d > -margin (not sufficiently inside)
+        For points labeled as "outside": penalize if d < margin (not sufficiently outside)
+        This ensures all points contribute to the loss until they satisfy the margin constraint.
+        """
+        # mask_in, mask_out = y, ~y
         
-        return loss_in + loss_out
+        # # Handle empty masks gracefully
+        
+        # # d is signed distance. (-) is inside, (+) is outside. 
+        # # we compute losses separately for the inside and outside points.
+        # # for the inside points, they are negative. So, if the d (-) + the margin is > 0
+        # # then there should be a loss. Here, relu linearly increases. 
+        # loss_in = (F.relu(d + margin)[mask_in] ** 2).mean() if mask_in.any() else torch.tensor(0.0, device=self.device)
+        
+        # # Outside points: penalize if they're not sufficiently outside (d < margin)  
+        # # for the outside points, they are positive. So, if the margin - d (+) is > 0
+        # # (i.e., d < margin), then there should be a loss.
+        # loss_out = (F.relu(margin - d)[mask_out]).mean() if mask_out.any() else torch.tensor(0.0, device=self.device)
+        
+        # return loss_in + loss_out
+        
+        return (d**2).mean()
     
     def _compute_distance_loss(self, sdf_fitted, sdf_ground_truth, sigma=1.0, use_weighting=False):
         """Correlation-based distance loss with optional surface proximity weighting.
@@ -371,7 +521,7 @@ class BaseShapeFitter(ABC):
             plt.grid(True, alpha=0.3)
             plt.show()
     
-    def _compute_margin_decay(self, margin, epoch, decay_type=None):
+    def _compute_margin_decay(self, margin, epoch, decay_type=None, min_margin=1e-4):
         """Compute decayed margin value for coarse-to-fine optimization.
         
         Args:
@@ -384,12 +534,17 @@ class BaseShapeFitter(ABC):
         """
         if decay_type is None:
             decay_type = self.margin_decay_type
+        
+        # Handle case where epochs=0 (L-BFGS only mode)
+        if self.epochs == 0:
+            # No epoch-based decay, return original margin
+            return max(margin, min_margin)
             
         progress = epoch / self.epochs  # 0 to 1
         
         if decay_type == 'exponential':
             # Exponential decay to ~1% of original margin
-            decay_factor = np.exp(-4 * progress)  # e^(-4) ≈ 0.018
+            decay_factor = np.exp(-2 * progress)  # e^(-4) ≈ 0.018
         elif decay_type == 'linear':
             # Linear decay to zero
             decay_factor = 1 - progress
@@ -402,10 +557,67 @@ class BaseShapeFitter(ABC):
             raise ValueError(f"Unknown decay_type: {decay_type}")
             
         # Ensure minimum margin to prevent numerical issues
-        min_margin = margin * 0.0001  # 0.1% of original
+        # min_margin = margin * 1e-12  # Very small but non-zero minimum
         decayed_margin = max(margin * decay_factor, min_margin)
         
         return decayed_margin
+    
+    def _create_lr_scheduler(self, optimizer):
+        """Create learning rate scheduler based on self.lr_schedule.
+        
+        Args:
+            optimizer: PyTorch optimizer
+            
+        Returns:
+            torch.optim.lr_scheduler or None
+        """
+        if self.lr_schedule is None:
+            return None
+            
+        params = self.lr_schedule_params.copy()
+        
+        if self.lr_schedule == 'cosine':
+            # Cosine annealing - smooth decay to min_lr over T_max epochs
+            T_max = params.get('T_max', self.epochs)
+            eta_min = params.get('eta_min', self.lr * 0.01)  # 1% of initial LR
+            return torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer, T_max=T_max, eta_min=eta_min
+            )
+            
+        elif self.lr_schedule == 'exponential':
+            # Exponential decay - multiply LR by gamma each epoch
+            gamma = params.get('gamma', 0.99)  # Default: 1% decay per epoch
+            return torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=gamma)
+            
+        elif self.lr_schedule == 'step':
+            # Step decay - reduce LR by factor at specific milestones
+            step_size = params.get('step_size', self.epochs // 3)
+            gamma = params.get('gamma', 0.5)  # Halve LR at each step
+            return torch.optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma)
+            
+        elif self.lr_schedule == 'multistep':
+            # Multi-step decay - reduce LR at multiple specific epochs
+            milestones = params.get('milestones', [self.epochs // 3, 2 * self.epochs // 3])
+            gamma = params.get('gamma', 0.5)
+            return torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=milestones, gamma=gamma)
+            
+        elif self.lr_schedule == 'plateau':
+            # Reduce on plateau - adaptive based on loss progress
+            factor = params.get('factor', 0.5)  # Reduce LR by this factor
+            patience = params.get('patience', 20)  # Wait this many epochs before reducing
+            threshold = params.get('threshold', 1e-4)  # Minimum change to qualify as improvement
+            min_lr = params.get('min_lr', self.lr * 1e-6)  # Minimum LR
+            return torch.optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer, mode='min', factor=factor, patience=patience, 
+                threshold=threshold, min_lr=min_lr, verbose=True
+            )
+            
+        else:
+            raise ValueError(f"Unknown lr_schedule: {self.lr_schedule}")
+    
+    def _get_current_lr(self, optimizer):
+        """Get current learning rate from optimizer."""
+        return optimizer.param_groups[0]['lr']
     
     def fit(self, points, labels, sdf=None, margin=0.05, plot=False, mesh=None, surface_name=None, near_surface_points=None):
         """Template method for fitting shapes to classified points.
@@ -460,108 +672,311 @@ class BaseShapeFitter(ABC):
         except Exception as e:
             raise ValueError(f"Failed to initialize parameters: {e}")
         
-        # 3. Create parameters and optimizer
+        # 3. Create parameters and optimizer with parameter-specific learning rates
         parameters = self._create_parameters(initial_params)
-        opt = torch.optim.Adam(parameters, lr=self.lr)
         
         # 4. Setup plotting
         plot_data = self._setup_plotting(plot)
         
-        # 5. Training loop
-        best_loss = float('inf')
-        patience_counter = 0
-        patience = 100  # Early stopping
+        # Check if we should skip Adam optimization and go directly to L-BFGS
+        skip_adam = (self.epochs == 0)
         
-        for epoch in range(self.epochs):
-            opt.zero_grad()
+        if skip_adam:
+            # Validate that L-BFGS is requested when skipping Adam
+            if not (self.use_lbfgs and self.lbfgs_epochs > 0):
+                raise ValueError("When epochs=0, must have use_lbfgs=True and lbfgs_epochs > 0")
+            logger.info("Skipping Adam optimization (epochs=0), proceeding directly to L-BFGS")
+        
+        # 5. Adam Training loop (skip if epochs=0)
+        if not skip_adam:
+            # Use parameter-specific learning rates to handle gradient scale differences
+            param_groups = []
+            param_names = ['center', 'radius/size', 'height/axes', 'axis_vector']
             
-            # Store current parameters for loss computation
-            self._current_parameters = parameters
-            
-            try:
-                # Compute SDF and loss
-                d = self._compute_sdf(x, parameters)
-                loss = self._compute_shape_loss(d, y, sdf_tensor, near_surface_points_tensor, margin, epoch)
+            for i, param in enumerate(parameters):
+                param_name = param_names[i] if i < len(param_names) else f'param_{i}'
                 
-                # Check for NaN/inf
-                if not torch.isfinite(loss):
-                    warnings.warn(f"Non-finite loss at epoch {epoch}, stopping optimization")
-                    break
-                
-                loss.backward()
-                
-                # Gradient clipping for stability
-                # torch.nn.utils.clip_grad_norm_(parameters, max_norm=1.0)
-                
-                opt.step()
-                
-                # Early stopping
-                if loss.item() < best_loss:
-                    best_loss = loss.item()
-                    patience_counter = 0
+                # Adjust learning rates based on typical gradient magnitudes
+                if 'center' in param_name:
+                    lr_scale = 5e-7  # Even smaller LR for center due to massive gradients
+                elif 'axis_vector' in param_name:
+                    lr_scale = 5e-3  # Much larger LR for axis vector due to small gradients
+                elif 'height' in param_name or 'axes' in param_name:
+                    lr_scale = 1e-3  # Moderate LR for height/axes
+                elif 'radius' in param_name or 'size' in param_name:
+                    lr_scale = 1e-3  # Moderate LR for radius
                 else:
-                    patience_counter += 1
+                    lr_scale = 1.0
                     
-                if patience_counter >= patience:
-                    logger.info(f"Early stopping at epoch {epoch}")
-                    break
-                
-                # Update plotting
-                self._update_plotting(plot_data, loss.item(), epoch, None)
-                
-            except Exception as e:
-                warnings.warn(f"Error at epoch {epoch}: {e}")
-                break
-        
-        # 6. Finalize plotting
-        # self._finalize_plotting(plot_data, plot)
-        
-        # 6.5. Optional L-BFGS refinement stage
-        if self.use_lbfgs:
-            logger.info(f"Starting L-BFGS refinement for {self.lbfgs_epochs} steps...")
+                param_groups.append({
+                    'params': [param],
+                    'lr': self.lr * lr_scale,
+                    'name': param_name
+                })
             
-            # Create L-BFGS optimizer with reasonable parameters per step
-            lbfgs_opt = torch.optim.LBFGS(parameters, lr=self.lbfgs_lr,  # Default learning rate
-                                        max_iter=20,  # Iterations per step (default)
-                                        max_eval=25,  # Function evals per step (default is max_iter * 1.25)
-                                        tolerance_grad=1e-6, tolerance_change=1e-8,
-                                        history_size=100, line_search_fn='strong_wolfe')
+            opt = torch.optim.Adam(param_groups)
+            
+            # Create learning rate scheduler
+            scheduler = self._create_lr_scheduler(opt)
+            
+            # Store optimizer reference for logging
+            self._current_optimizer = opt
+            
+            best_loss = float('inf')
+            patience_counter = 0
+            patience = 100  # Early stopping
+            
+            # Track rotation progress to detect stalling
+            rotation_angles = []
+            rotation_stall_threshold = 5e-4  # radians per 100 epochs
+            rotation_boost_applied = False
+            
+            for epoch in range(self.epochs):
+                opt.zero_grad()
+                
+                # Store current parameters for loss computation
+                self._current_parameters = parameters
+                
+                try:
+                    # Compute SDF and loss
+                    d = self._compute_sdf(x, parameters)
+                    loss = self._compute_shape_loss(d, y, sdf_tensor, near_surface_points_tensor, margin, epoch)
+                    
+                    # Check for NaN/inf
+                    if not torch.isfinite(loss):
+                        warnings.warn(f"Non-finite loss at epoch {epoch}, stopping optimization")
+                        break
+                    
+                    loss.backward()
+                    
+                    # Track rotation progress
+                    if len(parameters) >= 4:
+                        axis_param = parameters[3]
+                        axis_normalized = axis_param.detach() / (torch.norm(axis_param.detach()) + 1e-8)
+                        angle_from_identity = torch.acos(torch.clamp((torch.dot(axis_normalized, torch.tensor([1.0, 0.0, 0.0], device=axis_param.device)) - 1) / 2, -1 + 1e-7, 1 - 1e-7))
+                        rotation_angles.append(angle_from_identity.item())
+                        
+                        # Check for rotation stalling every 100 epochs
+                        if epoch > 200 and epoch % 100 == 0 and not rotation_boost_applied:
+                            recent_angles = rotation_angles[-100:]
+                            angle_progress = max(recent_angles) - min(recent_angles)
+                            
+                            if angle_progress < rotation_stall_threshold:
+                                print(f"  ROTATION STALL DETECTED at epoch {epoch}!")
+                                print(f"  Angle progress in last 100 epochs: {angle_progress:.6f} rad ({angle_progress*180/3.14159:.3f} deg)")
+                                print(f"  Boosting rotation learning rate by 10x")
+                                
+                                # Boost rotation learning rate
+                                for param_group in opt.param_groups:
+                                    if param_group['name'] == 'axis_vector':
+                                        param_group['lr'] *= 10.0
+                                        rotation_boost_applied = True
+                                        break
+                    
+                    # Debug: Check gradients for all parameters  
+                    if epoch % 100 == 0 or epoch < 5:
+                        print(f"DEBUG GRAD Epoch {epoch}: Parameter gradients:")
+                        
+                        total_grad_norm = 0.0
+                        grad_info = []
+                        
+                        for i, param in enumerate(parameters):
+                            param_names = ['center', 'radius/size', 'height/axes', 'axis_vector']
+                            param_name = param_names[i] if i < len(param_names) else f'param_{i}'
+                            
+                            if param.grad is not None:
+                                grad_norm = param.grad.norm().item()
+                                grad_values = param.grad.detach().cpu().numpy()
+                                effective_lr = opt.param_groups[i]['lr']
+                                step_size = grad_norm * effective_lr
+                                
+                                print(f"  {param_name}: grad_norm={grad_norm:.8f}, effective_lr={effective_lr:.2e}, step_size={step_size:.8f}")
+                                if grad_values.size <= 4:  # Only print values for small arrays
+                                    print(f"    grad_values={grad_values}")
+                                
+                                total_grad_norm += grad_norm
+                                grad_info.append((param_name, grad_norm))
+                            else:
+                                print(f"  {param_name}: grad is None!")
+                                print(f"    requires_grad={param.requires_grad}")
+                        
+                        # Print relative gradient magnitudes
+                        if total_grad_norm > 0:
+                            print(f"  Relative gradient contributions:")
+                            for param_name, grad_norm in grad_info:
+                                fraction = grad_norm / total_grad_norm
+                                print(f"    {param_name}: {fraction:.1%}")
+                        
+                        # Additional diagnostics for axis vector parameter
+                        if len(parameters) >= 4:  # Make sure we have axis vector parameter
+                            axis_param = parameters[3]  # axis vector is 4th parameter
+                            if axis_param.grad is not None:
+                                # Check if axis vector has changed from initial
+                                if epoch > 0:
+                                    axis_normalized = axis_param.detach() / (torch.norm(axis_param.detach()) + 1e-8)
+                                    print(f"  axis vector (normalized): [{axis_normalized[0]:.6f}, {axis_normalized[1]:.6f}, {axis_normalized[2]:.6f}]")
+                                    print(f"  axis vector norm: {torch.norm(axis_param).item():.8f}")
+                                    
+                                    # Check if the loss actually depends on axis orientation
+                                    with torch.no_grad():
+                                        # Compute loss with current axis
+                                        d_current = self._compute_sdf(x, parameters)
+                                        loss_current = self._compute_shape_loss(d_current, y, sdf_tensor, near_surface_points_tensor, margin, epoch)
+                                        
+                                        # Test with a different axis orientation (small perturbation)
+                                        perturb = torch.randn_like(axis_param) * 0.1
+                                        test_axis = axis_param + perturb
+                                        temp_params = list(parameters)
+                                        temp_params[3] = test_axis
+                                        d_perturbed = self._compute_sdf(x, temp_params)
+                                        loss_perturbed = self._compute_shape_loss(d_perturbed, y, sdf_tensor, near_surface_points_tensor, margin, epoch)
+                                        
+                                        loss_diff = abs(loss_current.item() - loss_perturbed.item())
+                                        print(f"  loss sensitivity to axis orientation: {loss_diff:.8f}")
+                                        if loss_diff < 1e-6:
+                                            print(f"  WARNING - Loss is insensitive to axis orientation!")
+                        
+                        # Debug height parameter issue (for cylinders)
+                        if len(parameters) >= 3 and hasattr(self, '_compute_sdf'):
+                            height_param = parameters[2]  # height/axes is 3rd parameter
+                            if height_param.grad is not None and height_param.grad.norm().item() < 1e-10:
+                                print(f"  WARNING - Height gradient is essentially zero!")
+                                
+                                # Test if height affects SDF
+                                with torch.no_grad():
+                                    current_height = height_param.detach().clone()
+                                    
+                                    # Test with slightly larger height
+                                    temp_params = list(parameters)
+                                    temp_params[2] = current_height * 1.1  # 10% larger
+                                    d_larger = self._compute_sdf(x, temp_params)
+                                    loss_larger = self._compute_shape_loss(d_larger, y, sdf_tensor, near_surface_points_tensor, margin, epoch)
+                                    
+                                    # Test with slightly smaller height  
+                                    temp_params[2] = current_height * 0.9  # 10% smaller
+                                    d_smaller = self._compute_sdf(x, temp_params)
+                                    loss_smaller = self._compute_shape_loss(d_smaller, y, sdf_tensor, near_surface_points_tensor, margin, epoch)
+                                    
+                                    # Current loss
+                                    d_current = self._compute_sdf(x, parameters)
+                                    loss_current = self._compute_shape_loss(d_current, y, sdf_tensor, near_surface_points_tensor, margin, epoch)
+                                    
+                                    height_sensitivity = max(
+                                        abs(loss_larger.item() - loss_current.item()),
+                                        abs(loss_smaller.item() - loss_current.item())
+                                    )
+                                    print(f"  height sensitivity test: {height_sensitivity:.8f}")
+                                    
+                                    if height_sensitivity < 1e-8:
+                                        print(f"  WARNING - Loss is insensitive to height changes!")
+                                        print(f"  Current height value: {current_height.item():.8f}")
+                                        
+                                        # Check if points are within the cylinder height bounds
+                                        if hasattr(self, '__class__') and 'Cylinder' in self.__class__.__name__:
+                                            # For cylinder, check if points extend beyond current height
+                                            center = parameters[0] if self.center_transform == 'linear' else torch.exp(torch.clamp(parameters[0], max=10)) - self.center_offset
+                                            axis_vector = parameters[3]
+                                            R = construct_cylinder_basis(axis_vector)
+                                            local_points = (x - center) @ R
+                                            z_extent = local_points[:, 2].abs().max().item()
+                                            current_half_height = torch.exp(torch.clamp(current_height, max=10)).item()
+                                            print(f"  Point z-extent: {z_extent:.6f}, Current half-height: {current_half_height:.6f}")
+                                            
+                                            if z_extent < current_half_height * 0.5:
+                                                print(f"  ISSUE - Points don't reach cylinder caps! Height is too large.")
+                    
+                    # Gradient clipping for stability (especially for center gradients)
+                    torch.nn.utils.clip_grad_norm_(parameters, max_norm=10.0)
+                    
+                    opt.step()
+                    
+                    # Normalize quaternion parameters after optimizer step (constraint enforcement)
+                    # Do this outside autograd to avoid gradient contamination
+                    with torch.no_grad():
+                        for param in parameters:
+                            if param.shape == (4,):  # This is a quaternion parameter
+                                param.data = param.data / (param.data.norm(p=2) + 1e-8)
+                    
+                    # Update learning rate scheduler
+                    if scheduler is not None:
+                        if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                            scheduler.step(loss.item())  # Plateau scheduler needs the loss value
+                        else:
+                            scheduler.step()  # Other schedulers just need to be called
+                    
+                    # Early stopping
+                    if loss.item() < best_loss:
+                        best_loss = loss.item()
+                        patience_counter = 0
+                    else:
+                        patience_counter += 1
+                        
+                    if patience_counter >= patience:
+                        logger.info(f"Early stopping at epoch {epoch}")
+                        break
+                    
+                    # Update plotting
+                    self._update_plotting(plot_data, loss.item(), epoch, None)
+                    
+                except Exception as e:
+                    warnings.warn(f"Error at epoch {epoch}: {e}")
+                    break
+        
+        # 6. Optional L-BFGS refinement stage (or primary optimization if epochs=0)
+        if self.use_lbfgs and self.lbfgs_epochs > 0:
+            stage_name = "L-BFGS optimization" if skip_adam else "L-BFGS refinement"
+            logger.info(f"Starting {stage_name} for {self.lbfgs_epochs} steps...")
             
             # Store initial loss for comparison
             with torch.no_grad():
                 self._current_parameters = parameters
                 initial_d = self._compute_sdf(x, parameters)
-                initial_loss = self._compute_shape_loss(initial_d, y, sdf_tensor, near_surface_points_tensor, margin, self.epochs)
-                logger.info(f"L-BFGS starting loss: {initial_loss.item():.6f}")
+                final_epoch = 0 if skip_adam else self.epochs  # Use epoch 0 for margin calculation if we skipped Adam
+                initial_loss = self._compute_shape_loss(initial_d, y, sdf_tensor, near_surface_points_tensor, margin, final_epoch)
+                logger.info(f"{stage_name} starting loss: {initial_loss.item():.6f}")
             
-            # Define closure once outside the loop
-            def closure():
-                lbfgs_opt.zero_grad()
-                self._current_parameters = parameters
-                
-                try:
-                    d = self._compute_sdf(x, parameters)
-                    loss = self._compute_shape_loss(d, y, sdf_tensor, near_surface_points_tensor, margin, self.epochs)
-                    
-                    if torch.isfinite(loss):
-                        loss.backward()
-                        return loss
-                    else:
-                        return torch.tensor(float('inf'), device=self.device)
-                        
-                except Exception as e:
-                    logger.warning(f"L-BFGS closure error: {e}")
-                    return torch.tensor(float('inf'), device=self.device)
+            # Restart L-BFGS periodically to avoid getting stuck
+            restart_interval = max(10, self.lbfgs_epochs // 5)  # Restart every 10 steps or 1/5 of total steps
+            logger.info(f"L-BFGS will restart every {restart_interval} steps")
             
-            # Multiple L-BFGS steps with plotting between them
+            # Multiple L-BFGS steps with periodic restarts
             for lbfgs_step in range(self.lbfgs_epochs):
+                # Create/recreate L-BFGS optimizer at start and after each restart
+                if lbfgs_step % restart_interval == 0:
+                    logger.debug(f"(Re)starting L-BFGS optimizer at step {lbfgs_step}")
+                    lbfgs_opt = torch.optim.LBFGS(parameters, lr=self.lbfgs_lr,
+                                                max_iter=20, max_eval=25,
+                                                tolerance_grad=1e-9, tolerance_change=1e-12,  # Much looser tolerances
+                                                history_size=100, line_search_fn='strong_wolfe')
+                
+                # Define closure for current step
+                def closure():
+                    lbfgs_opt.zero_grad()
+                    self._current_parameters = parameters
+                    
+                    try:
+                        d = self._compute_sdf(x, parameters)
+                        final_epoch = 0 if skip_adam else self.epochs  # Use epoch 0 for margin calculation if we skipped Adam
+                        loss = self._compute_shape_loss(d, y, sdf_tensor, near_surface_points_tensor, margin, final_epoch)
+                        
+                        if torch.isfinite(loss):
+                            loss.backward()
+                            return loss
+                        else:
+                            return torch.tensor(float('inf'), device=self.device)
+                            
+                    except Exception as e:
+                        logger.warning(f"L-BFGS closure error: {e}")
+                        return torch.tensor(float('inf'), device=self.device)
+                
                 try:
                     # Perform one L-BFGS optimization step
                     loss = lbfgs_opt.step(closure)
                     current_loss = loss.item() if loss is not None else float('inf')
                     
                     # Plot after each L-BFGS step (these are actual optimization progress points)
-                    self._update_plotting(plot_data, current_loss, epoch + 1 + lbfgs_step, "L-BFGS")
+                    epoch_offset = 0 if skip_adam else self.epochs
+                    self._update_plotting(plot_data, current_loss, epoch_offset + 1 + lbfgs_step, "L-BFGS")
                     
                     if lbfgs_step % 10 == 0 or lbfgs_step < 5:
                         logger.debug(f"L-BFGS step {lbfgs_step+1}/{self.lbfgs_epochs}: loss={current_loss:.6f}")
@@ -579,22 +994,152 @@ class BaseShapeFitter(ABC):
             with torch.no_grad():
                 self._current_parameters = parameters
                 final_d = self._compute_sdf(x, parameters) 
-                final_loss = self._compute_shape_loss(final_d, y, sdf_tensor, near_surface_points_tensor, margin, self.epochs)
-                logger.info(f"L-BFGS final loss: {final_loss.item():.6f}")
+                final_epoch = 0 if skip_adam else self.epochs  # Use epoch 0 for margin calculation if we skipped Adam
+                final_loss = self._compute_shape_loss(final_d, y, sdf_tensor, near_surface_points_tensor, margin, final_epoch)
+                logger.info(f"{stage_name} final loss: {final_loss.item():.6f}")
                 improvement = ((initial_loss - final_loss) / initial_loss * 100).item()
-                logger.info(f"L-BFGS improvement: {improvement:.2f}%")
+                logger.info(f"{stage_name} improvement: {improvement:.2f}%")
             
-            logger.info("L-BFGS refinement completed successfully")
+            logger.info(f"{stage_name} completed successfully")
             
             # Re-finalize plotting after L-BFGS
             self._finalize_plotting(plot_data, plot)
         
         # 7. Extract and return results
-        return self._extract_results(parameters)
+        final_results = self._extract_results(parameters)
+        
+        # Debug: Print final rotation parameters
+        if len(parameters) >= 4:
+            axis_param = parameters[3].detach()
+            print(f"DEBUG: Final axis vector parameter: {axis_param.cpu().numpy()}")
+            print(f"DEBUG: Final rotation matrix:")
+            print(final_results[2].cpu().numpy())
+            print(f"DEBUG: Is rotation matrix identity? {torch.allclose(final_results[2], torch.eye(3), atol=1e-4)}")
+        
+        return final_results
+
+    def _test_quaternion_optimization(self, points, parameters, margin, epoch):
+        """Test if quaternion optimization is working properly by checking gradient magnitudes 
+        and loss sensitivity to rotational changes."""
+        
+        if len(parameters) < 4:
+            return
+            
+        log_center, log_r, log_h, quat = parameters
+        
+        # Test 1: Check if small perturbations to quaternion affect the loss
+        with torch.no_grad():
+            original_loss = self._compute_shape_loss(
+                self._compute_sdf(points, parameters), 
+                torch.ones(len(points), dtype=torch.bool, device=points.device),
+                None, None, margin, epoch
+            )
+            
+            # Test different rotation perturbations
+            perturbation_angles = [0.1, 0.05, 0.01]  # radians
+            max_sensitivity = 0.0
+            
+            for angle in perturbation_angles:
+                # Create small rotation around random axis
+                axis = torch.randn(3, device=quat.device)
+                axis = axis / axis.norm()
+                small_rot = RotationUtils.rot_from_axis_angle(axis * angle)
+                
+                # Apply to current rotation
+                current_rot = RotationUtils.rot_from_quat(quat)
+                perturbed_rot = torch.mm(small_rot, current_rot)
+                perturbed_quat = RotationUtils.quat_from_rot(perturbed_rot)
+                
+                # Test loss with perturbed rotation
+                temp_params = [log_center, log_r, log_h, perturbed_quat]
+                perturbed_loss = self._compute_shape_loss(
+                    self._compute_sdf(points, temp_params),
+                    torch.ones(len(points), dtype=torch.bool, device=points.device),
+                    None, None, margin, epoch
+                )
+                
+                sensitivity = abs(perturbed_loss.item() - original_loss.item())
+                max_sensitivity = max(max_sensitivity, sensitivity)
+                
+            print(f"DEBUG QUAT Epoch {epoch}: Max rotation sensitivity: {max_sensitivity:.8f}")
+            
+            # Test 2: Check gradient magnitude compared to other parameters
+            if quat.grad is not None:
+                quat_grad_norm = quat.grad.norm().item()
+                center_grad_norm = log_center.grad.norm().item() if log_center.grad is not None else 0
+                radius_grad_norm = log_r.grad.norm().item() if log_r.grad is not None else 0
+                
+                print(f"DEBUG QUAT Epoch {epoch}: Gradient norms - Center: {center_grad_norm:.8f}, Radius: {radius_grad_norm:.8f}, Quat: {quat_grad_norm:.8f}")
+                
+                # Relative gradient magnitudes
+                total_grad_norm = quat_grad_norm + center_grad_norm + radius_grad_norm
+                if total_grad_norm > 0:
+                    quat_grad_fraction = quat_grad_norm / total_grad_norm
+                    print(f"DEBUG QUAT Epoch {epoch}: Quaternion gradient fraction: {quat_grad_fraction:.4f}")
+                    
+                    if quat_grad_fraction < 0.01:
+                        print(f"DEBUG QUAT Epoch {epoch}: WARNING - Quaternion gradients very small relative to other parameters!")
 
 
 class CylinderFitter(BaseShapeFitter):
-    """Cylinder fitting using PCA initialization and PyTorch optimization."""
+    """Cylinder fitting using PCA initialization and PyTorch optimization with axis vector parameterization."""
+    
+    def __init__(self, *args, center_offset=0.3, center_transform='linear', fix_height=False, 
+                 random_axis_degrees=0.0, **kwargs):
+        """
+        Args:
+            center_offset: Offset added to center coordinates before log transformation
+                          to ensure positivity. Should be larger than expected coordinate range.
+                          For bone coordinates in meters (0.06-0.1), use ~0.3
+            center_transform: 'log_offset', 'scale', or 'linear'
+                            - 'log_offset': log(center + offset) 
+                            - 'scale': log(center * scale + 1) for small values
+                            - 'linear': no transformation (original behavior)
+            fix_height: Whether to correct cylinder height to match point extent.
+                       If False, allows oversized cylinders but may help alignment optimization.
+            random_axis_degrees: Optional random rotation to apply to initialized axis vector (in degrees).
+                               Useful for testing robustness or escaping local minima. Default: 0.0 (no perturbation)
+        """
+        super().__init__(*args, **kwargs)
+        self.center_offset = center_offset
+        self.center_transform = center_transform
+        self.center_scale = 100.0  # Scale small meter values (0.06-0.1) to reasonable range (6-10)
+        self.fix_height = fix_height
+        self.random_axis_degrees = random_axis_degrees
+    
+    def _apply_random_axis_rotation(self, axis_vector):
+        """Apply random rotation to axis vector if random_axis_degrees > 0.
+        
+        Args:
+            axis_vector: (3,) tensor representing the axis direction
+            
+        Returns:
+            torch.Tensor: (3,) rotated axis vector
+        """
+        if self.random_axis_degrees <= 0:
+            return axis_vector
+            
+        # Convert degrees to radians
+        max_angle_rad = np.deg2rad(self.random_axis_degrees)
+        
+        # Generate random rotation axis (uniformly distributed on unit sphere)
+        random_axis = torch.randn(3, device=self.device, dtype=axis_vector.dtype)
+        random_axis = random_axis / (torch.norm(random_axis) + 1e-8)
+        
+        # Generate random rotation angle (uniform between -max_angle and +max_angle)
+        random_angle = (torch.rand(1, device=self.device, dtype=axis_vector.dtype) * 2 - 1) * max_angle_rad
+        
+        # Create rotation matrix using Rodrigues' formula
+        rotation_matrix = RotationUtils.rot_from_axis_angle(random_axis * random_angle)
+        
+        # Apply rotation to axis vector
+        rotated_axis = rotation_matrix @ axis_vector
+        
+        logger.debug(f"Applied random rotation of {torch.rad2deg(random_angle).item():.2f}° around axis {random_axis.cpu().numpy()}")
+        logger.debug(f"Original axis: {axis_vector.cpu().numpy()}")
+        logger.debug(f"Rotated axis: {rotated_axis.cpu().numpy()}")
+        
+        return rotated_axis
     
     def _initialize_parameters_pca(self, points_inside):
         """Cylinder-specific PCA: align principal axis with +z, estimate params in local coords."""
@@ -612,37 +1157,23 @@ class CylinderFitter(BaseShapeFitter):
         try:
             _, _, V = torch.pca_lowrank(X, q=1)
             axis = V[:, 0]
-            axis = axis / (axis.norm() + 1e-8)  # Avoid division by zero
+            axis = axis / (axis.norm() + 1e-8)  # Normalize axis direction
         except Exception:
-            # Fallback to using largest variance direction
+            # Fallback to using Z-axis
             axis = torch.tensor([0, 0, 1.], device=self.device)
         
-        # Rotation that maps axis -> +z
-        z = torch.tensor([0, 0, 1.], device=self.device)
-        v = torch.cross(axis, z, dim=0)
-        s = v.norm()
-        c = torch.dot(axis, z)
+        # Apply random rotation to axis if requested
+        axis = self._apply_random_axis_rotation(axis)
         
-        if s < 1e-6:  # already aligned or anti-aligned
-            if c < 0:  # anti-aligned, need 180° rotation
-                R0 = torch.diag(torch.tensor([1, -1, -1], dtype=torch.float32, device=self.device))
-            else:
-                R0 = torch.eye(3, device=self.device)
-        else:
-            # Rodrigues' rotation formula
-            vx = torch.tensor([
-                [0, -v[2], v[1]],
-                [v[2], 0, -v[0]],
-                [-v[1], v[0], 0]
-            ], device=self.device)
-            R0 = torch.eye(3, device=self.device) + vx + vx @ vx * ((1 - c) / (s ** 2))
+        # Construct rotation matrix from axis for local coordinate calculations
+        R0 = construct_cylinder_basis(axis)
         
         # Local coords & extents
         u_local = X @ R0
         half_len0 = torch.clamp(u_local[:, 2].abs().max() * 1.05, min=1e-3)
         radius0 = torch.clamp(torch.sqrt(u_local[:, 0] ** 2 + u_local[:, 1] ** 2).mean(), min=1e-3)
         
-        return c0, radius0, half_len0, R0
+        return c0, radius0, half_len0, axis  # Return axis vector instead of rotation matrix
     
     def _initialize_parameters(self, points_inside, mesh=None, surface_name=None):
         """Route to appropriate initialization method based on self.initialization."""
@@ -682,12 +1213,42 @@ class CylinderFitter(BaseShapeFitter):
             half_length = cylinder_params['half_length'].to(self.device)
             rotation = cylinder_params['rotation'].to(self.device)
             
-            logger.debug(f"Geometric cylinder parameters for {surface_name}:")
-            logger.debug(f"  Center: [{center[0]:.4f}, {center[1]:.4f}, {center[2]:.4f}]")
-            logger.debug(f"  Radius: {radius:.4f}")
-            logger.debug(f"  Half-length: {half_length:.4f}")
+            # Extract axis vector from rotation matrix (3rd column = Z axis in local coords)
+            axis_vector = rotation[:, 2]  # Extract the Z-axis direction
             
-            return center, radius, half_length, rotation
+            # Apply random rotation to axis if requested
+            axis_vector = self._apply_random_axis_rotation(axis_vector)
+            
+            # CRITICAL FIX: Verify and correct half_length based on actual points
+            # Construct rotation matrix from axis for point projection
+            R = construct_cylinder_basis(axis_vector)
+            local_points = (points_tensor - center) @ R
+            actual_z_extent = local_points[:, 2].abs().max()
+            
+            if self.fix_height:
+                # Use a safety factor to ensure all points are within the cylinder
+                corrected_half_length = actual_z_extent * 1.2  # 20% margin
+                
+                logger.debug(f"Geometric cylinder parameters for {surface_name}:")
+                logger.debug(f"  Center: [{center[0]:.4f}, {center[1]:.4f}, {center[2]:.4f}]")
+                logger.debug(f"  Radius: {radius:.4f}")
+                logger.debug(f"  Axis: [{axis_vector[0]:.4f}, {axis_vector[1]:.4f}, {axis_vector[2]:.4f}]")
+                logger.debug(f"  Original half-length: {half_length:.4f}")
+                logger.debug(f"  Actual point z-extent: {actual_z_extent:.4f}")
+                logger.debug(f"  Corrected half-length: {corrected_half_length:.4f}")
+                
+                # Use corrected half-length
+                half_length = corrected_half_length
+            else:
+                logger.debug(f"Geometric cylinder parameters for {surface_name} (height NOT corrected):")
+                logger.debug(f"  Center: [{center[0]:.4f}, {center[1]:.4f}, {center[2]:.4f}]")
+                logger.debug(f"  Radius: {radius:.4f}")
+                logger.debug(f"  Axis: [{axis_vector[0]:.4f}, {axis_vector[1]:.4f}, {axis_vector[2]:.4f}]")
+                logger.debug(f"  Half-length: {half_length:.4f} (keeping original)")
+                logger.debug(f"  Actual point z-extent: {actual_z_extent:.4f}")
+                logger.debug(f"  Height ratio: {half_length/actual_z_extent:.2f}x larger than needed")
+            
+            return center, radius, half_length, axis_vector  # Return axis vector instead of rotation matrix
             
         except Exception as e:
             warnings.warn(f"Geometric initialization failed: {e}. Falling back to PCA.")
@@ -699,26 +1260,69 @@ class CylinderFitter(BaseShapeFitter):
             return self._initialize_parameters_pca(points_tensor[:len(points_tensor)//2])
     
     def _create_parameters(self, initial_params):
-        center0, radius0, half_len0, R0 = initial_params
-        center = torch.nn.Parameter(center0)
+        center0, radius0, half_len0, axis0 = initial_params  # axis0 is now a vector, not rotation matrix
+        
+        # Transform center based on chosen method
+        if self.center_transform == 'log_offset':
+            # Original approach: log(center + offset)
+            center_shifted = center0 + self.center_offset
+            log_center = torch.nn.Parameter(torch.clamp(center_shifted, min=1e-6).log())
+        elif self.center_transform == 'scale':
+            # Better for small values: log(center * scale + 1)
+            # This maps small values like 0.06-0.1 to log(6-10+1) = log(7-11) ≈ 1.9-2.4
+            center_scaled = center0 * self.center_scale + 1.0
+            log_center = torch.nn.Parameter(torch.clamp(center_scaled, min=1e-6).log())
+        elif self.center_transform == 'linear':
+            # No transformation - original behavior
+            log_center = torch.nn.Parameter(center0)
+        else:
+            raise ValueError(f"Unknown center_transform: {self.center_transform}")
+        
         log_r = torch.nn.Parameter(torch.clamp(radius0, min=1e-6).log())
         log_h = torch.nn.Parameter(torch.clamp(half_len0, min=1e-6).log())
-        quat = torch.nn.Parameter(RotationUtils.quat_from_rot(R0))
-        return [center, log_r, log_h, quat]
+        
+        # Axis vector parameterization (no constraints needed - normalization handled in forward pass)
+        axis_vector = torch.nn.Parameter(axis0)
+        
+        return [log_center, log_r, log_h, axis_vector]
     
     def _compute_sdf(self, points, parameters):
-        center, log_r, log_h, quat = parameters
-        R = RotationUtils.rot_from_quat(quat)
+        log_center, log_r, log_h, axis_vector = parameters
+        
+        # Transform back from log space based on chosen method
+        if self.center_transform == 'log_offset':
+            center = torch.exp(torch.clamp(log_center, max=10)) - self.center_offset
+        elif self.center_transform == 'scale':
+            center = (torch.exp(torch.clamp(log_center, max=10)) - 1.0) / self.center_scale
+        elif self.center_transform == 'linear':
+            center = log_center  # No transformation needed
+        else:
+            raise ValueError(f"Unknown center_transform: {self.center_transform}")
+            
         r = torch.exp(torch.clamp(log_r, max=10))  # Prevent overflow
         h = torch.exp(torch.clamp(log_h, max=10))
-        return sd_cylinder(points, center, r, h, R)
+        
+        # Use the new axis vector parameterization
+        return sd_cylinder_with_axis(points, center, r, h, axis_vector)
     
     def _compute_shape_loss(self, sdf, labels, sdf_ground_truth, near_surface_points_tensor, margin, epoch):
         # Apply margin decay for coarse-to-fine optimization
         margin_decayed = self._compute_margin_decay(margin, epoch)
         
-        center, log_r, log_h, quat = self._current_parameters
+        log_center, log_r, log_h, axis_vector = self._current_parameters
         r = torch.exp(torch.clamp(log_r, max=10))  # Prevent overflow
+        h = torch.exp(torch.clamp(log_h, max=10))
+        
+        # Transform back from log space based on chosen method
+        if self.center_transform == 'log_offset':
+            center = torch.exp(torch.clamp(log_center, max=10)) - self.center_offset
+        elif self.center_transform == 'scale':
+            center = (torch.exp(torch.clamp(log_center, max=10)) - 1.0) / self.center_scale
+        elif self.center_transform == 'linear':
+            center = log_center  # No transformation needed
+        else:
+            raise ValueError(f"Unknown center_transform: {self.center_transform}")
+        
         # d_norm_r is the sdf normalized by radius, useful for logging or relative analysis
         d_norm_r = sdf / (r + 1e-8) 
         # Squared-hinge margin loss now uses the world-unit sdf directly for an absolute margin
@@ -726,16 +1330,20 @@ class CylinderFitter(BaseShapeFitter):
         
         # Distance loss (only if ground truth provided)
         distance_loss = torch.tensor(0.0, device=self.device)
-        if sdf_ground_truth is not None:
+        if sdf_ground_truth is not None and self.beta > 0:
             distance_loss = self._compute_distance_loss(sdf, sdf_ground_truth, sigma=1.0)
+        else:
+            distance_loss = torch.tensor(0.0, device=self.device)
         
         # Surface points loss (only if near_surface_points_tensor provided)
         surface_points_loss = torch.tensor(0.0, device=self.device)
-        if near_surface_points_tensor is not None and len(near_surface_points_tensor) > 0:
+        if near_surface_points_tensor is not None and len(near_surface_points_tensor) > 0 and self.gamma > 0:
             # Compute SDF for near-surface points using current parameters
             sdf_surface = self._compute_sdf(near_surface_points_tensor, self._current_parameters)
             # We want these points to be on the surface, so their SDF should be close to 0
             surface_points_loss = (sdf_surface ** 2).mean()
+        else:
+            surface_points_loss = torch.tensor(0.0, device=self.device)
 
         logger.info(
             f"Epoch {epoch}: Margin={margin_decayed:.6f} (decay={margin_decayed/margin:.3f}), "
@@ -746,14 +1354,47 @@ class CylinderFitter(BaseShapeFitter):
         return self.alpha * margin_loss + self.beta * distance_loss + self.gamma * surface_points_loss
     
     def _extract_results(self, parameters):
-        center, log_r, log_h, quat = parameters
-        return (center.detach(),
+        log_center, log_r, log_h, axis_vector = parameters
+        
+        # Transform back from log space based on chosen method
+        if self.center_transform == 'log_offset':
+            center = torch.exp(log_center.detach()) - self.center_offset
+        elif self.center_transform == 'scale':
+            center = (torch.exp(log_center.detach()) - 1.0) / self.center_scale
+        elif self.center_transform == 'linear':
+            center = log_center.detach()  # No transformation needed
+        else:
+            raise ValueError(f"Unknown center_transform: {self.center_transform}")
+        
+        # Normalize the axis vector for the final result
+        axis_normalized = axis_vector.detach() / (torch.norm(axis_vector.detach()) + 1e-8)
+        
+        # Construct rotation matrix from normalized axis for compatibility with existing code
+        R = construct_cylinder_basis(axis_normalized)
+        
+        return (center,
                 torch.stack([torch.exp(log_r), torch.exp(log_h)]),
-                RotationUtils.rot_from_quat(quat.detach()))
+                R)
 
 
 class EllipsoidFitter(BaseShapeFitter):
     """Ellipsoid fitting using PCA initialization and PyTorch optimization."""
+    
+    def __init__(self, *args, center_offset=0.3, center_transform='linear', **kwargs):
+        """
+        Args:
+            center_offset: Offset added to center coordinates before log transformation
+                          to ensure positivity. Should be larger than expected coordinate range.
+                          For bone coordinates in meters (0.06-0.1), use ~0.3
+            center_transform: 'log_offset', 'scale', or 'linear'
+                            - 'log_offset': log(center + offset) 
+                            - 'scale': log(center * scale + 1) for small values
+                            - 'linear': no transformation (original behavior)
+        """
+        super().__init__(*args, **kwargs)
+        self.center_offset = center_offset
+        self.center_transform = center_transform
+        self.center_scale = 100.0  # Scale small meter values (0.06-0.1) to reasonable range (6-10)
     
     def _initialize_parameters_pca(self, points_inside):
         """Ellipsoid-specific PCA: all 3 components become ellipsoid semi-axes."""
@@ -839,9 +1480,11 @@ class EllipsoidFitter(BaseShapeFitter):
         center = torch.nn.Parameter(center0)
         log_axes = torch.nn.Parameter(torch.clamp(axes0, min=1e-6).log())
         
-        # Fix the quaternion normalization bug
-        quat_unnorm = RotationUtils.quat_from_rot(R0)
-        quat = torch.nn.Parameter(quat_unnorm)  # Already normalized in quat_from_rot
+        # 4. Rotation (quaternion parameterization)
+        initial_quat = RotationUtils.quat_from_rot(R0)
+        # Ensure initial quaternion is normalized
+        initial_quat = initial_quat / (torch.norm(initial_quat) + 1e-8)
+        quat = torch.nn.Parameter(initial_quat)
         
         return [center, log_axes, quat]
     
@@ -863,8 +1506,10 @@ class EllipsoidFitter(BaseShapeFitter):
         
         # Distance loss (only if ground truth provided)
         distance_loss = torch.tensor(0.0, device=self.device)
-        if sdf_ground_truth is not None:
+        if sdf_ground_truth is not None and self.beta > 0:
             distance_loss = self._compute_distance_loss(sdf, sdf_ground_truth, sigma=1.0)
+        else:
+            distance_loss = torch.tensor(0.0, device=self.device)
         
         # Surface points loss (only if near_surface_points_tensor provided)
         surface_points_loss = torch.tensor(0.0, device=self.device)
@@ -873,6 +1518,8 @@ class EllipsoidFitter(BaseShapeFitter):
             sdf_surface = self._compute_sdf(near_surface_points_tensor, self._current_parameters)
             # We want these points to be on the surface, so their SDF should be close to 0
             surface_points_loss = (sdf_surface ** 2).mean()
+        else:
+            surface_points_loss = torch.tensor(0.0, device=self.device)
 
         logger.info(
             f"Epoch {epoch}: Margin={margin_decayed:.6f} (decay={margin_decayed/margin:.3f}), "
@@ -928,3 +1575,67 @@ class EllipsoidFitter(BaseShapeFitter):
         R = RotationUtils.rot_from_quat(quat.detach())
         
         return center.detach(), torch.exp(log_axes).detach(), R
+
+# Add a new utility function to construct coordinate system from axis vector
+def construct_cylinder_basis(axis_vector):
+    """Construct orthonormal basis for cylinder with given axis direction.
+    
+    Args:
+        axis_vector: (3,) tensor representing cylinder axis direction (will be normalized)
+        
+    Returns:
+        torch.Tensor: (3, 3) rotation matrix where columns are [x_local, y_local, z_local]
+                     and z_local is aligned with the normalized axis_vector
+    """
+    # Normalize the axis vector
+    axis = axis_vector / (torch.norm(axis_vector) + 1e-8)
+    
+    # Choose an arbitrary vector not parallel to axis for cross product
+    # Use the coordinate axis that is least aligned with our axis
+    abs_axis = torch.abs(axis)
+    if abs_axis[0] < abs_axis[1] and abs_axis[0] < abs_axis[2]:
+        up = torch.tensor([1.0, 0.0, 0.0], device=axis.device, dtype=axis.dtype)
+    elif abs_axis[1] < abs_axis[2]:
+        up = torch.tensor([0.0, 1.0, 0.0], device=axis.device, dtype=axis.dtype)
+    else:
+        up = torch.tensor([0.0, 0.0, 1.0], device=axis.device, dtype=axis.dtype)
+    
+    # Construct orthonormal basis using Gram-Schmidt
+    z_local = axis  # Cylinder axis
+    x_local = up - torch.dot(up, z_local) * z_local
+    x_local = x_local / (torch.norm(x_local) + 1e-8)
+    y_local = torch.cross(z_local, x_local)
+    
+    # Return rotation matrix [x_local, y_local, z_local] as columns
+    return torch.stack([x_local, y_local, z_local], dim=1)
+
+
+def sd_cylinder_with_axis(points, center, radius, half_length, axis_vector):
+    """Signed distance function for finite cylinder using axis vector parameterization.
+    
+    Args:
+        points: (N, 3) tensor of points
+        center: (3,) tensor cylinder center
+        radius: scalar tensor cylinder radius  
+        half_length: scalar tensor cylinder half-length
+        axis_vector: (3,) tensor cylinder axis direction (will be normalized internally)
+        
+    Returns:
+        (N,) tensor of signed distances
+    """
+    # Construct rotation matrix from axis vector
+    rotation_matrix = construct_cylinder_basis(axis_vector)
+    
+    # Transform points to cylinder local coordinates
+    p = (points - center) @ rotation_matrix                     # world → local
+    
+    # Distance from axis and from caps
+    radial_dist = torch.linalg.norm(p[..., :2], dim=-1) - radius
+    axial_dist = torch.abs(p[..., 2]) - half_length
+    
+    q = torch.stack([radial_dist, axial_dist], dim=-1)         # (..., 2)
+
+    # Combine inside/outside distances
+    outside = torch.clamp(q, min=0).norm(dim=-1)
+    inside = torch.clamp(q.max(dim=-1).values, max=0)
+    return outside + inside
