@@ -145,34 +145,71 @@ def fit_cylinder_geometric(near_surface_points, num_slices=20):
         print(f"[DEBUG] Valid slices: {len(slice_centroids)}")
         print(f"[DEBUG] Slice centroid XY ranges: X[{slice_centroids[:, 0].min():.6f}, {slice_centroids[:, 0].max():.6f}], Y[{slice_centroids[:, 1].min():.6f}, {slice_centroids[:, 1].max():.6f}]")
         
-        # For z-aligned cylinder, use the average XY position of all slice centroids
-        # The axis should be purely [0, 0, 1] for true z-alignment
-        center_xy = slice_centroids.mean(0)
-        center_z = slice_z_coords.mean()
-        center_3d = torch.cat([center_xy, center_z.unsqueeze(0)])
+        # Fit a line through the slice centroids to determine the actual axis direction
+        # Stack the 3D centroids (xy_centroids + z_coords)
+        centroids_3d = torch.stack([
+            torch.cat([slice_centroids[i], slice_z_coords[i].unsqueeze(0)]) 
+            for i in range(len(slice_centroids))
+        ])
         
-        # Force z-aligned axis 
-        axis_3d = torch.tensor([0., 0., 1.], device=points.device, dtype=points.dtype)
+        # Compute the axis direction using PCA on the centroids
+        centroids_mean = centroids_3d.mean(0)
+        centered_centroids = centroids_3d - centroids_mean
         
-        print(f"[DEBUG] Forcing z-aligned axis: [{axis_3d[0]:.6f}, {axis_3d[1]:.6f}, {axis_3d[2]:.6f}]")
+        # Compute covariance matrix and get principal direction
+        cov_matrix = torch.mm(centered_centroids.T, centered_centroids) / (len(centroids_3d) - 1)
+        eigenvals, eigenvecs = torch.linalg.eigh(cov_matrix)
         
-        # Compute radius: average distance from z-axis (distance in XY plane from center_xy)
-        xy_center = center_3d[:2]
-        xy_distances = torch.norm(points[:, :2] - xy_center, dim=1)
-        radius = xy_distances.mean()
+        # The axis is the direction of maximum variance (largest eigenvalue)
+        axis_3d = eigenvecs[:, -1]  # Last column corresponds to largest eigenvalue
+        
+        # Ensure axis points in positive z direction (roughly)
+        if axis_3d[2] < 0:
+            axis_3d = -axis_3d
+            
+        print(f"[DEBUG] Estimated axis from centroids: [{axis_3d[0]:.6f}, {axis_3d[1]:.6f}, {axis_3d[2]:.6f}]")
+        
+        # The center is the centroid of all slice centroids
+        center_3d = centroids_mean
+        
+        # Compute radius: average distance from the fitted axis
+        # For each point, compute perpendicular distance to the axis line
+        point_to_center = points - center_3d
+        proj_on_axis = torch.sum(point_to_center * axis_3d, dim=1, keepdim=True)
+        perpendicular_dist = torch.norm(point_to_center - proj_on_axis * axis_3d, dim=1)
+        radius = perpendicular_dist.mean()
         
         print(f"[DEBUG] Radius computation:")
         print(f"  Center 3D: [{center_3d[0]:.6f}, {center_3d[1]:.6f}, {center_3d[2]:.6f}]")
         print(f"  Axis 3D: [{axis_3d[0]:.6f}, {axis_3d[1]:.6f}, {axis_3d[2]:.6f}]")
-        print(f"  XY distance stats: min={xy_distances.min():.6f}, max={xy_distances.max():.6f}, mean={radius:.6f}")
+        print(f"  Perpendicular distance stats: min={perpendicular_dist.min():.6f}, max={perpendicular_dist.max():.6f}, mean={radius:.6f}")
         
-        # Compute half-length: half of z-extent
-        half_length = (z_max - z_min) #/ 2.0
+        # Compute half-length: half of the extent along the axis direction
+        proj_lengths = torch.sum(point_to_center * axis_3d, dim=1)
+        half_length = (proj_lengths.max() - proj_lengths.min())
         
-        print(f"[DEBUG] Half-length: {half_length:.6f} (half of z-extent {z_max.item():.6f} - {z_min.item():.6f})")
+        print(f"[DEBUG] Half-length: {half_length:.6f} (half of axis extent)")
         
-        # For z-aligned cylinder, no rotation needed
-        rotation_matrix = torch.eye(3, device=points.device, dtype=points.dtype)
+        # Compute rotation matrix to align with axis
+        # We want to rotate the standard z-axis [0,0,1] to our axis direction
+        z_axis = torch.tensor([0., 0., 1.], device=points.device, dtype=points.dtype)
+        
+        # If axis is already aligned with z, no rotation needed
+        if torch.allclose(axis_3d, z_axis, atol=1e-6):
+            rotation_matrix = torch.eye(3, device=points.device, dtype=points.dtype)
+        else:
+            # Compute rotation matrix using Rodriguez formula
+            v = torch.cross(z_axis, axis_3d)
+            s = torch.norm(v)
+            c = torch.dot(z_axis, axis_3d)
+            
+            if s < 1e-6:  # Nearly parallel
+                rotation_matrix = torch.eye(3, device=points.device, dtype=points.dtype)
+            else:
+                vx = torch.tensor([[0, -v[2], v[1]], 
+                                   [v[2], 0, -v[0]], 
+                                   [-v[1], v[0], 0]], device=points.device, dtype=points.dtype)
+                rotation_matrix = torch.eye(3, device=points.device, dtype=points.dtype) + vx + torch.mm(vx, vx) * ((1 - c) / (s * s))
         
         return {
             'center': center_3d,
