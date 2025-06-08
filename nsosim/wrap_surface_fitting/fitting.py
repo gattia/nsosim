@@ -336,24 +336,24 @@ class BaseShapeFitter(ABC):
         For points labeled as "outside": penalize if d < margin (not sufficiently outside)
         This ensures all points contribute to the loss until they satisfy the margin constraint.
         """
-        # mask_in, mask_out = y, ~y
+        mask_in, mask_out = y, ~y
         
-        # # Handle empty masks gracefully
+        # Handle empty masks gracefully
         
-        # # d is signed distance. (-) is inside, (+) is outside. 
-        # # we compute losses separately for the inside and outside points.
-        # # for the inside points, they are negative. So, if the d (-) + the margin is > 0
-        # # then there should be a loss. Here, relu linearly increases. 
-        # loss_in = (F.relu(d + margin)[mask_in] ** 2).mean() if mask_in.any() else torch.tensor(0.0, device=self.device)
+        # d is signed distance. (-) is inside, (+) is outside. 
+        # we compute losses separately for the inside and outside points.
+        # for the inside points, they are negative. So, if the d (-) + the margin is > 0
+        # then there should be a loss. Here, relu linearly increases. 
+        loss_in = (F.relu(d + margin)[mask_in] ** 2).mean() if mask_in.any() else torch.tensor(0.0, device=self.device)
         
-        # # Outside points: penalize if they're not sufficiently outside (d < margin)  
-        # # for the outside points, they are positive. So, if the margin - d (+) is > 0
-        # # (i.e., d < margin), then there should be a loss.
-        # loss_out = (F.relu(margin - d)[mask_out]).mean() if mask_out.any() else torch.tensor(0.0, device=self.device)
+        # Outside points: penalize if they're not sufficiently outside (d < margin)  
+        # for the outside points, they are positive. So, if the margin - d (+) is > 0
+        # (i.e., d < margin), then there should be a loss.
+        loss_out = (F.relu(margin - d)[mask_out]).mean() if mask_out.any() else torch.tensor(0.0, device=self.device)
         
-        # return loss_in + loss_out
+        return loss_in + loss_out
         
-        return (d**2).mean()
+        # return (d**2).mean()
     
     def _compute_distance_loss(self, sdf_fitted, sdf_ground_truth, sigma=1.0, use_weighting=False):
         """Correlation-based distance loss with optional surface proximity weighting.
@@ -562,6 +562,17 @@ class BaseShapeFitter(ABC):
         
         return decayed_margin
     
+    def _get_lr_scales(self):
+        """Get learning rate scales for each parameter in the same order as _create_parameters().
+        
+        Subclasses should override this to provide parameter-specific learning rates.
+        
+        Returns:
+            list: Learning rate scale factors for each parameter
+        """
+        # Default: all parameters use the same learning rate
+        return [1.0] * 4  # Assume max 4 parameters by default
+    
     def _create_lr_scheduler(self, optimizer):
         """Create learning rate scheduler based on self.lr_schedule.
         
@@ -691,27 +702,15 @@ class BaseShapeFitter(ABC):
         if not skip_adam:
             # Use parameter-specific learning rates to handle gradient scale differences
             param_groups = []
-            param_names = ['center', 'radius/size', 'height/axes', 'axis_vector']
+            lr_scales = self._get_lr_scales()
             
             for i, param in enumerate(parameters):
-                param_name = param_names[i] if i < len(param_names) else f'param_{i}'
-                
-                # Adjust learning rates based on typical gradient magnitudes
-                if 'center' in param_name:
-                    lr_scale = 5e-7  # Even smaller LR for center due to massive gradients
-                elif 'axis_vector' in param_name:
-                    lr_scale = 5e-3  # Much larger LR for axis vector due to small gradients
-                elif 'height' in param_name or 'axes' in param_name:
-                    lr_scale = 1e-3  # Moderate LR for height/axes
-                elif 'radius' in param_name or 'size' in param_name:
-                    lr_scale = 1e-3  # Moderate LR for radius
-                else:
-                    lr_scale = 1.0
+                lr_scale = lr_scales[i] if i < len(lr_scales) else 1.0
                     
                 param_groups.append({
                     'params': [param],
                     'lr': self.lr * lr_scale,
-                    'name': param_name
+                    'name': f'param_{i}'
                 })
             
             opt = torch.optim.Adam(param_groups)
@@ -766,12 +765,16 @@ class BaseShapeFitter(ABC):
                                 print(f"  Angle progress in last 100 epochs: {angle_progress:.6f} rad ({angle_progress*180/3.14159:.3f} deg)")
                                 print(f"  Boosting rotation learning rate by 10x")
                                 
-                                # Boost rotation learning rate
-                                for param_group in opt.param_groups:
-                                    if param_group['name'] == 'axis_vector':
-                                        param_group['lr'] *= 10.0
-                                        rotation_boost_applied = True
-                                        break
+                                # # Boost rotation learning rate
+                                # for param_group in opt.param_groups:
+                                #     if param_group['name'] == 'axis_vector':
+                                #         param_group['lr'] *= 10.0
+                                #         rotation_boost_applied = True
+                                #         break
+                                # # Boost rotation learning rate (parameter 3 for cylinder axis_vector)
+                                # if len(opt.param_groups) > 3:
+                                #     opt.param_groups[3]['lr'] *= 10.0
+                                #     rotation_boost_applied = True
                     
                     # Debug: Check gradients for all parameters  
                     if epoch % 100 == 0 or epoch < 5:
@@ -781,8 +784,7 @@ class BaseShapeFitter(ABC):
                         grad_info = []
                         
                         for i, param in enumerate(parameters):
-                            param_names = ['center', 'radius/size', 'height/axes', 'axis_vector']
-                            param_name = param_names[i] if i < len(param_names) else f'param_{i}'
+                            param_name = f'param_{i}'
                             
                             if param.grad is not None:
                                 grad_norm = param.grad.norm().item()
@@ -800,7 +802,7 @@ class BaseShapeFitter(ABC):
                                 print(f"  {param_name}: grad is None!")
                                 print(f"    requires_grad={param.requires_grad}")
                         
-                        # Print relative gradient magnitudes
+                        # Print relative gradient contributions
                         if total_grad_norm > 0:
                             print(f"  Relative gradient contributions:")
                             for param_name, grad_norm in grad_info:
@@ -1017,69 +1019,6 @@ class BaseShapeFitter(ABC):
             print(f"DEBUG: Is rotation matrix identity? {torch.allclose(final_results[2], torch.eye(3), atol=1e-4)}")
         
         return final_results
-
-    def _test_quaternion_optimization(self, points, parameters, margin, epoch):
-        """Test if quaternion optimization is working properly by checking gradient magnitudes 
-        and loss sensitivity to rotational changes."""
-        
-        if len(parameters) < 4:
-            return
-            
-        log_center, log_r, log_h, quat = parameters
-        
-        # Test 1: Check if small perturbations to quaternion affect the loss
-        with torch.no_grad():
-            original_loss = self._compute_shape_loss(
-                self._compute_sdf(points, parameters), 
-                torch.ones(len(points), dtype=torch.bool, device=points.device),
-                None, None, margin, epoch
-            )
-            
-            # Test different rotation perturbations
-            perturbation_angles = [0.1, 0.05, 0.01]  # radians
-            max_sensitivity = 0.0
-            
-            for angle in perturbation_angles:
-                # Create small rotation around random axis
-                axis = torch.randn(3, device=quat.device)
-                axis = axis / axis.norm()
-                small_rot = RotationUtils.rot_from_axis_angle(axis * angle)
-                
-                # Apply to current rotation
-                current_rot = RotationUtils.rot_from_quat(quat)
-                perturbed_rot = torch.mm(small_rot, current_rot)
-                perturbed_quat = RotationUtils.quat_from_rot(perturbed_rot)
-                
-                # Test loss with perturbed rotation
-                temp_params = [log_center, log_r, log_h, perturbed_quat]
-                perturbed_loss = self._compute_shape_loss(
-                    self._compute_sdf(points, temp_params),
-                    torch.ones(len(points), dtype=torch.bool, device=points.device),
-                    None, None, margin, epoch
-                )
-                
-                sensitivity = abs(perturbed_loss.item() - original_loss.item())
-                max_sensitivity = max(max_sensitivity, sensitivity)
-                
-            print(f"DEBUG QUAT Epoch {epoch}: Max rotation sensitivity: {max_sensitivity:.8f}")
-            
-            # Test 2: Check gradient magnitude compared to other parameters
-            if quat.grad is not None:
-                quat_grad_norm = quat.grad.norm().item()
-                center_grad_norm = log_center.grad.norm().item() if log_center.grad is not None else 0
-                radius_grad_norm = log_r.grad.norm().item() if log_r.grad is not None else 0
-                
-                print(f"DEBUG QUAT Epoch {epoch}: Gradient norms - Center: {center_grad_norm:.8f}, Radius: {radius_grad_norm:.8f}, Quat: {quat_grad_norm:.8f}")
-                
-                # Relative gradient magnitudes
-                total_grad_norm = quat_grad_norm + center_grad_norm + radius_grad_norm
-                if total_grad_norm > 0:
-                    quat_grad_fraction = quat_grad_norm / total_grad_norm
-                    print(f"DEBUG QUAT Epoch {epoch}: Quaternion gradient fraction: {quat_grad_fraction:.4f}")
-                    
-                    if quat_grad_fraction < 0.01:
-                        print(f"DEBUG QUAT Epoch {epoch}: WARNING - Quaternion gradients very small relative to other parameters!")
-
 
 class CylinderFitter(BaseShapeFitter):
     """Cylinder fitting using PCA initialization and PyTorch optimization with axis vector parameterization."""
@@ -1375,6 +1314,21 @@ class CylinderFitter(BaseShapeFitter):
         return (center,
                 torch.stack([torch.exp(log_r), torch.exp(log_h)]),
                 R)
+    
+    def _get_lr_scales(self):
+        """Get learning rate scales for cylinder parameters.
+        
+        Parameters in order: [log_center, log_r, log_h, axis_vector]
+        
+        Returns:
+            list: Learning rate scale factors for each parameter
+        """
+        return [
+            0.1,    # log_center: increased for meaningful updates
+            0.1,    # log_r: increased for radius updates  
+            0.1,    # log_h: increased for height updates
+            5e-3    # axis_vector: larger LR due to small gradients
+        ]
 
 
 class EllipsoidFitter(BaseShapeFitter):
@@ -1483,7 +1437,7 @@ class EllipsoidFitter(BaseShapeFitter):
         # 4. Rotation (quaternion parameterization)
         initial_quat = RotationUtils.quat_from_rot(R0)
         # Ensure initial quaternion is normalized
-        initial_quat = initial_quat / (torch.norm(initial_quat) + 1e-8)
+        initial_quat /= (torch.norm(initial_quat) + 1e-8)
         quat = torch.nn.Parameter(initial_quat)
         
         return [center, log_axes, quat]
@@ -1575,6 +1529,47 @@ class EllipsoidFitter(BaseShapeFitter):
         R = RotationUtils.rot_from_quat(quat.detach())
         
         return center.detach(), torch.exp(log_axes).detach(), R
+    
+    def _get_lr_scales(self):
+        """Get learning rate scales for ellipsoid parameters.
+        
+        Parameters in order: [center, log_axes, quat]
+        
+        Returns:
+            list: Learning rate scale factors for each parameter
+        """
+        return [
+            5e-7,   # center: more conservative for ellipsoid center
+            1e-3,   # log_axes: conservative for axes scaling
+            1e-3    # quat: moderate for quaternion rotation
+        ]
+    
+    def _initialize_parameters_pca(self, points_inside):
+        """Ellipsoid-specific PCA: all 3 components become ellipsoid semi-axes."""
+        if len(points_inside) < 3:
+            raise ValueError("Need at least 3 points for PCA initialization")
+            
+        c0 = points_inside.mean(0)
+        X = points_inside - c0
+        
+        # Check for degenerate case
+        if X.var(dim=0).min() < 1e-10:
+            warnings.warn("Points appear to be colinear or coplanar")
+        
+        try:
+            # PCA to get the principal axes
+            _, _, Vt = torch.pca_lowrank(X, q=3)
+            R0 = Vt.t()  # columns = local axes
+            
+            # Compute extents along principal axes
+            u_local = X @ R0
+            a0 = torch.clamp(u_local.abs().max(0).values * 1.05, min=1e-3)
+        except Exception:
+            # Fallback to axis-aligned ellipsoid
+            R0 = torch.eye(3, device=self.device)
+            a0 = torch.clamp(X.abs().max(0).values * 1.05, min=1e-3)
+        
+        return c0, a0, R0
 
 # Add a new utility function to construct coordinate system from axis vector
 def construct_cylinder_basis(axis_vector):
