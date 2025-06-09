@@ -283,7 +283,7 @@ def sd_ellipsoid_exact(points, center, axes, rotation_matrix):
     
     # Ensure positive semi-axes
     axes_safe = torch.clamp(axes, min=1e-8)
-    a, b, c = axes_safe[0], axes_safe[1], axes_safe[2]
+    a, b, c = axes_safe, axes_safe, axes_safe
     
     # For each point, compute exact distance using iterative method
     distances = []
