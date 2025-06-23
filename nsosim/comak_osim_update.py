@@ -1,6 +1,7 @@
 import time 
 import numpy as np
 import xml.etree.ElementTree as ET
+import opensim as osim
 
 
 # helper to get fem/tib offsets
@@ -219,138 +220,9 @@ def update_patella_location(root, mean_patella):
     pf_r.findall("./coordinates/Coordinate[@name='pf_ty_r']/default_value")[0].text = str(mean_patella[1])
     pf_r.findall("./coordinates/Coordinate[@name='pf_tz_r']/default_value")[0].text = str(mean_patella[2])
 
-# Update muscle attachments. 
-def update_muscle_attachments(
-        root,
-        muscle_df,
-        fem_interpolated_pts_osim,
-        tib_interpolated_pts_osim,
-        pat_interpolated_pts_osim,
-):
-    """
-    Updates the locations of muscle attachment points in an OpenSim model.
 
-    Iterates through a DataFrame of muscle points and updates their `location`
-    in the OpenSim model XML. The new locations are taken from provided arrays
-    of interpolated points for the femur, tibia, and patella. Offsets for
-    femur and tibia attachments are adjusted based on their respective body offsets.
 
-    Note: Currently, this function might have specific logic for patella attachments.
 
-    Args:
-        root (xml.etree.ElementTree.Element): The root element of the <Model> tag
-            in the OpenSim XML file.
-        muscle_df (pandas.DataFrame): DataFrame containing muscle attachment
-            information, expected to have columns like `name`, `node`, `segment`.
-        fem_interpolated_pts_osim (numpy.ndarray): Array of interpolated points on
-            the femur in OSIM coordinates.
-        tib_interpolated_pts_osim (numpy.ndarray): Array of interpolated points on
-            the tibia in OSIM coordinates.
-        pat_interpolated_pts_osim (numpy.ndarray): Array of interpolated points on
-            the patella in OSIM coordinates.
-    """
-    tibia_r_offset = get_tibia_r_offset(root)
-    femur_r_offset = get_femur_r_offset(root)
-    
-    # update muscle attachments
-    # NOTE: only muscle attachments on patella are updated currently. 
-    ForceSet = root.find('ForceSet')[0]
-    for i in muscle_df.index:
-        for j in range(len(muscle_df.node[i])):
-            if muscle_df.node[i][j] is not None:
-                idx_orig = muscle_df.node[i][j]
-                if muscle_df.segment[i][j] == 'femur_r':
-                    # idx_subject = subject_idx_4_ref_pts_fem[]
-                    p = fem_interpolated_pts_osim[idx_orig,:]
-                    p = p + femur_r_offset
-                elif muscle_df.segment[i][j] == 'tibia_r':
-                    # idx_subject = subject_idx_4_ref_pts_tib[idx_orig]
-                    # p = subject_tib.point_coords[idx_subject,:]
-                    p = tib_interpolated_pts_osim[idx_orig,:]
-                    p = p + tibia_r_offset
-                elif muscle_df.segment[i][j] == 'patella_r':
-                    # idx_subject = subject_idx_4_ref_pts_pat[idx_orig]
-                    # p = subject_pat.point_coords[idx_subject,:]
-                    p = pat_interpolated_pts_osim[idx_orig,:]
-                    
-                ForceSet.findall("./Millard2012EquilibriumMuscle[@name='%s']/GeometryPath/" %  (muscle_df.name[i]) + \
-                                "PathPointSet/objects/PathPoint[@name='%s-P%d']/location" % \
-                                (muscle_df.name[i],j+1))[0].text = ' '.join(map(str,p))
-
-# update ligament attachments. 
-def update_ligament_attachments(
-    root,
-    ligament_df,
-    tib_mesh_osim,
-    fem_interpolated_pts_osim,
-    tib_interpolated_pts_osim,
-    pat_interpolated_pts_osim
-):
-    """
-    Updates the locations of ligament attachment points in an OpenSim model.
-
-    Iterates through a DataFrame of ligament points and updates their `location`
-    in the OpenSim model XML. The new locations are taken from provided arrays
-    of interpolated points for the femur, tibia, and patella. Offsets for
-    femur and tibia attachments are adjusted. Specific adjustments for points
-    originally on the fibula (shifting them based on tibia dimensions) are also handled.
-
-    Args:
-        root (xml.etree.ElementTree.Element): The root element of the <Model> tag
-            in the OpenSim XML file.
-        ligament_df (pandas.DataFrame): DataFrame containing ligament attachment
-            information, expected to have columns like `name`, `node`, `segment`, `shift`.
-        tib_mesh_osim (pymskt.mesh.Mesh or similar): The tibia mesh, used to calculate
-            ML (medial-lateral) and AP (anterior-posterior) dimensions for shifting fibular points.
-        fem_interpolated_pts_osim (numpy.ndarray): Array of interpolated points on
-            the femur in OSIM coordinates.
-        tib_interpolated_pts_osim (numpy.ndarray): Array of interpolated points on
-            the tibia in OSIM coordinates.
-        pat_interpolated_pts_osim (numpy.ndarray): Array of interpolated points on
-            the patella in OSIM coordinates.
-    """
-    tibia_r_offset = get_tibia_r_offset(root)
-    femur_r_offset = get_femur_r_offset(root)
-    
-    ForceSet = root.find('ForceSet')[0]
-
-    # Get ML and AP sizes/directions from subject bone
-    tibia_ml = tib_mesh_osim.point_coords[:,2].max() - tib_mesh_osim.point_coords[:,2].min()
-    tibia_ap = tib_mesh_osim.point_coords[:,0].max() - tib_mesh_osim.point_coords[:,0].min()
-
-    # update ligament attachments using 
-    for i in ligament_df.index:
-        for j in range(len(ligament_df.node[i])):
-            if ligament_df.node[i][j] is not None:
-                idx_orig = ligament_df.node[i][j]
-                if ligament_df.segment[i][j] == 'femur_r':
-                    # idx_subject = subject_idx_4_ref_pts_fem[]
-                    p = fem_interpolated_pts_osim[idx_orig,:]
-                    p = p + femur_r_offset
-                elif ligament_df.segment[i][j] == 'tibia_r':
-                    # idx_subject = subject_idx_4_ref_pts_tib[idx_orig]
-                    # p = subject_tib.point_coords[idx_subject,:]
-                    p = tib_interpolated_pts_osim[idx_orig,:]
-                    p = p + tibia_r_offset
-                elif ligament_df.segment[i][j] == 'patella_r':
-                    # idx_subject = subject_idx_4_ref_pts_pat[idx_orig]
-                    # p = subject_pat.point_coords[idx_subject,:]
-                    p = pat_interpolated_pts_osim[idx_orig,:]
-                elif ligament_df.segment[i][j] == 'femur_distal_r':
-                    # idx_subject = subject_idx_4_ref_pts_fem[idx_orig]
-                    # p = subject_fem.point_coords[idx_subject,:]
-                    p = fem_interpolated_pts_osim[idx_orig,:]
-                elif ligament_df.segment[i][j] == 'tibia_proximal_r':
-                    # idx_subject = subject_idx_4_ref_pts_tib[idx_orig]
-                    # p = subject_tib.point_coords[idx_subject,:]
-                    p = tib_interpolated_pts_osim[idx_orig,:]
-                    # points that are attached to fibula are shifted out, since SSM has no fibula
-                    if ligament_df['shift'][i]:
-                        p = p + np.multiply(ligament_df['shift'][i][j],np.array([tibia_ap,0,tibia_ml]))
-            
-                ForceSet.findall("./Blankevoort1991Ligament[@name='%s']/GeometryPath/" %  (ligament_df.name[i]) + \
-                                "PathPointSet/objects/PathPoint[@name='%s-P%d']/location" % \
-                                (ligament_df.name[i],j+1))[0].text = ' '.join(map(str,p))
 
 def update_osim_model(
     path_model,
@@ -420,23 +292,3 @@ def update_osim_model(
 
     return tree
 
-def update_ligament_stiffness(path_model, ligament, stiffness):
-    """
-    Updates the linear stiffness of a specific ligament in an OpenSim model file.
-
-    Parses the OpenSim model XML, finds the specified ligament by name, and updates
-    its <linear_stiffness> value. The changes are written back to the same file.
-
-    Args:
-        path_model (str): Path to the OpenSim model (.osim) file to be modified.
-        ligament (str): The name of the `Blankevoort1991Ligament` to update.
-        stiffness (float or int): The new linear stiffness value.
-    """
-    parser = ET.XMLParser(target=ET.TreeBuilder(insert_comments=True)) # keep comments
-    tree = ET.parse(path_model, parser)
-    root = tree.getroot()[0]
-    
-    ForceSet = root.find('ForceSet')[0]
-    ForceSet.findall(f"./Blankevoort1991Ligament[@name='{ligament}']/linear_stiffness")[0].text = str(int(stiffness))
-    
-    tree.write(path_model, encoding='utf8',method='xml')

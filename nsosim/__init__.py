@@ -3,6 +3,7 @@ from . import comak_osim_update
 from . import nsm_fitting
 from . import utils
 from . import wraps
+from . import osim_utils
 
 import logging
 
@@ -75,4 +76,4 @@ def configure_logging(level='INFO', format_string=None):
     # Prevent propagation to root logger to avoid duplicate messages
     logger.propagate = False
     
-    print(f"nsosim logging configured to level: {level.upper()}")
+    logger.info(f"nsosim logging configured to level: {level.upper()}")
