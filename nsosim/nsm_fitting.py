@@ -22,7 +22,6 @@ OSIM_TO_NSM_TRANSFORM = np.array([
 def align_bone_osim_fit_nsm(
     bone,
     dict_bone,
-    folder_bones,
     folder_save,
     rigid_reg_type='rigid', # 'similarity' or 'rigid'
     acs_align=False,
@@ -54,10 +53,8 @@ def align_bone_osim_fit_nsm(
 
     Args:
         bone (str): The name of the bone (e.g., 'femur', 'tibia', 'patella').
-        dict_bone (dict): A dictionary containing paths and parameters for the bone,
-            including subject and reference mesh filenames, and NSM model paths.
-            This dictionary is updated in place.
-        folder_bones (str): Path to the directory containing the subject's raw mesh files.
+        dict_bone (dict): A dictionary containing paths and parameters for the bone.
+            The dictionary is updated in place during the function execution.
         folder_save (str): Path to the directory where aligned and NSM-reconstructed
             meshes will be saved.
         rigid_reg_type (str, optional): Type of rigid registration ('rigid' or
@@ -94,7 +91,10 @@ def align_bone_osim_fit_nsm(
             if an intermediate cartilage file exists and `intermediate_cartilage_exists_ok`
             is False.
     """
-    subject_bone = Mesh(os.path.join(folder_bones, dict_bone['subject']['bone_filename']))
+    # Resolve the folder that stores the subject-specific meshes (added in refactor)
+    folder_subject = dict_bone['subject']['folder']
+
+    subject_bone = Mesh(os.path.join(folder_subject, dict_bone['subject']['bone_filename']))
     # mean_ = np.mean(subject_bone.point_coords, axis=0)
 
     # get size parameters for cropping the bone
@@ -133,7 +133,7 @@ def align_bone_osim_fit_nsm(
         # combine all mesh objects into one
         cart_mesh = pv.PolyData()
         for cart_path in dict_bone['subject']['cart_filename']:
-            cart_mesh += pv.PolyData(os.path.join(folder_bones, cart_path))
+            cart_mesh += pv.PolyData(os.path.join(folder_subject, cart_path))
         
         # turn into pymskt mesh
         cart_mesh = Mesh(cart_mesh)
@@ -142,15 +142,15 @@ def align_bone_osim_fit_nsm(
         cart_name = intermediate_cart_name.format(bone=bone) #f'{bone}_cart.vtk'
         if save_intermediate_cartilage:
             # handle if the mesh exists etc. 
-            path_save_intermediate_cartilage = os.path.join(folder_bones, cart_name)
+            path_save_intermediate_cartilage = os.path.join(folder_subject, cart_name)
             if (not os.path.exists(path_save_intermediate_cartilage)) or intermediate_cartilage_exists_ok:
                 cart_mesh.save_mesh(path_save_intermediate_cartilage)
             else:
                 raise ValueError('Cartilage mesh named used for saving intermediate version already exists')
-            cart_mesh.save_mesh(os.path.join(folder_bones, cart_name))
+            cart_mesh.save_mesh(os.path.join(folder_subject, cart_name))
         dict_bone['subject']['cart_filename'] = cart_name
     elif isinstance(dict_bone['subject']['cart_filename'], str):
-        cart_mesh = Mesh(os.path.join(folder_bones, dict_bone['subject']['cart_filename']))
+        cart_mesh = Mesh(os.path.join(folder_subject, dict_bone['subject']['cart_filename']))
     else:
         raise ValueError('Cartilage filename not a string or list')
 
@@ -215,7 +215,6 @@ def align_bone_osim_fit_nsm(
 
 def align_knee_osim_fit_nsm(
     dict_bones,
-    folder_subject_bones,
     folder_save_bones,
     n_samples_latent_recon=20_000,
     convergence_patience=10,
@@ -236,11 +235,10 @@ def align_knee_osim_fit_nsm(
     - The NSM-reconstructed bone and cartilage meshes in VTK format (in mm).
 
     Args:
-        dict_bones (dict): A dictionary where keys are bone names (e.g., 'femur')
-            and values are dictionaries compatible with `align_bone_osim_fit_nsm`'s
-            `dict_bone` argument.
-        folder_subject_bones (str): Path to the directory containing the subject's
-            raw mesh files.
+        dict_bones (dict): Dictionary mapping bone names (e.g., 'femur', 'tibia', 'patella') 
+            to their corresponding configuration dictionaries. Each bone's dictionary 
+            must contain a 'subject' key with a 'folder' field pointing to the directory 
+            containing that bone's mesh files.
         folder_save_bones (str): Path to the base directory where aligned and
             NSM-reconstructed meshes and related files will be saved (subdirectories
             will be created for each bone).
@@ -269,7 +267,6 @@ def align_knee_osim_fit_nsm(
         dict_bones[bone] =  align_bone_osim_fit_nsm(
             bone=bone,
             dict_bone=dict_,
-            folder_bones=folder_subject_bones,
             folder_save=folder_save_bones,
             rigid_reg_type=rigid_reg_type, # 'similarity' or 'rigid'
             acs_align=acs_align,
