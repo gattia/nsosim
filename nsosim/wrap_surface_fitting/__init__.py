@@ -1,7 +1,7 @@
-#from . import main
 from . import utils
 from . import fitting
 from . import surface_param_estimation
-#from . import visualizations
+from . import mesh_labeling
+from . import parameter_extraction
 
-__all__ = ["utils", "fitting", "surface_param_estimation"]
+__all__ = ["utils", "fitting", "surface_param_estimation", "mesh_labeling", "parameter_extraction"]

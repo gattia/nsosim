@@ -4,6 +4,10 @@ import pyvista as pv
 from pymskt.mesh import Mesh
 from typing import Tuple, Dict, Union
 
+import logging
+logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())
+
 # Constants
 ADDITIONAL_OFFSETS = {
     'femur_r': [-0.0055513564376633642, -0.37418143637169787, -0.0011706232813375212]
@@ -155,8 +159,12 @@ def compute_sdf_values(points: np.ndarray, wrap_surfaces: Dict) -> Dict[str, np.
     Returns:
         Dictionary mapping surface name to SDF values array
     """
+    logger.debug(f"[DEBUG] dtypes to compute SDF values:")
+    logger.debug(f"points: {points.dtype}")
     sdf_values = {}
     for surface_name, surface_obj in wrap_surfaces.items():
+        logger.debug(f"{surface_name}: {surface_obj.point_coords.dtype}")
+        surface_obj.point_coords = surface_obj.point_coords.astype(float)
         sdf_values[surface_name] = surface_obj.get_sdf_pts(points)
     return sdf_values
 
@@ -393,6 +401,7 @@ def prepare_fitting_data(bone_mesh_path: str, xml_path: str, bone_name: str, bon
     
     # Compute SDF values only for this bone's wrap surfaces
     points = np.asarray(mesh.point_coords.copy())
+    
     sdf_values = compute_sdf_values(points, wrap_surfaces)
     
     # Add both SDF values and binarized classifications as vertex data
@@ -429,8 +438,11 @@ def prepare_multi_bone_fitting_data(geometry_folder: str, xml_path: str, bone_di
     for bone_name, bone_data in bone_dict.items():
         if 'surface_filename' not in bone_data:
             continue
-            
-        bone_mesh_path = os.path.join(geometry_folder, bone_data['surface_filename'])
+        
+        if isinstance(geometry_folder, dict):
+            bone_mesh_path = os.path.join(geometry_folder[bone_name], bone_data['surface_filename'])
+        else:
+            bone_mesh_path = os.path.join(geometry_folder, bone_data['surface_filename'])
         
         # Get threshold for this specific bone
         if isinstance(near_surface_threshold, dict):
@@ -470,3 +482,34 @@ def create_cylinder_from_fitted_params(fitted_parameters) -> pv.PolyData:
     center, radius_length, rotation_matrix = fitted_parameters
     wrap_params = convert_fitted_cylinder_to_wrap_params(fitted_parameters)
     return create_cylinder_polydata(wrap_params)
+
+def euler_xyz_to_rotation_matrix(x_rot, y_rot, z_rot):
+    """
+    Convert XYZ Euler angles to rotation matrix using the same order as OpenSim/PyVista.
+    
+    Args:
+        x_rot, y_rot, z_rot: Rotation angles in radians
+        
+    Returns:
+        3x3 rotation matrix as numpy array
+    """
+    # Using the same order as create_cylinder_polydata: X, then Y, then Z
+    cx, sx = np.cos(x_rot), np.sin(x_rot)
+    cy, sy = np.cos(y_rot), np.sin(y_rot)
+    cz, sz = np.cos(z_rot), np.sin(z_rot)
+    
+    # Rotation matrices for each axis
+    Rx = np.array([[1, 0, 0],
+                   [0, cx, -sx],
+                   [0, sx, cx]])
+    
+    Ry = np.array([[cy, 0, sy],
+                   [0, 1, 0],
+                   [-sy, 0, cy]])
+    
+    Rz = np.array([[cz, -sz, 0],
+                   [sz, cz, 0],
+                   [0, 0, 1]])
+    
+    # Combined rotation: R = Rz @ Ry @ Rx (applied in order X, Y, Z)
+    return Rz @ Ry @ Rx
