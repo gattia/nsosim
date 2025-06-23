@@ -9,6 +9,7 @@ import torch
 import json
 import os
 
+
 def load_model(config, path_model_state, model_type='triplanar'):
     """
     Loads a pre-trained Neural Shape Model (NSM) from configuration and state files.
@@ -334,8 +335,8 @@ def load_preprocess_opensim_ref_mesh(path, z_rel_x, bone):
 
     The preprocessing steps include:
     1. Reading the file using Mesh().
-    2. For 'femur' or 'tibia', clipping the mesh using clip_bone_end function.
-    3. Flipping the Y and X coordinates (y = -y, x = -x).
+    2. Converting coordinate system from OSIM to NSM orientation.
+    3. For 'femur' or 'tibia', clipping the mesh using clip_bone_end function.
     4. Scaling the points by 1000 (e.g., meters to millimeters).
     5. Centering the mesh by subtracting the mean of its point coordinates.
     6. Casting point coordinates to `np.float64`.
@@ -351,31 +352,29 @@ def load_preprocess_opensim_ref_mesh(path, z_rel_x, bone):
         tuple: A tuple containing:
             - ref_ (pyvista.PolyData): The loaded and preprocessed reference mesh.
             - mean_ (numpy.ndarray): The mean vector that was subtracted to center
-              the mesh (after scaling to mm and flipping axes).
+              the mesh (after all transformations).
     """
+    # Import the transformation matrix
+    from .nsm_fitting import OSIM_TO_NSM_TRANSFORM
+    
     ref_ = Mesh(path)
     
-    # flip the coorindates to align as expected with MRI axes before clipping etc.
-    # +y -> +z
-    # +x -> -y
-    # +z -> -x
-    point_coords = ref_.point_coords.copy()
-    ref_.point_coords[:,2] = point_coords[:,1] * 1 
-    ref_.point_coords[:,1] = point_coords[:,0] * -1
-    ref_.point_coords[:,0] = point_coords[:,2] * -1
+    # Step 1: Convert coordinate system from OSIM to NSM orientation
+    ref_.point_coords = ref_.point_coords @ OSIM_TO_NSM_TRANSFORM
     
+    # Step 2: Clip bone if needed (done in NSM coordinate system)
     if bone in ['femur', 'tibia']:
         print(f'Clipping {bone} mesh')
         ref_ = clip_bone_end(ref_, bone_type=bone, max_z_rel_x=z_rel_x)
 
-    
-
+    # Step 3: Scale from meters to millimeters
     ref_.point_coords = ref_.point_coords * 1000
 
+    # Step 4: Calculate mean and center the mesh
     mean_ = np.mean(ref_.point_coords, axis=0)
-
     ref_.point_coords = ref_.point_coords - mean_
 
+    # Step 5: Ensure proper data type
     ref_.point_coords = ref_.point_coords.astype(np.float64)
     
     return ref_, mean_
@@ -386,12 +385,11 @@ def load_preprocess_opensim_ref_menisci(med_meniscus_path, lat_meniscus_path):
 
     The preprocessing steps include:
     1. Loading both medial and lateral meniscus meshes using Mesh().
-    2. Combining them temporarily to calculate the overall centroid.
-    3. Applying the same transformations to both individual meshes:
-       - Flipping the Y and X coordinates (y = -y, x = -x)
-       - Scaling the points by 1000 (e.g., meters to millimeters)
-       - Centering using the combined centroid
-    4. Casting point coordinates to `np.float64`.
+    2. Converting coordinate system from OSIM to NSM orientation.
+    3. Scaling the points by 1000 (e.g., meters to millimeters).
+    4. Combining them temporarily to calculate the overall centroid.
+    5. Centering both meshes using the combined centroid.
+    6. Casting point coordinates to `np.float64`.
 
     Args:
         med_meniscus_path (str): Path to the medial meniscus mesh file.
@@ -402,42 +400,34 @@ def load_preprocess_opensim_ref_menisci(med_meniscus_path, lat_meniscus_path):
             - med_meniscus_processed (pyvista.PolyData): The preprocessed medial meniscus mesh.
             - lat_meniscus_processed (pyvista.PolyData): The preprocessed lateral meniscus mesh.
             - mean_ (numpy.ndarray): The mean vector that was subtracted to center
-              both meshes (after scaling to mm and flipping axes).
+              both meshes (after all transformations).
     """
+     # Import the transformation matrix
+    from .nsm_fitting import OSIM_TO_NSM_TRANSFORM
+    
     # Load both meniscus meshes
     med_meniscus = Mesh(med_meniscus_path)
     lat_meniscus = Mesh(lat_meniscus_path)
     
-    # flip the coorindates to align as expected with MRI axes before clipping etc.
-    # +y -> +z
-    # +x -> -y
-    # +z -> -x
-    point_coords = med_meniscus.point_coords.copy()
-    med_meniscus.point_coords[:,2] = point_coords[:,1] * 1 
-    med_meniscus.point_coords[:,1] = point_coords[:,0] * -1
-    med_meniscus.point_coords[:,0] = point_coords[:,2] * -1
-    med_meniscus.point_coords = med_meniscus.point_coords * 1000
+    # Step 1: Convert coordinate system from OSIM to NSM orientation
+    med_meniscus.point_coords = med_meniscus.point_coords @ OSIM_TO_NSM_TRANSFORM
+    lat_meniscus.point_coords = lat_meniscus.point_coords @ OSIM_TO_NSM_TRANSFORM
     
-    point_coords = lat_meniscus.point_coords.copy()
-    lat_meniscus.point_coords[:,2] = point_coords[:,1] * 1 
-    lat_meniscus.point_coords[:,1] = point_coords[:,0] * -1
-    lat_meniscus.point_coords[:,0] = point_coords[:,2] * -1
+    # Step 2: Scale from meters to millimeters
+    med_meniscus.point_coords = med_meniscus.point_coords * 1000
     lat_meniscus.point_coords = lat_meniscus.point_coords * 1000
     
-    # Create a temporary combined mesh to calculate the overall centroid
-    # Extract PyVista PolyData objects and combine them properly
+    # Step 3: Create a temporary combined mesh to calculate the overall centroid
     combined_mesh_pv = med_meniscus.mesh + lat_meniscus.mesh
     combined_menisci = Mesh(combined_mesh_pv)
     
-    # Calculate the mean from the combined mesh
+    # Step 4: Calculate the mean from the combined mesh
     mean_ = np.mean(combined_menisci.point_coords, axis=0)
     
-    # Now apply the same transformations to each individual mesh
-    # Medial meniscus
+    # Step 5: Apply centering to both individual meshes
     med_meniscus.point_coords = med_meniscus.point_coords - mean_
     med_meniscus.point_coords = med_meniscus.point_coords.astype(np.float64)
     
-    # Lateral meniscus  
     lat_meniscus.point_coords = lat_meniscus.point_coords - mean_
     lat_meniscus.point_coords = lat_meniscus.point_coords.astype(np.float64)
     
