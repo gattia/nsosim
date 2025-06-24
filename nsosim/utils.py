@@ -244,6 +244,17 @@ def recon_mesh(
             - mesh_result (dict): A dictionary containing detailed results from the
               `reconstruct_mesh` call, including the latent vector, meshes, and
               registration parameters.
+
+    Notes:
+        Ordering assumptions in ``mesh_result['mesh']``:
+        * ``len == 3`` - the third mesh (index 2) is treated as a fibula (tibia case).
+        * ``len == 4`` - the third and fourth meshes (indices 2 and 3) are treated as the medial 
+        and lateral menisci respectively (femur case).
+
+        The current pipeline therefore relies on passing exactly one additional mesh for a tibia 
+        reconstruction and exactly two additional meshes for a femur reconstruction. Supplying a 
+        different number or ordering of meshes will break this heuristic. If you anticipate other 
+        combinations, consider adding an explicit flag or more robust logic.
     """
     
     if scale_jointly is not None:
@@ -305,27 +316,24 @@ def recon_mesh(
     if clip_bone and (model_config['bone'] in ['femur', 'tibia']) and (mesh_paths[0] is not None):
         # delete the temp clipped mesh
         os.remove(temp_bone_mesh_path)
-
-    # Save the meshes
-    bone_mesh = mesh_result['mesh'][0]
-    cart_mesh = mesh_result['mesh'][1]
-    if len(mesh_result['mesh']) == 4:
-        med_men_mesh = mesh_result['mesh'][2]
-        lat_men_mesh = mesh_result['mesh'][3]
-
+    
     # get latent
     latent = mesh_result['latent'].detach().cpu().numpy().tolist()
 
     output_dict = {
         'latent': latent,
-        'bone_mesh': bone_mesh,
-        'cart_mesh': cart_mesh,
+        'bone_mesh': mesh_result['mesh'][0],
+        'cart_mesh': mesh_result['mesh'][1],
         'mesh_result': mesh_result
     }
+    
+    if len(mesh_result['mesh']) == 3:
+        output_dict['fibula_mesh'] = mesh_result['mesh'][2]
+        
+    elif len(mesh_result['mesh']) == 4:
+        output_dict['med_men_mesh'] = mesh_result['mesh'][2]
+        output_dict['lat_men_mesh'] = mesh_result['mesh'][3]
 
-    if len(mesh_result['mesh']) == 4:
-        output_dict['med_men_mesh'] = med_men_mesh
-        output_dict['lat_men_mesh'] = lat_men_mesh
         
     return output_dict
 

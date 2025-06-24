@@ -2,7 +2,9 @@ import os
 import json
 import numpy as np
 import pyvista as pv
+from pymskt.mesh import Mesh
 import vtk
+import logging
 from .utils import acs_align_femur, fit_nsm, read_iv
 
 os.environ['LOC_SDF_CACHE'] = '' # SET DUMMY BECUASE LIBRARY CURRENTLY LOOKS FOR IT. 
@@ -11,7 +13,8 @@ from pymskt.mesh import Mesh
 from pymskt.mesh.meshTransform import get_linear_transform_matrix
 from NSM.mesh.interpolate import interpolate_points
 
-
+# Module-level logger. Configure with nsosim.configure_logging()
+logger = logging.getLogger(__name__)
 
 OSIM_TO_NSM_TRANSFORM = np.array([
     [0,  -1,  0],  # x -> -y
@@ -26,12 +29,17 @@ def align_bone_osim_fit_nsm(
     rigid_reg_type='rigid', # 'similarity' or 'rigid'
     acs_align=False,
     save_intermediate_cartilage=True,
+    save_intermediate_men=True,
+    save_intermediate_fibula=True,
     intermediate_cartilage_exists_ok=True,
+    intermediate_men_exists_ok=True,
+    intermediate_fibula_exists_ok=True,
     intermediate_cart_name='{bone}_cart.vtk',
+    intermediate_men_name='{bone}_{med_lat}_men.vtk',
+    intermediate_fibula_name='{bone}_fibula.vtk',
     n_samples_latent_recon=20_000,
     num_iter=None,
     convergence_patience=50,
-    scale_jointly=False,
     femur_transform=None,
     femur_acs_inverse=None
 ):
@@ -72,9 +80,6 @@ def align_bone_osim_fit_nsm(
         num_iter (int, optional): Number of iterations for NSM fitting. If None,
             uses model's default. Defaults to None.
         convergence_patience (int, optional): Patience for NSM fitting convergence.
-            Defaults to 50.
-        scale_jointly (bool, optional): Whether to scale bone and cartilage jointly
-            during NSM fitting. Defaults to False.
         femur_transform (numpy.ndarray, optional): 4x4 transformation matrix from
             femur registration, applied to non-femur bones. Required if `bone` is not 'femur'.
         femur_acs_inverse (numpy.ndarray, optional): 4x4 inverse ACS transformation
@@ -95,17 +100,13 @@ def align_bone_osim_fit_nsm(
     folder_subject = dict_bone['subject']['folder']
 
     subject_bone = Mesh(os.path.join(folder_subject, dict_bone['subject']['bone_filename']))
-    # mean_ = np.mean(subject_bone.point_coords, axis=0)
 
-    # get size parameters for cropping the bone
-    # subject_ptp = np.ptp(subject_bone.point_coords, axis=0)
-    # subject_z_rel_x = subject_ptp[2] / subject_ptp[0]
-
-    # load in the reference mesh & convert scale from m to mm
-    ref_ = pv.PolyData(dict_bone['ref']['bone_filepath'])
+    # load in the reference mesh
+    ref_ = Mesh(dict_bone['ref']['bone_filepath'])
 
     # align the subject's bone with the anatomical coordinate system of the femur
-    # then rigidly register to the femur bone of template TODO: get rid of this extra alignment transform later?
+    # then rigidly register to the femur bone of template 
+    # TODO: get rid of this extra alignment transform later?
     if bone == 'femur':
         if acs_align:
             femur_acs_inverse = acs_align_femur(subject_bone)
@@ -120,7 +121,7 @@ def align_bone_osim_fit_nsm(
             reg_mode=rigid_reg_type
         )
     else:
-        print('Applying transforms?')
+        logger.debug(f'Applying transforms to {bone}')
         if acs_align:
             assert femur_acs_inverse is not None, 'Femur acs inverse not provided'
             subject_bone.apply_transform_to_mesh(femur_acs_inverse)
@@ -130,7 +131,8 @@ def align_bone_osim_fit_nsm(
 
     # Cartilage processing 
     if isinstance(dict_bone['subject']['cart_filename'], list):
-        # combine all mesh objects into one
+        # combine all mesh objects into one - all of our current NSM models
+        # have a single cartilage mesh/surface per bone.
         cart_mesh = pv.PolyData()
         for cart_path in dict_bone['subject']['cart_filename']:
             cart_mesh += pv.PolyData(os.path.join(folder_subject, cart_path))
@@ -146,7 +148,7 @@ def align_bone_osim_fit_nsm(
             if (not os.path.exists(path_save_intermediate_cartilage)) or intermediate_cartilage_exists_ok:
                 cart_mesh.save_mesh(path_save_intermediate_cartilage)
             else:
-                raise ValueError('Cartilage mesh named used for saving intermediate version already exists')
+                raise ValueError('Cartilage mesh name used for saving intermediate version already exists')
             cart_mesh.save_mesh(os.path.join(folder_subject, cart_name))
         dict_bone['subject']['cart_filename'] = cart_name
     elif isinstance(dict_bone['subject']['cart_filename'], str):
@@ -154,11 +156,15 @@ def align_bone_osim_fit_nsm(
     else:
         raise ValueError('Cartilage filename not a string or list')
 
+
+    
+
     # Apply the femur transform to the cartilage mesh
     if acs_align:
         cart_mesh.apply_transform_to_mesh(femur_acs_inverse)
     cart_mesh.apply_transform_to_mesh(femur_transform)
 
+        
     # create filenames to save meshes - so they can be loaded into the nsm recon function. 
     # TODO: Update NSM recon function to 
     new_bone_filename = dict_bone['subject']['bone_filename'].replace('.vtk', '_aligned.vtk')
@@ -174,9 +180,59 @@ def align_bone_osim_fit_nsm(
         path_bone,
         path_cart,
     ]
+    
+    # check if there are menisci, if there are, then need to load them and apply the same
+    # transform. Menisci have their own surfaces (they are not combined like the cartilage)
+    # - load the meshes & save the intermediate (original alignment?)
+    # - apply the transform
+    # - save the transformed meshes
+    # - create the new filenames
+    # - add to the paths_meshes list
+    
+    for med_lat in ['med', 'lat']:
+        if f'{med_lat}_men_filename' in dict_bone['subject'].keys():
+            men_mesh = Mesh(os.path.join(folder_subject, dict_bone['subject'][f'{med_lat}_men_filename']))
+            if save_intermediate_men:
+                men_name = intermediate_men_name.format(bone=bone, med_lat=med_lat)
+                path_save_intermediate_men = os.path.join(folder_subject, men_name)
+                if (not os.path.exists(path_save_intermediate_men)) or intermediate_men_exists_ok:
+                    men_mesh.save_mesh(path_save_intermediate_men)
+                else:
+                    raise ValueError('Meniscus mesh name used for saving intermediate version already exists')
+            if acs_align:
+                men_mesh.apply_transform_to_mesh(femur_acs_inverse)
+            men_mesh.apply_transform_to_mesh(femur_transform)
+            new_men_filename = dict_bone['subject'][f'{med_lat}_men_filename'].replace('.vtk', '_aligned.vtk')
+            path_men = os.path.join(folder_save, new_men_filename)
+            men_mesh.save_mesh(path_men)
+            paths_meshes.append(path_men)
+    
+    # also check if fibula is present, if it is, then need to load it and apply the same
+    # transform. 
+    # - load the mesh & save the intermediate (original alignment?)
+    # - apply the transform
+    # - save the transformed mesh
+    # - create the new filename
+    # - add to the paths_meshes list
+    if 'fibula_filename' in dict_bone['subject'].keys():
+        fibula_mesh = Mesh(os.path.join(folder_subject, dict_bone['subject']['fibula_filename']))
+        if save_intermediate_fibula:
+            fibula_name = intermediate_fibula_name.format(bone=bone)
+            path_save_intermediate_fibula = os.path.join(folder_subject, fibula_name)
+            if (not os.path.exists(path_save_intermediate_fibula)) or intermediate_fibula_exists_ok:
+                fibula_mesh.save_mesh(path_save_intermediate_fibula)
+            else:
+                raise ValueError('Fibula mesh name used for saving intermediate version already exists')
+        if acs_align:
+            fibula_mesh.apply_transform_to_mesh(femur_acs_inverse)
+        fibula_mesh.apply_transform_to_mesh(femur_transform)
+        new_fibula_filename = dict_bone['subject']['fibula_filename'].replace('.vtk', '_aligned.vtk')
+        path_fibula = os.path.join(folder_save, new_fibula_filename)
+        fibula_mesh.save_mesh(path_fibula)
+        paths_meshes.append(path_fibula)
 
     # DO THE NSM FITTING
-    print('Fitting NSM')
+    logger.info(f'Fitting NSM for {bone}')
     recon_output = fit_nsm(
         path_model_state=dict_bone['model']['path_model_state'],
         path_model_config=dict_bone['model']['path_model_config'],
@@ -184,21 +240,14 @@ def align_bone_osim_fit_nsm(
         n_samples_latent_recon=n_samples_latent_recon,
         num_iter=num_iter,
         convergence_patience=convergence_patience,
-        scale_jointly=scale_jointly
     )
-
-    nsm_latent = recon_output['latent']
-    nsm_bone_mesh = recon_output['bone_mesh']
-    nsm_cart_mesh = recon_output.get('cart_mesh') # Use .get() in case cart_mesh is not always present
-    mesh_result = recon_output['mesh_result']
-
 
     # SAVE THE RECONSTRUCTED MESHES - IN THE DICT, AND BOTH IN mm AND m
     # store the results in the dictionary
-    dict_bone['subject']['bone_mesh_nsm'] = nsm_bone_mesh
-    dict_bone['subject']['cart_mesh_nsm'] = nsm_cart_mesh
-    dict_bone['subject']['recon_dict'] = mesh_result
-    dict_bone['subject']['recon_latent'] = nsm_latent
+    dict_bone['subject']['bone_mesh_nsm'] = recon_output['bone_mesh']
+    dict_bone['subject']['cart_mesh_nsm'] = recon_output.get('cart_mesh') # Use .get() in case cart_mesh is not always present
+    dict_bone['subject']['recon_dict'] = recon_output['mesh_result']
+    dict_bone['subject']['recon_latent'] = recon_output['latent']
 
     if bone == 'femur':
         dict_bone['subject']['transform'] = femur_transform
@@ -209,7 +258,12 @@ def align_bone_osim_fit_nsm(
         # if meniscus was fitted with the nsm model... then add it to the dict. 
         if 'med_men_mesh' in recon_output.keys():
             dict_bone['subject']['med_men_mesh_nsm'] = recon_output['med_men_mesh']
+        if 'lat_men_mesh' in recon_output.keys():
             dict_bone['subject']['lat_men_mesh_nsm'] = recon_output['lat_men_mesh']
+    
+    if bone == 'tibia':
+        if 'fibula_mesh' in recon_output.keys():
+            dict_bone['subject']['fibula_mesh_nsm'] = recon_output['fibula_mesh']
 
     return dict_bone
 
@@ -219,7 +273,7 @@ def align_knee_osim_fit_nsm(
     n_samples_latent_recon=20_000,
     convergence_patience=10,
     rigid_reg_type='rigid',
-    acs_align=False
+    acs_align=False,
 ):
     """
     Aligns all knee bones (femur, tibia, patella) and their cartilages, then fits NSMs.
@@ -254,8 +308,21 @@ def align_knee_osim_fit_nsm(
         dict: The updated `dict_bones` with results from NSM fitting for all bones.
     """
 
-    for bone, dict_ in dict_bones.items():
-        print('bone')
+    # Ensure the femur (which provides the reference transform) is always processed first.
+    # Python ≥3.7 preserves insertion order for normal dicts, but callers might build the
+    # dictionary with a comprehension or in another order.  We therefore build an explicit
+    # ordered list of bones so that downstream logic relying on femur transforms is safe.
+
+    ordered_bones = []
+    if 'femur' in dict_bones:
+        ordered_bones.append('femur')  # femur must be processed first
+
+    # Append all remaining bones in their original order (if any)
+    ordered_bones.extend([b for b in dict_bones.keys() if b != 'femur'])
+
+    for bone in ordered_bones:
+        dict_ = dict_bones[bone]
+        logger.info(f'Processing {bone}')
 
         if bone == 'femur':
             femur_transform = None
@@ -272,21 +339,21 @@ def align_knee_osim_fit_nsm(
             acs_align=acs_align,
             save_intermediate_cartilage=True,
             intermediate_cartilage_exists_ok=True,
-            intermediate_cart_name='{bone}_cart.vtk',
             n_samples_latent_recon=n_samples_latent_recon,
             num_iter=None,
             convergence_patience=convergence_patience,
-            scale_jointly=False,
             femur_transform=femur_transform,
             femur_acs_inverse=femur_acs_inverse
         )
 
         recon_dict = dict_bones[bone]['subject']['recon_dict']
         linear_transform = get_linear_transform_matrix(recon_dict['icp_transform'])
+        scale = recon_dict['scale']
+        center = recon_dict['center']
         dict_transform = {
             'linear_transform': linear_transform.tolist(),
-            'scale': recon_dict['scale'],
-            'center': recon_dict['center'].tolist()
+            'scale': scale,
+            'center': center.tolist()
         }
 
         folder_save_bones_ = os.path.join(folder_save_bones, bone)
@@ -297,10 +364,15 @@ def align_knee_osim_fit_nsm(
         
         # save the latent vector(s)
         np.save(os.path.join(folder_save_bones_, f'{bone}_latent.npy'), dict_bones[bone]['subject']['recon_latent'])
-        
 
         dict_bones[bone]['subject']['bone_mesh_nsm'].save_mesh(os.path.join(folder_save_bones_, dict_bones[bone]['subject']['bone_filename'].replace('.vtk', '_nsm_recon_mm.vtk')))
         dict_bones[bone]['subject']['cart_mesh_nsm'].save_mesh(os.path.join(folder_save_bones_, dict_bones[bone]['subject']['cart_filename'].replace('.vtk', '_nsm_recon_mm.vtk')))
+        if 'med_men_mesh_nsm' in dict_bones[bone]['subject'].keys():
+            dict_bones[bone]['subject']['med_men_mesh_nsm'].save_mesh(os.path.join(folder_save_bones_, dict_bones[bone]['subject']['med_men_filename'].replace('.vtk', '_nsm_recon_mm.vtk')))
+        if 'lat_men_mesh_nsm' in dict_bones[bone]['subject'].keys():
+            dict_bones[bone]['subject']['lat_men_mesh_nsm'].save_mesh(os.path.join(folder_save_bones_, dict_bones[bone]['subject']['lat_men_filename'].replace('.vtk', '_nsm_recon_mm.vtk')))
+        if 'fibula_mesh_nsm' in dict_bones[bone]['subject'].keys():
+            dict_bones[bone]['subject']['fibula_mesh_nsm'].save_mesh(os.path.join(folder_save_bones_, dict_bones[bone]['subject']['fibula_filename'].replace('.vtk', '_nsm_recon_mm.vtk')))
 
     return dict_bones
 
