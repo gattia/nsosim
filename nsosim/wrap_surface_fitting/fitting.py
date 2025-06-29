@@ -87,6 +87,8 @@ from abc import ABC, abstractmethod
 import warnings
 import logging
 from . import surface_param_estimation
+from .main import wrap_surface
+from typing import Union
 
 logger = logging.getLogger(__name__)  # This will be 'nsosim.wrap_surface_fitting.fitting'
 
@@ -233,6 +235,44 @@ class RotationUtils:
              (1 - cos_angle) * torch.mm(K, K))
         
         return R
+
+    @staticmethod
+    def rot_to_euler_xyz_body(R: Union[torch.Tensor, np.ndarray]) -> Union[torch.Tensor, np.ndarray]:
+        """Extract intrinsic XYZ (body) Euler angles from rotation matrix.
+        
+        Args:
+            R (torch.Tensor or np.ndarray): Rotation matrix of shape (3, 3)
+            
+        Returns:
+            torch.Tensor or np.ndarray: Euler angles [x, y, z] in radians, matching input type
+        """
+        input_type = 'torch' if isinstance(R, torch.Tensor) else 'numpy'
+        
+        if input_type == 'numpy':
+            R = torch.tensor(R, dtype=torch.float64)
+
+        assert R.shape == (3, 3), f"Expected shape (3, 3), got {R.shape}"
+
+        eps = 1e-6
+
+        if torch.abs(R[0, 2] - 1.0) < eps:
+            x = torch.tensor(0.0, dtype=R.dtype)
+            y = -torch.pi / 2
+            z = torch.atan2(-R[1, 0], -R[2, 0])
+        elif torch.abs(R[0, 2] + 1.0) < eps:
+            x = torch.tensor(0.0, dtype=R.dtype)
+            y = torch.pi / 2
+            z = torch.atan2(R[1, 0], R[2, 0])
+        else:
+            y = torch.asin(-R[0, 2])
+            x = torch.atan2(R[1, 2], R[2, 2])
+            z = torch.atan2(R[0, 1], R[0, 0])
+
+        euler = torch.stack([x, y, z])
+
+        if input_type == 'numpy':
+            return euler.numpy()
+        return euler
 
 
 def sd_cylinder(points, center, radius, half_length, rotation_matrix):
@@ -483,6 +523,8 @@ class BaseShapeFitter(ABC):
         # Learning rate scheduling
         self.lr_schedule = lr_schedule  # 'cosine', 'exponential', 'step', 'plateau', or None
         self.lr_schedule_params = lr_schedule_params or {}  # Parameters for the scheduler
+        
+        
         
     def _prepare_data(self, points, labels):
         """Convert to tensors and validate."""
@@ -1179,6 +1221,8 @@ class BaseShapeFitter(ABC):
         # 7. Extract and return results
         final_results = self._extract_results(parameters)
         
+        self._fitted_params = final_results
+        
         # Debug: Print final rotation parameters
         if len(parameters) >= 4:
             axis_param = parameters[3].detach()
@@ -1188,6 +1232,11 @@ class BaseShapeFitter(ABC):
             print(f"DEBUG: Is rotation matrix identity? {torch.allclose(final_results[2], torch.eye(3), atol=1e-4)}")
         
         return final_results
+    
+    @property
+    def wrap_params(self):
+        raise NotImplementedError("This method should be implemented by the subclass")
+        
 
 class CylinderFitter(BaseShapeFitter):
     """Cylinder fitting using PCA initialization and PyTorch optimization with axis vector parameterization."""
@@ -1508,6 +1557,30 @@ class CylinderFitter(BaseShapeFitter):
             0.1,    # log_h: increased for height updates
             5e-3    # axis_vector: larger LR due to small gradients
         ]
+    
+    @property
+    def wrap_params(self):
+        center, (radius, half_length), rot_matrix = self._fitted_params
+        
+        # detach all and convert to numpy
+        center = center.detach().cpu().numpy()
+        radius = radius.detach().cpu().numpy()
+        half_length = half_length.detach().cpu().numpy()
+        rot_matrix = rot_matrix.detach().cpu().numpy()
+        
+        # convert rot_matrix to xyz euler angles
+        xyz_body_rotation = RotationUtils.rot_to_euler_xyz_body(rot_matrix)
+        
+        return wrap_surface(
+            name=None,
+            body=None,
+            type_='WrapCylinder',
+            xyz_body_rotation=xyz_body_rotation,
+            translation=center,
+            radius=radius,
+            length=half_length*4,
+            dimensions=None
+        )
 
 
 class EllipsoidFitter(BaseShapeFitter):
@@ -1779,6 +1852,29 @@ class EllipsoidFitter(BaseShapeFitter):
             a0 = torch.clamp(X.abs().max(0).values * 1.05, min=1e-3)
         
         return c0, a0, R0
+    
+    @property
+    def wrap_params(self):
+        center, axes, rot_matrix = self._fitted_params
+        
+        # detach all and convert to numpy
+        center = center.detach().cpu().numpy()
+        axes = axes.detach().cpu().numpy()
+        rot_matrix = rot_matrix.detach().cpu().numpy()
+        
+        # convert rot_matrix to xyz euler angles
+        xyz_body_rotation = RotationUtils.rot_to_euler_xyz_body(rot_matrix)
+        
+        return wrap_surface(
+            name=None,
+            body=None,
+            type_='WrapEllipsoid',
+            xyz_body_rotation=xyz_body_rotation,
+            translation=center,
+            radius=None,
+            length=None,
+            dimensions=axes
+        )
 
 # Add a new utility function to construct coordinate system from axis vector
 def construct_cylinder_basis(axis_vector):
