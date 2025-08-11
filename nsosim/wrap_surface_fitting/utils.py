@@ -400,7 +400,7 @@ def prepare_fitting_data(bone_mesh_path: str, xml_path: str, bone_name: str, bon
                 wrap_surfaces[surface_name] = surface_mesh  # Use simplified name as key
     
     # Compute SDF values only for this bone's wrap surfaces
-    points = np.asarray(mesh.point_coords.copy())
+    points = np.asarray(mesh.point_coords.copy()).astype(float)
     
     sdf_values = compute_sdf_values(points, wrap_surfaces)
     
