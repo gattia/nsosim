@@ -5,34 +5,176 @@ from pymskt.mesh import Mesh
 import logging
 import json
 
+ROUND_DIGITS = 6
 
 # Module-level logger. Configure in nsosim.configure_logging()
 logger = logging.getLogger(__name__)
 
-def update_ligament_stiffness(model, ligament, stiffness):
+def update_ligament_stiffness(model, ligament, linear_stiffness):
     """
-    Updates the linear stiffness of a specific ligament in an OpenSim model file.
-
-    Parses the OpenSim model XML, finds the specified ligament by name, and updates
-    its <linear_stiffness> value. The changes are written back to the same file.
+    Updates the linear stiffness of a specific ligament in an OpenSim model.
 
     Args:
-        path_model (str): Path to the OpenSim model (.osim) file to be modified.
+        model: osim.Model
         ligament (str): The name of the `Blankevoort1991Ligament` to update.
-        stiffness (float or int): The new linear stiffness value.
+        linear_stiffness (float or int): The new linear stiffness value.
     """
-    parser = ET.XMLParser(target=ET.TreeBuilder(insert_comments=True)) # keep comments
-    tree = ET.parse(path_model, parser)
-    root = tree.getroot()[0]
-    
-    ForceSet = root.find('ForceSet')[0]
-    ForceSet.findall(f"./Blankevoort1991Ligament[@name='{ligament}']/linear_stiffness")[0].text = str(int(stiffness))
-    
-    tree.write(path_model, encoding='utf8',method='xml')
+    forceset = model.getForceSet()
+    force = osim.Blankevoort1991Ligament.safeDownCast(forceset.get(ligament))
+    force.set_linear_stiffness(round(linear_stiffness, ROUND_DIGITS))
 
+def update_body_geometry_meshfile(model, dict_body_geometries_update):
+    """
+    Updates the mesh file paths for body visualization geometry in an OpenSim model.
+    
+    Args:
+        model: osim.Model
+        dict_body_geometries_update: dict
+    
+    Notes:
+    dict_body_geometries_update format:
+    {
+        'body_name': {
+            'geometry_name': 'mesh_file_path'
+        }
+    }
+    """
+    for body_name, body_dict in dict_body_geometries_update.items():
+        body = osim.Body.safeDownCast(model.getBodySet().get(body_name))
+        n_geo_osim = body.getPropertyByName('attached_geometry').size()
+        for geo_osim_idx in range(n_geo_osim):
+            attached_geometry = body.get_attached_geometry(geo_osim_idx)
+            mesh = osim.Mesh.safeDownCast(attached_geometry)
+            name = mesh.getName()
+            if name in body_dict.keys():
+                mesh.set_mesh_file(body_dict[name])
+            else:
+                print(f'{name} not found in body_dict')
+
+def update_contact_mesh_files(model, dict_contact_mesh_files_update):
+    """
+    Updates the mesh file paths for contact geometry in an OpenSim model.
+    
+    Args:
+        model: osim.Model
+        dict_contact_mesh_files_update: dict
+    
+    Notes:
+    dict_contact_mesh_files_update format:
+    {
+        'contact_name': {
+            'mesh_file': 'mesh_file_path',
+            'mesh_back_file': 'mesh_back_file_path'
+        }
+    }
+    """
+    contact_geometries = model.getContactGeometrySet()
+    
+    for contact_name, contact_dict in dict_contact_mesh_files_update.items():
+        contact_geometry = osim.Smith2018ContactMesh.safeDownCast(contact_geometries.get(contact_name))
+        if 'mesh_file' in contact_dict.keys():
+            contact_geometry.set_mesh_file(contact_dict['mesh_file'])
+        if 'mesh_back_file' in contact_dict.keys():
+            contact_geometry.set_mesh_back_file(contact_dict['mesh_back_file'])
+
+def update_joint_default_values(model, dict_joint_default_values_update):
+    """
+    Updates the default values for joints in an OpenSim model.
+    
+    Args:
+        model: osim.Model
+        dict_joint_default_values_update: dict
+    
+    Notes:
+    dict_joint_default_values_update format:
+    {
+        'joint_name': {
+            'coordinate_idx': 'coordinate_value'
+        }
+    }
+    """
+    jointset = model.getJointSet()
+    for joint_name, joint_dict in dict_joint_default_values_update.items():
+        joint = jointset.get(joint_name)
+        for coordinate_idx, coordinate_value in joint_dict.items():
+            coordinate = joint.get_coordinates(int(coordinate_idx))
+            coordinate.set_default_value(round(coordinate_value, ROUND_DIGITS))
+
+def update_wrap_cylinder(
+    model, 
+    body_name, 
+    wrap_name, 
+    translation=None,
+    xyz_body_rotation=None,
+    radius=None,
+    length=None
+):
+    
+    # assert that translation, xyz_body_rotation, radius, and length are all float
+    if translation is not None:
+        assert isinstance(translation, (list, np.ndarray)), f'translation must be a list or numpy array, got {type(translation)}'
+        translation = np.asarray(translation, dtype=float).round(ROUND_DIGITS)
+    if xyz_body_rotation is not None:
+        assert isinstance(xyz_body_rotation, (list, np.ndarray)), f'xyz_body_rotation must be a list or numpy array, got {type(xyz_body_rotation)}'
+        xyz_body_rotation = np.asarray(xyz_body_rotation, dtype=float).round(ROUND_DIGITS)
+    if radius is not None:
+        radius = round(float(radius), ROUND_DIGITS)
+    if length is not None:
+        length = round(float(length), ROUND_DIGITS)
+    
+    body = model.getBodySet().get(body_name)
+    wrap_object = body.getWrapObject(wrap_name)
+    wrap_cylinder = osim.WrapCylinder.safeDownCast(wrap_object)
+    if translation is not None:
+        assert isinstance(translation, (list, np.ndarray)), f'translation must be a list or numpy array, got {type(translation)}'
+        wrap_cylinder.set_translation(osim.Vec3(translation))
+    if xyz_body_rotation is not None:
+        assert isinstance(xyz_body_rotation, (list, np.ndarray)), f'xyz_body_rotation must be a list or numpy array, got {type(xyz_body_rotation)}'
+        wrap_cylinder.set_xyz_body_rotation(osim.Vec3(xyz_body_rotation))
+    if radius is not None:
+        wrap_cylinder.set_radius(radius)
+    if length is not None:
+        wrap_cylinder.set_length(length)
+
+def update_wrap_ellipsoid(
+    model, 
+    body_name, 
+    wrap_name, 
+    translation=None,
+    xyz_body_rotation=None,
+    dimensions=None
+):
+    # assert that translation, xyz_body_rotation, and dimensions are all float
+    if translation is not None:
+        assert isinstance(translation, (list, np.ndarray)), f'translation must be a list or numpy array, got {type(translation)}'
+        translation = np.asarray(translation, dtype=float).round(ROUND_DIGITS)
+    if xyz_body_rotation is not None:
+        assert isinstance(xyz_body_rotation, (list, np.ndarray)), f'xyz_body_rotation must be a list or numpy array, got {type(xyz_body_rotation)}'
+        xyz_body_rotation = np.asarray(xyz_body_rotation, dtype=float).round(ROUND_DIGITS)
+    if dimensions is not None:
+        assert isinstance(dimensions, (list, np.ndarray)), f'dimensions must be a list or numpy array, got {type(dimensions)}'
+        dimensions = np.asarray(dimensions, dtype=float).round(ROUND_DIGITS)
+    
+    # if any value in dimensions is zero, then set it to 1e-7, and print a warning
+    if np.any(dimensions == 0):
+        logger.warning('One or more dimensions are zero, setting to 1e-7')
+        dimensions[dimensions == 0] = 1e-7
+    
+    body = model.getBodySet().get(body_name)
+    wrap_object = body.getWrapObject(wrap_name)
+    wrap_ellipsoid = osim.WrapEllipsoid.safeDownCast(wrap_object)
+    if translation is not None:
+        assert isinstance(translation, (list, np.ndarray)), f'translation must be a list or numpy array, got {type(translation)}'
+        wrap_ellipsoid.set_translation(osim.Vec3(translation))
+    if xyz_body_rotation is not None:
+        assert isinstance(xyz_body_rotation, (list, np.ndarray)), f'xyz_body_rotation must be a list or numpy array, got {type(xyz_body_rotation)}'
+        wrap_ellipsoid.set_xyz_body_rotation(osim.Vec3(xyz_body_rotation))
+    if dimensions is not None:
+        assert isinstance(dimensions, (list, np.ndarray)), f'dimensions must be a list or numpy array, got {type(dimensions)}'
+        wrap_ellipsoid.set_dimensions(osim.Vec3(dimensions))
 
 def express_point_in_frame(
-        xyz_in_source,        # (x, y, z) expressed in `source_frame`
+        xyz_in_source: Union[list[float], np.ndarray],        # (x, y, z) expressed in `source_frame`
         state: osim.State,
         source_frame_name: str,
         target_frame_name: str,
@@ -54,11 +196,19 @@ def express_point_in_frame(
     model               : osim.Model
         The OpenSim model holding both frames.
     """
+    # make sure xyz_in_source is a numpy array of type float
+    if isinstance(xyz_in_source, list):
+        xyz_in_source = np.asarray(xyz_in_source, dtype=float).round(ROUND_DIGITS)
+    elif isinstance(xyz_in_source, np.ndarray):
+        xyz_in_source = xyz_in_source.astype(float).round(ROUND_DIGITS)
+    else:
+        raise ValueError(f'xyz_in_source must be a list or numpy array, got {type(xyz_in_source)}')
+    
     # Resolve frames (bodyset/… is common, but you can use absolute paths too)
     source_frame = model.getComponent(f'/bodyset/{source_frame_name}').findBaseFrame()
     target_frame = model.getComponent(f'/bodyset/{target_frame_name}').findBaseFrame()
 
-    station_source = osim.Vec3(*xyz_in_source)
+    station_source = osim.Vec3(xyz_in_source)
 
     station_target = source_frame.findStationLocationInAnotherFrame(
         state,
@@ -133,9 +283,9 @@ def get_osim_muscle_ligament_reference_lengths(model, state=None):
                 # reference strain
                 reference_strain = (ligament_length - slack_length) / slack_length
                 
-                dict_force_lengths[force_name]['length'] = ligament_length
-                dict_force_lengths[force_name]['slack_length'] = slack_length
-                dict_force_lengths[force_name]['reference_strain'] = reference_strain
+                dict_force_lengths[force_name]['length'] = round(ligament_length, ROUND_DIGITS)
+                dict_force_lengths[force_name]['slack_length'] = round(slack_length, ROUND_DIGITS)
+                dict_force_lengths[force_name]['reference_strain'] = round(reference_strain, ROUND_DIGITS)
     
     return dict_force_lengths
 
@@ -160,6 +310,11 @@ def update_point_xyz(
             target_frame_name=parent_frame,
             model=model
         )
+    
+    if isinstance(new_xyz, (list, np.ndarray)):
+        new_xyz = np.asarray(new_xyz, dtype=float).round(ROUND_DIGITS)
+    else:
+        raise ValueError(f'new_xyz must be a list or numpy array, got {type(new_xyz)}')
         
     # update opensim path point position
     opensim_point = osim.PathPoint.safeDownCast(opensim_point)
@@ -246,7 +401,7 @@ def update_single_osim_ligament_muscle_attachment(
             shift_ratio = np.asarray(point[shift_key], dtype=float)
             if not np.allclose(shift_ratio, 0.0):
                 shift = shift_ratio * shift_size_vector
-            elif point['use_normal_shift'] == True:
+            elif point.get('use_normal_shift', False):
                 normal_vector = np.asarray(point['normal_vector'])
                 normal_vector /= np.linalg.norm(normal_vector)
                 shift = normal_vector_shift * normal_vector
@@ -392,12 +547,12 @@ def update_slack_lengths(model, force_length_dict: dict, state: osim.State=None)
             # update the optimal fiber length
             optimal_ = muscle.getOptimalFiberLength()
             optimal_ *= scale_factor
-            muscle.setOptimalFiberLength(optimal_)
+            muscle.setOptimalFiberLength(round(optimal_, ROUND_DIGITS))
             
             # update the tendon slack length
             slack_ = muscle.getTendonSlackLength()
             slack_ *= scale_factor
-            muscle.setTendonSlackLength(slack_)
+            muscle.setTendonSlackLength(round(slack_, ROUND_DIGITS))
             logger.debug(f'scale factor for {force_name}: {scale_factor}')
         elif force_.getConcreteClassName() == 'Blankevoort1991Ligament':
             ligament = osim.Blankevoort1991Ligament.safeDownCast(force_)
@@ -427,8 +582,6 @@ def update_model_attachments_slacks(
         xyz_key: str
         normal_vector_shift: float
     
-    Returns:
-        osim.Model
     
     Notes:
     
@@ -466,7 +619,7 @@ def update_model_attachments_slacks(
     update_osim_ligament_muscle_attachments(
         model=model,
         dict_ligament_muscle_attachments=dict_lig_mus_attach,
-        tibia_size_vector=tibia_size_vector,
+        tibia_size_vector=tibia_size_vector.round(ROUND_DIGITS),
         state=state,
         xyz_key=xyz_key,
         normal_vector_shift=normal_vector_shift
