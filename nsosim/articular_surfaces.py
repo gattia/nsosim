@@ -296,8 +296,8 @@ def extract_meniscus_articulating_surface(
     # to define the contact interface.
     # (Assuming remove_intersecting_vertices is available)
     surface = remove_intersecting_vertices(
-        source_mesh=meniscus_mesh,       # The mesh to be clipped/modified (meniscus)
-        target_mesh=articulating_bone_mesh, # The mesh used as the reference/clipper (femur/tibia)
+        mesh1=meniscus_mesh,       # The mesh to be clipped/modified (meniscus)
+        mesh2=articulating_bone_mesh, # The mesh used as the reference/clipper (femur/tibia)
         ray_length=-ray_length,
     )
     if not isinstance(surface, pv.PolyData):
@@ -330,10 +330,93 @@ def extract_meniscus_articulating_surface(
         n_iter=smooth_iter, 
         boundary_smoothing=boundary_smoothing
     )
+    
     if not isinstance(processed_surface, pv.PolyData):
         raise TypeError(f"Expected pv.PolyData after smooth, got {type(processed_surface)}")
+    
+    
+    
+    return Mesh(processed_surface)
+
+def create_meniscus_articulating_surface(
+    meniscus_mesh,
+    upper_articulating_bone_mesh,
+    lower_articulating_bone_mesh,
+    ray_length=10.0,
+    n_largest=1,
+    smooth_iter=50, 
+    boundary_smoothing=False,
+    triangle_density=4_000_000,  # 2.6 triangles/mm^2 
+    meniscus_clusters=None,
+    upper_articulating_bone_clusters=None,
+    lower_articulating_bone_clusters=None,
+):
+    """
+    Creates a meniscus articulating surface from a meniscus mesh and two articulating bone meshes.
+    """
+    
+    # compute density metrics for resampling while in meters space. 
+    if triangle_density is not None:
+        meniscus_mesh.compute_normals(point_normals=True, cell_normals=False, auto_orient_normals=True, inplace=True)
+        # compute the triangle density of the cart mesh now
+        current_density = meniscus_mesh.n_cells/meniscus_mesh.area
+        # downsample factor
+        downsample_factor = current_density/triangle_density
+        meniscus_clusters = int(meniscus_mesh.point_coords.shape[0]/downsample_factor)
         
-    return processed_surface
+        print(f'current density: {current_density/1_000_000} triangles/mm^2')
+        print(f'target density: {triangle_density/1_000_000} triangles/mm^2')
+        print(f'current number of points: {meniscus_mesh.point_coords.shape[0]}')
+        print(f'target number of points: {meniscus_clusters}')
+        
+    # convert meshes to mm (instead of meters)
+    meniscus_mesh_ = meniscus_mesh.copy()
+    meniscus_mesh_.point_coords = meniscus_mesh_.point_coords * 1000
+    upper_articulating_bone_mesh_ = upper_articulating_bone_mesh.copy()
+    upper_articulating_bone_mesh_.point_coords = upper_articulating_bone_mesh_.point_coords * 1000
+    lower_articulating_bone_mesh_ = lower_articulating_bone_mesh.copy()
+    lower_articulating_bone_mesh_.point_coords = lower_articulating_bone_mesh_.point_coords * 1000
+    
+    # resample while in mm space 
+    if meniscus_clusters is not None:
+        meniscus_mesh_.resample_surface(subdivisions=1, clusters=meniscus_clusters)
+        # density after resampling
+        updated_density = meniscus_mesh_.mesh.n_cells/meniscus_mesh_.mesh.area
+        print(f'achieved density: {updated_density/1_000_000} triangles/mm^2')
+    
+    # resample bones if specified
+    if upper_articulating_bone_clusters is not None:
+        upper_articulating_bone_mesh_.resample_surface(subdivisions=1, clusters=upper_articulating_bone_clusters)
+    if lower_articulating_bone_clusters is not None:
+        lower_articulating_bone_mesh_.resample_surface(subdivisions=1, clusters=lower_articulating_bone_clusters)
+        
+    # extract upper articulating surface of the meniscus
+    upper_meniscus_articulating_surface = extract_meniscus_articulating_surface(
+        meniscus_mesh_,
+        upper_articulating_bone_mesh_,
+        ray_length=ray_length,
+        n_largest=n_largest,
+        smooth_iter=smooth_iter,
+        boundary_smoothing=boundary_smoothing
+    )
+    
+    # extract lower articulating surface of the meniscus
+    lower_meniscus_articulating_surface = extract_meniscus_articulating_surface(
+        meniscus_mesh_,
+        lower_articulating_bone_mesh_,
+        ray_length=ray_length,
+        n_largest=n_largest,
+        smooth_iter=smooth_iter,
+        boundary_smoothing=boundary_smoothing
+    )
+    
+    # convert back to meters space
+    upper_meniscus_articulating_surface.point_coords = upper_meniscus_articulating_surface.point_coords / 1000
+    lower_meniscus_articulating_surface.point_coords = lower_meniscus_articulating_surface.point_coords / 1000
+    
+    return upper_meniscus_articulating_surface, lower_meniscus_articulating_surface
+    
+    
 
 def create_articular_surfaces(
     bone_mesh_osim,
