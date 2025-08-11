@@ -102,6 +102,71 @@ The typical workflow using the `nsosim` library involves the following conceptua
 
 *(Note: For detailed API usage and specific function calls, please refer to the docstrings within each Python module. The exact sequence and functions might vary based on the specific application, for example, cartilage thickness analysis as seen in `comak_3_cartilage_thickness_pipeline.py` might use `nsosim.utils.load_model` and `nsosim.nsm_fitting.convert_OSIM_to_nsm` for different transformation and analysis purposes outside of direct OpenSim model building.)*
 
+
+
+## Basic Knee Pipeline Overview
+Based on scripted used in Gatt AA. et al. for OARSI 2025: `comak_1_update_comak_knee_nsm_OAI_OARSI_Nov_13_2024.py`. The following outlines the current end-to-end workflow for generating a subject-specific OpenSim knee model using the `nsosim` library and its associated scripts. 
+
+
+---
+
+## Example: Full Subject-Specific Model Generation Pipeline
+
+
+### **Step-by-Step Pipeline**
+
+1. **Setup and Configuration**
+    - Parse subject ID, side, and timepoint from command line arguments.
+    - Set up all necessary folder paths for subject data, reference data, NSM models, and output directories.
+    - Define a `dict_bones` dictionary specifying reference and subject mesh files and NSM model paths for femur, tibia, and patella.
+
+2. **NSM Fitting**
+    - Use `align_knee_osim_fit_nsm` to fit NSM models to the subject’s femur, tibia, and patella (bone and cartilage).
+    - This step aligns the subject meshes to the reference, fits the NSM, and saves the resulting latent vectors and reconstructed meshes.
+
+3. **Load Reference Points and Attachments**
+    - Load JSON files containing definitions for ligament and muscle attachment points, as well as landmark points for wrap surfaces.
+    - Build a dictionary (`pts_dict`) mapping wrap surface names to their indices on the reference mesh.
+
+4. **Femur Processing**
+    - Convert the NSM-reconstructed femur and cartilage meshes to OpenSim coordinates using `nsm_recon_to_osim`.
+    - Extract the femoral articular surface using `create_articular_surfaces`.
+    - Interpolate reference wrap surface points to the subject femur using `interp_ref_to_subject_to_osim`.
+    - Use these points to define subject-specific femur wrap surfaces via functions like `knee_ext_r_wrap`, `gastroc_condyles_r_wrap`, etc.
+
+5. **Tibia Processing**
+    - Repeat the above steps for the tibia: NSM reconstruction, coordinate conversion, articular surface extraction, wrap point interpolation, and wrap surface definition.
+
+6. **Patella Processing**
+    - Repeat the above steps for the patella, including optional optimization of patella position for physiological contact with the femur.
+
+7. **Update OpenSim Model**
+    - Copy a base OpenSim model to a new subject-specific directory.
+    - Use `update_osim_model` to update the OpenSim XML with:
+        - Subject-specific mesh file references
+        - Updated muscle and ligament attachment points
+        - Subject-specific wrap surface definitions
+        - Patella position and other relevant parameters
+    - Optionally update ligament stiffness values.
+    - Copy all generated geometry files into the model’s `Geometry` folder.
+
+8. **Error Handling**
+    - If any error occurs during processing, log the error and continue.
+
+9. **Output**
+    - The final output is a subject-specific OpenSim (`.osim`) model, with all geometry and parameters updated to reflect the subject’s anatomy, ready for use in biomechanical simulation workflows.
+
+---
+
+**This workflow ensures that each subject’s OpenSim model is anatomically accurate, with all relevant surfaces, attachments, and parameters derived from their own imaging data and processed through the NSM and wrap surface fitting pipelines.**
+
+
+
+
+
+
+
+
 ## License
 
 This project is licensed under the MIT License. See the `LICENSE` file for details (if one exists, or state the terms directly).
