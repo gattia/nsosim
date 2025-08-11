@@ -102,7 +102,8 @@ def align_bone_osim_fit_nsm(
     subject_bone = Mesh(os.path.join(folder_subject, dict_bone['subject']['bone_filename']))
 
     # load in the reference mesh
-    ref_ = Mesh(dict_bone['ref']['bone_filepath'])
+    ref_bone_filepath = os.path.join(dict_bone['ref']['folder'], dict_bone['ref']['bone_filename'])
+    ref_ = Mesh(ref_bone_filepath)
 
     # align the subject's bone with the anatomical coordinate system of the femur
     # then rigidly register to the femur bone of template 
@@ -274,6 +275,7 @@ def align_knee_osim_fit_nsm(
     convergence_patience=10,
     rigid_reg_type='rigid',
     acs_align=False,
+    bones_to_ignore=['meniscus']
 ):
     """
     Aligns all knee bones (femur, tibia, patella) and their cartilages, then fits NSMs.
@@ -319,6 +321,9 @@ def align_knee_osim_fit_nsm(
 
     # Append all remaining bones in their original order (if any)
     ordered_bones.extend([b for b in dict_bones.keys() if b != 'femur'])
+    
+    # remove any bones that are in the bones_to_ignore list
+    ordered_bones = [b for b in ordered_bones if b not in bones_to_ignore]
 
     for bone in ordered_bones:
         dict_ = dict_bones[bone]
@@ -378,7 +383,7 @@ def align_knee_osim_fit_nsm(
 
 
 def interpolate_ref_points_nsm_space(
-    ref_mesh_path,
+    ref_mesh,
     path_ref_transform_file,
     path_ref_latent,
     model,
@@ -424,13 +429,12 @@ def interpolate_ref_points_nsm_space(
     Raises:
         ValueError: If `ref_mesh_path` has an unrecognized file extension.
     """
-    if ref_mesh_path.endswith('.iv'):
-        raise NotImplementedError('IV files deprecated')
-        ref_mesh = read_iv(ref_mesh_path)
-    elif ref_mesh_path.endswith('.vtk'):
-        ref_mesh = pv.PolyData(ref_mesh_path)
+    if isinstance(ref_mesh, str):
+        ref_mesh = pv.PolyData(ref_mesh)
+    elif isinstance(ref_mesh, (pv.PolyData, Mesh)):
+        pass
     else:
-        raise ValueError('Ref mesh path not recognized')
+        raise ValueError('Ref mesh not a valid type')
     
     # load in / get the registration parameters for converting
     # the reference femur mesh to the reference NSM space
@@ -484,7 +488,7 @@ def interpolate_ref_points_nsm_space(
     # return interpolated_points
 
 def interp_ref_to_subject_to_osim(
-    path_surface,
+    ref_mesh,
     surface_name,
     ref_center,
     dict_bones,
@@ -521,7 +525,7 @@ def interp_ref_to_subject_to_osim(
 
     # get interpolated ref femur points
     ref_results = interpolate_ref_points_nsm_space(
-        ref_mesh_path=path_surface,
+        ref_mesh=ref_mesh,
         path_ref_transform_file=path_transform_file,
         path_ref_latent=path_ref_latent,
         model=dict_bones[surface_name]['subject']['recon_dict']['model'],
@@ -683,6 +687,28 @@ def convert_OSIM_to_nsm_(
 
     return points_
 
+def check_icp_transform(icp_transform):
+    if isinstance(
+        icp_transform, 
+        (
+            vtk.vtkIterativeClosestPointTransform, 
+            vtk.vtkLandmarkTransform,
+            vtk.vtkTransform
+        )):
+        icp_transform = get_linear_transform_matrix(icp_transform)
+    elif isinstance(icp_transform, np.ndarray):
+        pass
+    elif isinstance(icp_transform, list):
+        icp_transform = np.array(icp_transform)
+        if icp_transform.shape != (4,4) and np.product(icp_transform.shape) == 16:
+            icp_transform = icp_transform.reshape(4,4)
+    else:
+        print(type(icp_transform))
+        print(icp_transform)
+        raise ValueError('icp_transform not a valid type')
+
+    return icp_transform
+
 def convert_nsm_recon_to_OSIM(
     points,
     icp_transform,
@@ -713,12 +739,7 @@ def convert_nsm_recon_to_OSIM(
     Raises:
         ValueError: If `icp_transform` is not a valid type.
     """
-    if isinstance(icp_transform, vtk.vtkIterativeClosestPointTransform):
-        icp_transform = get_linear_transform_matrix(icp_transform)
-    elif isinstance(icp_transform, np.ndarray):
-        pass
-    else:
-        raise ValueError('icp_transform not a valid type')
+    icp_transform = check_icp_transform(icp_transform)
 
     points_ = undo_transform(points, icp_transform, scale, center)
 
@@ -757,12 +778,7 @@ def convert_OSIM_to_nsm(
     Raises:
         ValueError: If `icp_transform` is not a valid type.
     """
-    if isinstance(icp_transform, vtk.vtkIterativeClosestPointTransform):
-        icp_transform = get_linear_transform_matrix(icp_transform)
-    elif isinstance(icp_transform, np.ndarray):
-        pass
-    else:
-        raise ValueError('icp_transform not a valid type')
+    icp_transform = check_icp_transform(icp_transform)
     
     points_ = convert_OSIM_to_nsm_(points, ref_mesh_orig_center)
     
@@ -770,12 +786,26 @@ def convert_OSIM_to_nsm(
     
     return points_nsm
 
+
+def _nsm_recon_to_osim_single_surface(
+    mesh,
+    fem_ref_center,
+    n_clusters,
+):
+    mesh_osim = mesh.copy()
+    mesh_osim.point_coords = convert_nsm_recon_to_OSIM_(mesh.point_coords, fem_ref_center)
+    if n_clusters is not None:
+        mesh_osim.resample_surface(subdivisions=1, clusters=n_clusters)
+    
+    return mesh_osim
+    
 def nsm_recon_to_osim(
     bone,
     dict_bones,
     fem_ref_center,
     bone_clusters=20_000,
     cart_clusters=None,
+    men_clusters=None,
 ):
     """
     Transforms NSM-reconstructed bone and cartilage meshes to OSIM coordinates.
@@ -806,27 +836,52 @@ def nsm_recon_to_osim(
             - cart_mesh_osim (pymskt.mesh.Mesh): The cartilage mesh with points in
               OSIM coordinates, optionally resampled.
     """
-    bone_mesh = dict_bones[bone]['subject']['bone_mesh_nsm'].copy()
-    cart_mesh = dict_bones[bone]['subject']['cart_mesh_nsm'].copy()
+    dict_osim_surfaces = {}
+    bone_mesh_nsm = dict_bones[bone]['subject']['bone_mesh_nsm'].copy()
+    bone_mesh_osim = _nsm_recon_to_osim_single_surface(
+        bone_mesh_nsm,
+        fem_ref_center,
+        bone_clusters,
+    )
+    dict_osim_surfaces['bone'] = bone_mesh_osim
     
-
-    bone_pts_osim = convert_nsm_recon_to_OSIM_(bone_mesh.point_coords, fem_ref_center)
-    cart_pts_osim = convert_nsm_recon_to_OSIM_(cart_mesh.point_coords, fem_ref_center)
-
-    # create copies of the meshes, update the points, and save them to disk
-    bone_mesh_osim = bone_mesh.copy()
-    bone_mesh_osim.point_coords = bone_pts_osim
-    if bone_clusters is not None:
-        bone_mesh_osim.resample_surface(subdivisions=1, clusters=bone_clusters)
-    # bone_mesh_osim.save_mesh(os.path.join(folder_save_bones, 'tibia', 'tibia_nsm_recon_osim.stl'))
-
-    cart_mesh_osim = cart_mesh.copy()
-    cart_mesh_osim.point_coords = cart_pts_osim
-    if cart_clusters is not None:
-        cart_mesh_osim.resample_surface(subdivisions=1, clusters=cart_clusters)
-    # cart_mesh_osim.save_mesh(os.path.join(folder_save_bones, 'tibia', 'tibia_cartilage_nsm_recon_osim.vtk'))
-
-    return bone_mesh_osim, cart_mesh_osim
+    cart_mesh_nsm = dict_bones[bone]['subject']['cart_mesh_nsm'].copy()
+    cart_mesh_osim = _nsm_recon_to_osim_single_surface(
+        cart_mesh_nsm,
+        fem_ref_center,
+        cart_clusters,
+    )
+    dict_osim_surfaces['cart'] = cart_mesh_osim
+    
+    
+    if 'med_men_mesh_nsm' in dict_bones[bone]['subject']:
+        med_men_mesh_nsm = dict_bones[bone]['subject']['med_men_mesh_nsm'].copy()
+        med_men_mesh_osim = _nsm_recon_to_osim_single_surface(
+            med_men_mesh_nsm,
+            fem_ref_center,
+            men_clusters,
+        )
+        dict_osim_surfaces['med_men'] = med_men_mesh_osim
+        
+    if 'lat_men_mesh_nsm' in dict_bones[bone]['subject']:
+        lat_men_mesh_nsm = dict_bones[bone]['subject']['lat_men_mesh_nsm'].copy()
+        lat_men_mesh_osim = _nsm_recon_to_osim_single_surface(
+            lat_men_mesh_nsm,
+            fem_ref_center,
+            men_clusters,
+        )
+        dict_osim_surfaces['lat_men'] = lat_men_mesh_osim
+    
+    if 'fibula_mesh_nsm' in dict_bones[bone]['subject']:
+        fibula_mesh_nsm = dict_bones[bone]['subject']['fibula_mesh_nsm'].copy()
+        fibula_mesh_osim = _nsm_recon_to_osim_single_surface(
+            fibula_mesh_nsm,
+            fem_ref_center,
+            bone_clusters,
+        )
+        dict_osim_surfaces['fibula'] = fibula_mesh_osim
+    
+    return dict_osim_surfaces
 
 
 
