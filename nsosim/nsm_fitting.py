@@ -653,6 +653,8 @@ def convert_nsm_recon_to_OSIM(
     """
     if isinstance(icp_transform, vtk.vtkIterativeClosestPointTransform):
         icp_transform = get_linear_transform_matrix(icp_transform)
+    elif isinstance(icp_transform, vtk.vtkTransform):
+        icp_transform = get_linear_transform_matrix(icp_transform)
     elif isinstance(icp_transform, np.ndarray):
         pass
     else:
@@ -696,6 +698,8 @@ def convert_OSIM_to_nsm(
         ValueError: If `icp_transform` is not a valid type.
     """
     if isinstance(icp_transform, vtk.vtkIterativeClosestPointTransform):
+        icp_transform = get_linear_transform_matrix(icp_transform)
+    elif isinstance(icp_transform, vtk.vtkTransform):
         icp_transform = get_linear_transform_matrix(icp_transform)
     elif isinstance(icp_transform, np.ndarray):
         pass
