@@ -225,14 +225,18 @@ def extract_articular_surface(bone_mesh, ray_length=10.0, smooth_iter=100, n_lar
             representing an extracted and processed articular surface.
     """
     list_articular_surfaces = []
+    
+    bone_mesh.compute_normals(point_normals=True, cell_normals=False, auto_orient_normals=True, inplace=True)
 
     for cart_mesh in bone_mesh.list_cartilage_meshes:
-
+        
+        cart_mesh.compute_normals(point_normals=True, cell_normals=False, auto_orient_normals=True, inplace=True)
+        
         print(cart_mesh.point_coords.shape)
         print(bone_mesh.point_coords.shape)
         articular_surface = remove_intersecting_vertices(
-            pv.PolyData(cart_mesh.mesh),
-            pv.PolyData(bone_mesh.mesh),
+            cart_mesh,
+            bone_mesh,
             ray_length=ray_length,
         )
         assert isinstance(articular_surface, pv.PolyData), f'articular_surface is not a PolyData object: {type(articular_surface)}'
@@ -499,6 +503,7 @@ def create_articular_surfaces(
         # density after resampling
         updated_density = cart_mesh_osim_.mesh.n_cells/cart_mesh_osim_.mesh.area
         print(f'achieved density: {updated_density/1_000_000} triangles/mm^2')
+    cart_mesh_osim_.compute_normals(point_normals=True, cell_normals=False, auto_orient_normals=True, inplace=True)
     bone_mesh_osim_.list_cartilage_meshes = [cart_mesh_osim_]
     
 

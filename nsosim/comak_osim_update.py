@@ -23,16 +23,16 @@ DICT_CONTACT_MESHFILES_UPDATE = {
         'mesh_file': 'patella_articular_surface_osim.stl',
         'mesh_back_file': 'patella_nsm_recon_osim.stl',
     },
-    'meniscus_med_sup': {
+    'meniscus_medial_superior': {
         'mesh_file': 'med_men_upper_art_surf_osim.stl',
     },
-    'meniscus_med_inf': {
+    'meniscus_medial_inferior': {
         'mesh_file': 'med_men_lower_art_surf_osim.stl',
     },
-    'meniscus_lat_sup': {
+    'meniscus_lateral_superior': {
         'mesh_file': 'lat_men_upper_art_surf_osim.stl',
     },
-    'meniscus_lat_inf': {
+    'meniscus_lateral_inferior': {
         'mesh_file': 'lat_men_lower_art_surf_osim.stl',
     }
 }

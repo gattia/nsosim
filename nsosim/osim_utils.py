@@ -49,7 +49,7 @@ def update_body_geometry_meshfile(model, dict_body_geometries_update):
             if name in body_dict.keys():
                 mesh.set_mesh_file(body_dict[name])
             else:
-                print(f'{name} not found in body_dict')
+                logger.warning(f'Geometry "{name}" not found in body_dict for body "{body_name}" - skipping')
 
 def update_contact_mesh_files(model, dict_contact_mesh_files_update):
     """
@@ -70,20 +70,81 @@ def update_contact_mesh_files(model, dict_contact_mesh_files_update):
     """
     contact_geometries = model.getContactGeometrySet()
     
+    # Define fallback naming patterns for common mismatches
+    FALLBACK_NAMES = {
+        'meniscus_medial_superior': ['meniscus_med_sup'],
+        'meniscus_medial_inferior': ['meniscus_med_inf'],
+        'meniscus_lateral_superior': ['meniscus_lat_sup'],
+        'meniscus_lateral_inferior': ['meniscus_lat_inf'],
+        # Add reverse mappings in case the dictionary uses old names
+        'meniscus_med_sup': ['meniscus_medial_superior'],
+        'meniscus_med_inf': ['meniscus_medial_inferior'],
+        'meniscus_lat_sup': ['meniscus_lateral_superior'],
+        'meniscus_lat_inf': ['meniscus_lateral_inferior'],
+    }
+    
+    updated_count = 0
+    failed_updates = []
+    
     for contact_name, contact_dict in dict_contact_mesh_files_update.items():
-        contact_geometry = osim.Smith2018ContactMesh.safeDownCast(contact_geometries.get(contact_name))
-        if 'mesh_file' in contact_dict.keys():
-            contact_geometry.set_mesh_file(contact_dict['mesh_file'])
-        if 'mesh_back_file' in contact_dict.keys():
-            contact_geometry.set_mesh_back_file(contact_dict['mesh_back_file'])
+        contact_geometry = None
+        actual_name_used = None
+        
+        # Try the original name first
+        try:
+            contact_geometry = osim.Smith2018ContactMesh.safeDownCast(contact_geometries.get(contact_name))
+            if contact_geometry is not None:
+                actual_name_used = contact_name
+        except RuntimeError:
+            pass
+        
+        # If original name failed, try fallback names
+        if contact_geometry is None and contact_name in FALLBACK_NAMES:
+            for fallback_name in FALLBACK_NAMES[contact_name]:
+                try:
+                    contact_geometry = osim.Smith2018ContactMesh.safeDownCast(contact_geometries.get(fallback_name))
+                    if contact_geometry is not None:
+                        actual_name_used = fallback_name
+                        logger.info(f'Contact geometry "{contact_name}" not found, using fallback name "{fallback_name}"')
+                        break
+                except RuntimeError:
+                    continue
+        
+        # Update the contact geometry if found
+        if contact_geometry is not None:
+            try:
+                if 'mesh_file' in contact_dict.keys():
+                    contact_geometry.set_mesh_file(contact_dict['mesh_file'])
+                if 'mesh_back_file' in contact_dict.keys():
+                    contact_geometry.set_mesh_back_file(contact_dict['mesh_back_file'])
+                updated_count += 1
+                logger.debug(f'Successfully updated contact geometry "{actual_name_used}"')
+            except Exception as e:
+                failed_updates.append(f'{contact_name}: {str(e)}')
+                logger.error(f'Failed to update contact geometry "{actual_name_used}": {e}')
+        else:
+            failed_updates.append(f'{contact_name}: not found in model')
+            logger.error(f'Contact geometry "{contact_name}" not found in model (tried fallbacks: {FALLBACK_NAMES.get(contact_name, [])})')
+    
+    # Log summary and raise error if ANY updates failed
+    logger.info(f'Contact geometry update summary: {updated_count}/{len(dict_contact_mesh_files_update)} successful')
+    
+    if failed_updates:
+        error_msg = f"Failed to update {len(failed_updates)} contact geometries:\n" + "\n".join([f"  - {failure}" for failure in failed_updates])
+        logger.error("Contact geometry updates failed - this will affect simulation accuracy!")
+        logger.error(error_msg)
+        raise RuntimeError(f"Contact geometry updates failed. {error_msg}")
 
-def update_joint_default_values(model, dict_joint_default_values_update):
+def update_joint_default_values(model, dict_joint_default_values_update, incremental=False):
     """
     Updates the default values for joints in an OpenSim model.
     
     Args:
         model: osim.Model
         dict_joint_default_values_update: dict
+        incremental: bool, optional
+            If True, adds the values to existing default values.
+            If False (default), replaces the existing default values.
     
     Notes:
     dict_joint_default_values_update format:
@@ -98,7 +159,16 @@ def update_joint_default_values(model, dict_joint_default_values_update):
         joint = jointset.get(joint_name)
         for coordinate_idx, coordinate_value in joint_dict.items():
             coordinate = joint.get_coordinates(int(coordinate_idx))
-            coordinate.set_default_value(round(coordinate_value, ROUND_DIGITS))
+            if incremental:
+                # Add to existing default value
+                current_value = coordinate.get_default_value()
+                new_value = current_value + coordinate_value
+                coordinate.set_default_value(round(new_value, ROUND_DIGITS))
+                logger.debug(f'Updated joint {joint_name} coordinate {coordinate_idx}: {current_value} + {coordinate_value} = {new_value}')
+            else:
+                # Replace existing default value
+                coordinate.set_default_value(round(coordinate_value, ROUND_DIGITS))
+                logger.debug(f'Set joint {joint_name} coordinate {coordinate_idx} to {coordinate_value}')
 
 def update_wrap_cylinder(
     model, 
@@ -282,10 +352,13 @@ def get_osim_muscle_ligament_reference_lengths(model, state=None):
                 slack_length = ligament.get_slack_length()
                 # reference strain
                 reference_strain = (ligament_length - slack_length) / slack_length
+                # stiffness
+                stiffness = ligament.get_linear_stiffness()
                 
                 dict_force_lengths[force_name]['length'] = round(ligament_length, ROUND_DIGITS)
                 dict_force_lengths[force_name]['slack_length'] = round(slack_length, ROUND_DIGITS)
                 dict_force_lengths[force_name]['reference_strain'] = round(reference_strain, ROUND_DIGITS)
+                dict_force_lengths[force_name]['stiffness'] = round(stiffness, ROUND_DIGITS)
     
     return dict_force_lengths
 
