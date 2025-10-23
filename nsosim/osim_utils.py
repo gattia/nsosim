@@ -135,6 +135,194 @@ def update_contact_mesh_files(model, dict_contact_mesh_files_update):
         logger.error(error_msg)
         raise RuntimeError(f"Contact geometry updates failed. {error_msg}")
 
+def create_contact_mesh(
+    name: str,
+    parent_frame: str,
+    mesh_file: str,
+    elastic_modulus: float = 5e6,
+    poissons_ratio: float = 0.45,
+    thickness: float = 0.003,
+    use_variable_thickness: bool = True,
+    mesh_back_file: str = None,
+    min_thickness: float = 0.001,
+    max_thickness: float = 0.01,
+    scale_factors: tuple = (1.0, 1.0, 1.0),
+    scale_frame: str = '/ground'
+) -> osim.Smith2018ContactMesh:
+    """
+    Creates a new Smith2018ContactMesh object with specified parameters.
+    
+    Args:
+        name: Name of the contact mesh
+        parent_frame: Path to parent frame (e.g., '/bodyset/femur_distal_r')
+        mesh_file: Path to mesh file (e.g., 'femur_nsm_recon_osim.stl')
+        elastic_modulus: Elastic modulus (e.g., 1e6)
+        poissons_ratio: Poisson's ratio (e.g., 0.45)
+        thickness: Mesh thickness (e.g., 0.001)
+        use_variable_thickness: Whether to use variable thickness (default: False)
+        mesh_back_file: Path to back mesh file (required if use_variable_thickness=True)
+        min_thickness: Minimum thickness (required if use_variable_thickness=True)
+        max_thickness: Maximum thickness (required if use_variable_thickness=True)
+        scale_factors: Scale factors (x, y, z) (default: (1.0, 1.0, 1.0))
+        scale_frame: Path to scale frame (default: '/ground')
+    
+    Returns:
+        osim.Smith2018ContactMesh: The configured contact mesh object
+    
+    Raises:
+        ValueError: If use_variable_thickness=True but required thickness parameters are missing
+    """
+    # Validate variable thickness parameters
+    if use_variable_thickness:
+        if mesh_back_file is None or min_thickness is None or max_thickness is None:
+            raise ValueError(
+                "When use_variable_thickness=True, mesh_back_file, min_thickness, "
+                "and max_thickness must be provided"
+            )
+    
+    # Create the contact mesh
+    contact_mesh = osim.Smith2018ContactMesh()
+    
+    # Set required parameters
+    contact_mesh.setName(name)
+    contact_mesh.updSocket('frame').setConnecteePath(parent_frame)
+    contact_mesh.updSocket('scale_frame').setConnecteePath(scale_frame)
+    
+    # Set mesh file
+    contact_mesh.set_mesh_file(mesh_file)
+    
+    # Set material properties
+    contact_mesh.set_elastic_modulus(round(elastic_modulus, ROUND_DIGITS))
+    contact_mesh.set_poissons_ratio(round(poissons_ratio, ROUND_DIGITS))
+    
+    # Set thickness parameters
+    contact_mesh.set_thickness(round(thickness, ROUND_DIGITS))
+    contact_mesh.set_use_variable_thickness(use_variable_thickness)
+    
+    # Set variable thickness parameters if enabled
+    if use_variable_thickness:
+        contact_mesh.set_mesh_back_file(mesh_back_file)
+        contact_mesh.set_min_thickness(round(min_thickness, ROUND_DIGITS))
+        contact_mesh.set_max_thickness(round(max_thickness, ROUND_DIGITS))
+    
+    # Set scale factors
+    contact_mesh.set_scale_factors(osim.Vec3(scale_factors))
+    
+    logger.debug(f'Created contact mesh "{name}" with parent frame "{parent_frame}"')
+    
+    return contact_mesh
+
+def add_contact_mesh_to_model(model: osim.Model, contact_mesh: osim.Smith2018ContactMesh):
+    """
+    Adds a Smith2018ContactMesh to an OpenSim model's contact geometry set.
+    
+    Args:
+        model: osim.Model - The OpenSim model to add the contact mesh to
+        contact_mesh: osim.Smith2018ContactMesh - The contact mesh to add
+    
+    Notes:
+        This function:
+        1. Clones and appends the contact mesh to the model's ContactGeometrySet
+        2. Finalizes model connections to ensure proper setup
+    """
+    mesh_name = contact_mesh.getName()
+    
+    # Add the contact mesh to the contact geometry set
+    cgset = model.updContactGeometrySet()
+    cgset.cloneAndAppend(contact_mesh)
+    
+    logger.debug(f'Added contact mesh "{mesh_name}" to model contact geometry set')
+    
+    # Finalize connections
+    model.finalizeConnections()
+    
+    logger.debug(f'Finalized model connections after adding contact mesh "{mesh_name}"')
+
+def create_articular_contact_force(
+    name: str,
+    socket_target_mesh: str,
+    socket_casting_mesh: str,
+    min_proximity: float=0.0,
+    max_proximity: float=0.1,
+    elastic_foundation_formulation: str = 'linear',
+    use_lumped_contact_model: bool = False,
+    applies_force: bool = True
+) -> osim.Smith2018ArticularContactForce:
+    """
+    Creates a new Smith2018ArticularContactForce object with specified parameters.
+    
+    Args:
+        name: Name of the contact force
+        socket_target_mesh: Path to target mesh (e.g., '/contactgeometrySet/femur_bone_mesh')
+        socket_casting_mesh: Path to casting mesh (e.g., '/contactgeometrySet/patella_bone_mesh')
+        min_proximity: Minimum proximity for contact detection (e.g., 0.0)
+        max_proximity: Maximum proximity for contact detection (e.g., 0.01)
+        elastic_foundation_formulation: Formulation type - 'linear' or 'nonlinear' (default: 'linear')
+        use_lumped_contact_model: Whether to use lumped contact model (default: False)
+        applies_force: Whether the contact force is active (default: True)
+    
+    Returns:
+        osim.Smith2018ArticularContactForce: The configured contact force object
+    
+    Notes:
+        The target_mesh and casting_mesh sockets should reference contact meshes that 
+        have already been added to the model's ContactGeometrySet.
+    """
+    # Create the contact force
+    contact_force = osim.Smith2018ArticularContactForce()
+    
+    # Set basic parameters
+    contact_force.setName(name)
+    contact_force.set_appliesForce(applies_force)
+    
+    # Connect to meshes
+    contact_force.updSocket('target_mesh').setConnecteePath(socket_target_mesh)
+    contact_force.updSocket('casting_mesh').setConnecteePath(socket_casting_mesh)
+    
+    # Set contact parameters
+    contact_force.set_min_proximity(round(min_proximity, ROUND_DIGITS))
+    contact_force.set_max_proximity(round(max_proximity, ROUND_DIGITS))
+    contact_force.set_elastic_foundation_formulation(elastic_foundation_formulation)
+    contact_force.set_use_lumped_contact_model(use_lumped_contact_model)
+    
+    logger.debug(f'Created articular contact force "{name}" between "{socket_target_mesh}" and "{socket_casting_mesh}"')
+    
+    return contact_force
+
+def add_contact_force_to_model(model: osim.Model, contact_force: osim.Smith2018ArticularContactForce):
+    """
+    Adds a Smith2018ArticularContactForce to an OpenSim model.
+    
+    Args:
+        model: osim.Model - The OpenSim model to add the contact force to
+        contact_force: osim.Smith2018ArticularContactForce - The contact force to add
+    
+    Notes:
+        This function:
+        1. Checks if the contact force already exists in the model
+        2. Adds the contact force as a component if it doesn't exist
+        3. Finalizes model connections to ensure proper setup
+    
+    Raises:
+        RuntimeError: If a contact force with the same name already exists
+    """
+    force_name = contact_force.getName()
+    force_path = f'/forceset/{force_name}'
+    
+    # Check if contact force already exists
+    if model.hasComponent(force_path):
+        error_msg = f'Contact force "{force_name}" already exists in model at path "{force_path}"'
+        logger.error(error_msg)
+        raise RuntimeError(error_msg)
+    
+    # Add the contact force to the model
+    model.addComponent(contact_force)
+    logger.debug(f'Added contact force "{force_name}" to model')
+    
+    # Finalize connections
+    model.finalizeConnections()
+    logger.debug(f'Finalized model connections after adding contact force "{force_name}"')
+
 def update_joint_default_values(model, dict_joint_default_values_update, incremental=False):
     """
     Updates the default values for joints in an OpenSim model.
@@ -313,6 +501,10 @@ def get_osim_muscle_ligament_reference_lengths(model, state=None):
                     'slack_length': float
                 }
             }
+    
+    Notes:
+        The reference strain values can be overridden using 
+        update_reference_strains_from_attachments_dict() if needed.
     """
     
     if state is None:
@@ -525,6 +717,7 @@ def update_osim_ligament_muscle_attachments(
         'ligament_name': {
             'name': 'ligament_name',
             'class': 'Blankevoort1991Ligament',
+            'reference_strain': float (optional) - if provided, overrides the reference strain from the model,
             'points': [
                 {
                     "name": "point_name",
@@ -558,6 +751,36 @@ def update_osim_ligament_muscle_attachments(
         
     
     return model
+
+
+def update_reference_strains_from_attachments_dict(
+    ref_force_info: dict,
+    dict_lig_mus_attach: dict
+) -> dict:
+    """
+    Updates reference strains in the force info dictionary with values from the 
+    ligament/muscle attachments dictionary, if provided.
+    
+    Args:
+        ref_force_info: dict - Dictionary returned by get_osim_muscle_ligament_reference_lengths
+        dict_lig_mus_attach: dict - Dictionary containing ligament/muscle attachment information
+        
+    Returns:
+        dict: Updated ref_force_info dictionary
+        
+    Notes:
+        If a ligament in dict_lig_mus_attach has a 'reference_strain' key, it will override
+        the reference strain value retrieved from the model.
+    """
+    for force_name, force_dict in dict_lig_mus_attach.items():
+        if 'reference_strain' in force_dict and force_name in ref_force_info:
+            logger.debug(f'Overriding reference strain for {force_name}: '
+                        f'{ref_force_info[force_name]["reference_strain"]} -> '
+                        f'{force_dict["reference_strain"]}')
+            ref_force_info[force_name]['reference_strain'] = force_dict['reference_strain']
+    
+    return ref_force_info
+
 
 def update_slack_lengths(model, force_length_dict: dict, state: osim.State=None):
     """
@@ -649,7 +872,9 @@ def update_model_attachments_slacks(
     
     Args:
         model: osim.Model
-        dict_lig_mus_attach: dict | str
+        dict_lig_mus_attach: dict | str - Dictionary or path to JSON file containing 
+            ligament/muscle attachment information. Optionally includes 'reference_strain' 
+            field for ligaments to override model defaults.
         ref_tibia_mesh: Mesh | str
         state: osim.State
         xyz_key: str
@@ -665,6 +890,11 @@ def update_model_attachments_slacks(
     normal_vector_shift: float
         This is the absolute magnitude of the shift along the normal vector from the
         surface of the reference mesh.
+    
+    reference_strain override:
+        If dict_lig_mus_attach contains a 'reference_strain' field for any ligament,
+        that value will be used instead of the reference strain from the model when
+        updating slack lengths.
     
     """
     if state is None:
@@ -686,6 +916,12 @@ def update_model_attachments_slacks(
     logger.info('Getting reference Ligament information...')
     # get refernece information stuff (lengths, strains, slack lengths)
     ref_force_info = get_osim_muscle_ligament_reference_lengths(model, state)
+    
+    # Override reference strains if provided in dict_lig_mus_attach
+    ref_force_info = update_reference_strains_from_attachments_dict(
+        ref_force_info=ref_force_info,
+        dict_lig_mus_attach=dict_lig_mus_attach
+    )
 
     logger.info('Updating ligament and muscle attachments...')
     # update the attachments
@@ -710,3 +946,6 @@ def update_model_attachments_slacks(
 
     # finalize model components
     model.finalizeConnections()
+    
+    
+    

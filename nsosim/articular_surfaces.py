@@ -1,264 +1,13 @@
 import numpy as np
 import pyvista as pv
-from pymskt.mesh import Mesh
-import vtk
-
-# extract the articular surfaces from the cartilages
-def remove_intersecting_vertices(mesh1, mesh2, ray_length=1.0, overlap_buffer=0.1):
-    """
-    This function takes in two meshes: mesh1 and mesh2.
-    Rays are cast from each vertex of mesh1 in the negative direction of the normal to the surface of mesh1.
-    If a ray intersects mesh2, the vertex from which the ray was cast is marked for removal.
-    A version of mesh1 with the marked vertices removed is returned.
-    
-    Parameters:
-    - ray_length: The length of the ray. Default is 1.0.
-    - invert: If True, the vertices marked for removal are kept and the rest are removed.
-              If False, the vertices marked for removal are removed and the rest are kept.
-              Default is True.
-    """
-    
-    # Compute point normals for mesh1
-    mesh1_normals = mesh1.compute_normals(point_normals=True, cell_normals=False)
-    
-    vertex_mask = np.ones(mesh1.n_points, dtype=bool)
-    
-    for idx, (vertex, normal) in enumerate(zip(mesh1.points, mesh1_normals.point_data["Normals"])):
-        start_point = vertex - overlap_buffer * normal
-        end_point = vertex - ray_length * normal
-        
-        intersections = mesh2.ray_trace(start_point, end_point)
-        
-        # If there's any intersection
-        if len(intersections[1]) > 0:
-            vertex_mask[idx] = False
-    
-    print(f'number of intersections: {sum(~vertex_mask)}')
-    
-    # Use the mask to filter out the vertices and the associated cells from mesh1
-    mesh1.point_data['vertex_mask'] = vertex_mask
-    cleaned_mesh = mesh1.threshold(0.5, scalars='vertex_mask', invert=True)
-    
-    
-    return cleaned_mesh.extract_surface()
-
-
-def get_n_largest(surface, n=1):
-    """
-    Extracts the n largest connected components from a surface mesh.
-
-    The function identifies connected regions within the input surface, sorts them by the
-    number of cells (as a proxy for area), and returns a new surface containing only
-    the n largest regions.
-
-    Args:
-        surface (pyvista.PolyData): The input surface mesh from which to extract components.
-        n (int, optional): The number of largest components to extract. Defaults to 1.
-
-    Returns:
-        pyvista.PolyData: A new surface mesh containing the n largest connected components.
-
-    Raises:
-        AssertionError: If the input `surface` or the intermediate `subregions`
-                        are not pyvista.PolyData objects.
-    """
-    subregions = surface.connectivity('all')
-    unique_regions = np.unique(subregions['RegionId'])
-    # getting the first "n" because the outputs are sorted by # of cells
-    # assume all cells are ~ the same size, therefore largest # cells ~= largest areas
-    largest_n = unique_regions[:n]
-    
-    assert isinstance(surface, pv.PolyData), f'surface is not a PolyData object: {type(surface)}'
-    assert isinstance(subregions, pv.PolyData), f'subregions is not a PolyData object: {type(subregions)}'
-    
-    return subregions.connectivity(extraction_mode='specified', variable_input=largest_n)
-
-def remove_cart_in_bone(cartilage_mesh, bone_mesh):
-    """
-    Removes portions of a cartilage mesh that are located inside a bone mesh.
-
-    This function identifies and removes vertices (and their associated cells) from the
-    cartilage mesh that fall within the volume of the bone mesh. The determination
-    is based on calculating the surface error (distance) from the cartilage to the
-    bone; negative or zero distances indicate points inside or on the bone surface.
-
-    Args:
-        cartilage_mesh (pymskt.mesh.Mesh, pyvista.PolyData, or vtk.vtkPolyData):
-            The cartilage mesh to be cleaned.
-        bone_mesh (pymskt.mesh.Mesh, pyvista.PolyData, or vtk.vtkPolyData):
-            The bone mesh used as the reference for removal.
-
-    Returns:
-        pymskt.mesh.Mesh or pyvista.PolyData: The cleaned cartilage mesh, with parts
-            inside the bone removed. The return type matches the input type of
-            `cartilage_mesh`.
-
-    Raises:
-        TypeError: If `cartilage_mesh` or `bone_mesh` are not of the expected types.
-    """
-    # Check and convert input types
-    def convert_to_mesh(mesh, mesh_name):
-        if isinstance(mesh, Mesh):
-            return mesh, 'Mesh'
-        elif isinstance(mesh, pv.PolyData):
-            return Mesh(mesh), 'pyvista'
-        elif isinstance(mesh, vtk.vtkPolyData):
-            return Mesh(pv.PolyData(mesh)), 'vtk'
-        else:
-            raise TypeError(f"The {mesh_name} is not of type pymskt.mesh.Mesh, pyvista.PolyData, or vtk.vtkPolyData")
-
-    cartilage_mesh, cart_type = convert_to_mesh(cartilage_mesh, "cartilage mesh")
-    bone_mesh, bone_type = convert_to_mesh(bone_mesh, "bone mesh")
-    
-    # Ensure both meshes have the same dtype (use the higher precision one)
-    target_dtype = np.promote_types(cartilage_mesh.point_coords.dtype, bone_mesh.point_coords.dtype)
-    cartilage_mesh.point_coords = cartilage_mesh.point_coords.astype(target_dtype)
-    bone_mesh.point_coords = bone_mesh.point_coords.astype(target_dtype)
-
-    # Create a copy of the cartilage mesh
-    cart_copy = cartilage_mesh.copy()
-    cart_copy.mesh = pv.PolyData(cart_copy.mesh)
-    
-    # Calculate the surface error
-    cart_copy.calc_surface_error(bone_mesh)
-    surf_error = cart_copy.get_scalar('surface_error')
-    
-    # Invert the surface error values
-    cart_copy.set_scalar('surface_error', surf_error * -1)
-
-    # Threshold the surface to keep only points outside the bone (surface_error > 0)
-    cart_copy.mesh = cart_copy.mesh.threshold(0, scalars='surface_error', invert=True).extract_surface()
-    # Clean up the resulting mesh
-    cart_copy.mesh = cart_copy.mesh.clean()
-    
-    # Return the appropriate type
-    if cart_type == 'Mesh':
-        return cart_copy
-    else:  # 'pyvista' or 'vtk'
-        return cart_copy.mesh
-
-
-def remove_isolated_cells(input_mesh):
-    """
-    Removes isolated cells from a mesh iteratively.
-
-    An isolated cell is defined as a cell that has only one edge neighbor.
-    The function repeatedly identifies and removes such cells until no more
-    isolated cells are found. The mesh is then cleaned to remove unused points.
-
-    Args:
-        input_mesh (pymskt.mesh.Mesh, pyvista.PolyData, or vtk.vtkPolyData):
-            The input mesh to clean.
-
-    Returns:
-        pymskt.mesh.Mesh or pyvista.PolyData: The cleaned mesh with isolated
-            cells removed. The return type matches the input type of `input_mesh`,
-            or pyvista.PolyData if the input was vtk.vtkPolyData.
-
-    Raises:
-        TypeError: If `input_mesh` is not of the expected types.
-    """
-    # Type checking and conversion
-    if isinstance(input_mesh, Mesh):
-        mesh = pv.PolyData(input_mesh.mesh)
-        return_type = 'Mesh'
-    elif isinstance(input_mesh, pv.PolyData):
-        mesh = input_mesh.copy()
-        return_type = 'pyvista'
-    elif isinstance(input_mesh, vtk.vtkPolyData):
-        mesh = pv.PolyData(input_mesh)
-        return_type = 'pyvista'
-    else:
-        raise TypeError("Input mesh must be of type Mesh, pyvista.PolyData, or vtk.vtkPolyData")
-
-    n_cells_removed = 1
-    while n_cells_removed > 0:
-        n_cells = mesh.n_cells
-        cell_mask = np.ones(n_cells, dtype=bool)
-        
-        for i in range(n_cells):
-            cell_neighbors = mesh.cell_neighbors(i, connections='edges')
-            if len(cell_neighbors) == 1:
-                cell_mask[i] = False
-        
-        mesh.cell_data['cell_mask'] = cell_mask
-        mesh = mesh.threshold(0.5, scalars='cell_mask', invert=False).extract_surface()
-        n_cells_removed = n_cells - mesh.n_cells
-
-    # clean the mesh
-    mesh = mesh.clean()
-    
-    # Return the cleaned mesh in the appropriate type
-    if return_type == 'Mesh':
-        cleaned_mesh = Mesh()
-        cleaned_mesh.mesh = mesh
-    else:
-        cleaned_mesh = mesh
-
-    return cleaned_mesh
-
-
-def extract_articular_surface(bone_mesh, ray_length=10.0, smooth_iter=100, n_largest=1):
-    """
-    Extracts articular surfaces from cartilage meshes associated with a bone mesh.
-
-    For each cartilage mesh linked to the `bone_mesh`:
-    1.  Identifies cartilage vertices that do not intersect the bone (using ray tracing).
-    2.  Extracts the `n_largest` connected components from the resulting surface.
-    3.  Removes any remaining cartilage portions that are inside the bone.
-    4.  Removes isolated cells from the boundaries.
-    5.  Smoothes the final articular surface.
-
-    Args:
-        bone_mesh (pymskt.mesh.Mesh): The bone mesh, which should have a
-            `list_cartilage_meshes` attribute containing associated cartilage meshes
-            (as pymskt.mesh.Mesh objects).
-        ray_length (float, optional): The length of the rays used for intersection
-            testing. Defaults to 10.0.
-        smooth_iter (int, optional): The number of smoothing iterations to apply to
-            the final articular surface. Defaults to 100.
-        n_largest (int, optional): The number of largest connected components to
-            keep after initial intersection removal. Defaults to 1.
-
-    Returns:
-        list[pyvista.PolyData]: A list of `pyvista.PolyData` objects, each
-            representing an extracted and processed articular surface.
-    """
-    list_articular_surfaces = []
-    
-    bone_mesh.compute_normals(point_normals=True, cell_normals=False, auto_orient_normals=True, inplace=True)
-
-    for cart_mesh in bone_mesh.list_cartilage_meshes:
-        
-        cart_mesh.compute_normals(point_normals=True, cell_normals=False, auto_orient_normals=True, inplace=True)
-        
-        print(cart_mesh.point_coords.shape)
-        print(bone_mesh.point_coords.shape)
-        articular_surface = remove_intersecting_vertices(
-            cart_mesh,
-            bone_mesh,
-            ray_length=ray_length,
-        )
-        assert isinstance(articular_surface, pv.PolyData), f'articular_surface is not a PolyData object: {type(articular_surface)}'
-        
-        articular_surface = get_n_largest(articular_surface, n=n_largest)
-        if not isinstance(articular_surface, pv.PolyData):
-            articular_surface = articular_surface.extract_surface()
-        assert isinstance(articular_surface, pv.PolyData), f'articular_surface is not a PolyData object: {type(articular_surface)}'
-        
-        # remove articular surface points that are inside the bone
-        articular_surface = remove_cart_in_bone(articular_surface, bone_mesh)
-        # remove isolated cells at the boundaries
-        articular_surface = remove_isolated_cells(articular_surface)
-        
-        # smooth the articular surface...
-        #   boundary_smoothing=False will enable smoothing at the boundary - which can fix
-        #   some of the issues with errors at the edges (boundaries)
-        articular_surface = articular_surface.smooth(n_iter=smooth_iter, boundary_smoothing=False)
-        
-        list_articular_surfaces.append(articular_surface)
-    
-    return list_articular_surfaces
+from pymskt.mesh import Mesh, BoneMesh, CartilageMesh
+from pymskt.mesh.meshCartilage import (
+    remove_intersecting_vertices,
+    get_n_largest,
+    remove_isolated_cells,
+    extract_articular_surface
+)
+import gc
 
 def extract_meniscus_articulating_surface(
     meniscus_mesh: pv.PolyData,
@@ -490,6 +239,7 @@ def create_articular_surfaces(
     bone_mesh_osim_.point_coords = bone_mesh_osim_.point_coords * 1000
     if bone_clusters is not None:
         bone_mesh_osim_.resample_surface(subdivisions=1, clusters=bone_clusters)
+    bone_mesh_osim_ = BoneMesh(bone_mesh_osim_)
 
     # assign cartilage to bone
     print('resample cartilage surface')
@@ -504,7 +254,7 @@ def create_articular_surfaces(
         updated_density = cart_mesh_osim_.mesh.n_cells/cart_mesh_osim_.mesh.area
         print(f'achieved density: {updated_density/1_000_000} triangles/mm^2')
     cart_mesh_osim_.compute_normals(point_normals=True, cell_normals=False, auto_orient_normals=True, inplace=True)
-    bone_mesh_osim_.list_cartilage_meshes = [cart_mesh_osim_]
+    bone_mesh_osim_.list_cartilage_meshes = [CartilageMesh(cart_mesh_osim_)]
     
 
     # extract articular surface
@@ -567,7 +317,382 @@ def compute_overlap_metrics(pat_articular_surfaces, fem_articular_surfaces):
     percent_vert_overlap = vert_overlap / total_vert 
 
     return percent_non_zero, vert_overlap, total_vert, percent_vert_overlap
+
+def dilate_mesh(
+    mesh, 
+    dilation_mm, 
+    mask=None, 
+    scale_axis=None, 
+    scale_percentile=None, 
+    reference_mesh=None, 
+    reference_axis_filter=lambda pts: pts[:, 0] > np.mean(pts[:, 0]),
+    norm_function='log'
+):
+    """
+    Dilate bone mesh along normals with optional scaled dilation.
     
+    Parameters
+    ----------
+    mesh : pyvista.PolyData
+        Input mesh to dilate
+    dilation_mm : float
+        Base dilation amount in mm
+    mask : np.ndarray, optional
+        Mask to apply to dilation (n_points,) or (n_points, 1)
+    scale_axis : int, optional
+        Axis index (0=x, 1=y, 2=z) for scaled dilation. If None, uniform dilation.
+    scale_percentile : float, optional
+        Percentile threshold (0-100) along scale_axis. Points below this have
+        no dilation, points above have scaled dilation increasing linearly from
+        0 at the threshold to dilation_mm at the maximum coordinate.
+    reference_mesh : pyvista.PolyData, optional
+        Reference mesh to use for determining the percentile threshold.
+        If None, uses the input mesh itself. Useful for scaling based on 
+        patella cartilage coordinates instead of bone coordinates.
+    reference_axis_filter : callable, optional
+        Function to filter reference_mesh points before calculating percentile.
+        E.g., lambda pts: pts[:, 0] > np.mean(pts[:, 0]) for anterior half.
+    
+    Returns
+    -------
+    mesh_scaled : pyvista.PolyData
+        Dilated mesh
+    """
+    # Dilate bone mesh along normals
+    mesh_scaled = mesh.copy()
+    mesh_scaled.compute_normals(inplace=True, auto_orient_normals=True, consistent_normals=True)
+    
+    if mask is None:
+        mask = np.ones((mesh_scaled.n_points, 1), dtype=float)
+    else:
+        if len(mask.shape) == 1:
+            mask = mask[:,None]
+    
+    points = mesh_scaled.points.copy()
+    normals = mesh_scaled.point_normals
+    
+    # Calculate dilation scaling based on position
+    dilation_scale = np.ones((mesh_scaled.n_points, 1), dtype=float)
+    
+    if scale_axis is not None and scale_percentile is not None:
+        # Determine which mesh to use for calculating the threshold
+        if reference_mesh is not None:
+            ref_points = reference_mesh.points
+        else:
+            ref_points = points
+        
+        # Apply filter if provided (e.g., to get anterior half only)
+        if reference_axis_filter is not None:
+            filter_mask = reference_axis_filter(ref_points)
+            filtered_coords = ref_points[filter_mask, scale_axis]
+        else:
+            filtered_coords = ref_points[:, scale_axis]
+        
+        # Calculate threshold from reference mesh
+        threshold = np.percentile(filtered_coords, scale_percentile)
+        
+        # Get the max coordinate for normalization (from filtered reference if applicable)
+        max_coord = np.max(points[:, scale_axis])
+        
+        # Apply scaling to the actual mesh points
+        axis_coords = points[:, scale_axis]
+        above_threshold = axis_coords > threshold
+        
+        if np.any(above_threshold):
+            # Normalized distance from threshold (0 at threshold, 1 at max)
+            norm_distance = np.zeros_like(axis_coords)
+            if max_coord > threshold:
+                denom = max_coord - threshold
+                if denom > 0:
+                    idx = above_threshold  # cache the mask
+                    t = (axis_coords[idx] - threshold) / denom
+                    t = np.clip(t, 0.0, 1.0)
+                    if norm_function == 'linear':
+                        y = t
+                    elif norm_function == 'pow':
+                        gamma = 2.0
+                        y = t**gamma
+                    elif norm_function == 'exp':
+                        k = 5.0
+                        y = np.expm1(k*t) / np.expm1(k)
+                    elif norm_function == 'log':
+                        k = 9.0
+                        y = np.log1p(k*t) / np.log1p(k)
+                    else:
+                        y = t  # safe default
+
+                    norm_distance[idx] = y
+            
+            # Scale dilation: gradually increase from 0 at threshold to 1.0 at max
+            dilation_scale = norm_distance.reshape(-1, 1)
+    
+    # Apply dilation with scaling
+    points_new = points + dilation_mm * normals * mask * dilation_scale
+    mesh_scaled.points = points_new
+    return mesh_scaled
+
+def label_vertices_as_bone_or_cartilage(mesh, bone_mesh, cart_mesh):
+    """
+    
+    """
+    print('Computing normals...')
+    mesh.compute_normals(inplace=True, auto_orient_normals=True, consistent_normals=True)
+    bone_mesh.compute_normals(inplace=True, auto_orient_normals=True, consistent_normals=True)
+    cart_mesh.compute_normals(inplace=True, auto_orient_normals=True, consistent_normals=True)
+    print('Finding closest bone and cartilage points...')
+    # For each point on combined, compute closest distance to bone and cartilage
+    print('Finding closest bone points...')
+    if not isinstance(bone_mesh, Mesh):
+        bone_mesh = Mesh(bone_mesh)
+    if not isinstance(cart_mesh, Mesh):
+        cart_mesh = Mesh(cart_mesh)
+    
+    print('getting cart sdf')
+    cart_mesh.point_coords = cart_mesh.point_coords.astype(float)
+    d_cart = cart_mesh.get_sdf_pts(mesh.points.astype(float))
+    
+    print('getting bone sdf')
+    bone_mesh.point_coords = bone_mesh.point_coords.astype(float)
+    d_bone = bone_mesh.get_sdf_pts(mesh.points.astype(float))
+    
+    
+    print('Labeling bone/cartilage distances')
+    # Create arrays in combined.point_data
+    mesh.point_data["d_bone"] = d_bone
+    mesh.point_data["d_cart"] = d_cart
+    
+    # labeling vertices as bone or cartilage
+    # Label vertices as bone (1) or cartilage (0)
+    is_bone = np.zeros(mesh.n_points, dtype=int)
+    is_bone[d_bone < d_cart] = 1
+    mesh.point_data["is_bone"] = is_bone
+    
+    return mesh
+
+
+def create_prefemoral_fatpad_contact_mesh(
+    femur_bone_mesh,
+    femur_cart_mesh,
+    patella_bone_mesh,
+    patella_cart_mesh,
+    initial_bone_dilation_mm: float = 0.6,
+    bone_region_dilation_mm: float = 4.0,
+    patella_dilation_mm: float = 0.3,
+    max_distance_to_patella_mm: float = 30.0,
+    resample_clusters_initial: int = 10_000,
+    resample_clusters_final: int = 2_000,
+    output_path: str = None,
+    percent_fem_cart_to_keep: float = 0.15,
+    dilation_axis_filter: callable = lambda pts: pts[:, 0] > np.mean(pts[:, 0]),
+    units='m'
+):
+    """
+    Creates a prefemoral fatpad mesh by dilating and combining bone/cartilage meshes,
+    then subtracting the patella geometry and filtering by distance.
+    
+    This function creates a the prefemoral fatpad superior to the trochlea and posterior to the patella by:
+    1. Dilating the femur bone mesh slightly along surface normals
+    2. Performing a boolean union with the femur cartilage mesh
+    3. Resampling the combined surface
+    4. Labeling vertices as bone or cartilage based on proximity
+    5. Further dilating bone-labeled vertices
+    6. Dilating the patella bone and combining with patella cartilage
+    7. Subtracting the combined patella from the femur mesh
+    8. Keeping only points within specified distance to patella
+    9. Final resampling and cleanup
+    
+    Args:
+        femur_bone_mesh: Femur bone mesh (pymskt.mesh.Mesh, pyvista.PolyData, or path)
+        femur_cart_mesh: Femur cartilage mesh (pymskt.mesh.Mesh, pyvista.PolyData, or path)
+        patella_bone_mesh: Patella bone mesh (pymskt.mesh.Mesh, pyvista.PolyData, or path)
+        patella_cart_mesh: Patella cartilage mesh (pymskt.mesh.Mesh, pyvista.PolyData, or path)
+        initial_bone_dilation_mm: Initial dilation of bone in mm (default: 0.3)
+        bone_region_dilation_mm: Additional dilation of bone region in mm (default: 4.0)
+        patella_dilation_mm: Dilation of patella bone in mm (default: 0.3)
+        max_distance_to_patella_mm: Maximum distance to patella to keep points (default: 30.0)
+        resample_clusters_initial: Number of clusters for initial resampling (default: 10,000)
+        resample_clusters_final: Number of clusters for final resampling (default: 2,000)
+        output_path: Optional path to save the result (default: None)
+    
+    Returns:
+        pymskt.mesh.Mesh: The processed prefemoral fatpad mesh with patella subtracted
+    
+    Notes:
+        Input meshes are assumed to be in meters (OpenSim standard).
+        Processing is done in mm for better numerical stability.
+        Either patella_translation or osim_model_path must be provided.
+    """
+    
+    def _type_check_mesh(mesh, mesh_name='mesh'):
+        if not isinstance(mesh, Mesh):
+            if isinstance(mesh, pv.PolyData):
+                mesh = Mesh(mesh)
+            else:
+                raise TypeError(f'{mesh_name} is not a pv.PolyData or pymskt.mesh.Mesh: {type(mesh)}')
+        return mesh
+    
+    femur_bone_mesh = _type_check_mesh(femur_bone_mesh, 'femur_bone_mesh')
+    femur_cart_mesh = _type_check_mesh(femur_cart_mesh, 'femur_cart_mesh')
+    patella_bone_mesh = _type_check_mesh(patella_bone_mesh, 'patella_bone_mesh')
+    patella_cart_mesh = _type_check_mesh(patella_cart_mesh, 'patella_cart_mesh')
+    
+    # copy the meshes to ensure they are not modified in place.
+    femur_bone_mesh = femur_bone_mesh.copy()
+    femur_cart_mesh = femur_cart_mesh.copy()
+    patella_bone_mesh = patella_bone_mesh.copy()
+    patella_cart_mesh = patella_cart_mesh.copy()
+    
+    # Ensure meshes are triangulated and convert to mm
+    if units == 'm':
+        print('Converting meshes to mm...')
+        femur_bone_mesh.points *= 1000
+        femur_cart_mesh.points *= 1000
+        patella_cart_mesh.points *= 1000
+        patella_bone_mesh.points *= 1000
+    elif units == 'mm':
+        print('Meshes are already in mm...')
+        pass
+    else:
+        raise ValueError(f'Invalid units: {units}, expected "m" or "mm"')
+    
+    print(f'Initial bone dilation: {initial_bone_dilation_mm} mm')
+    # Dilate bone mesh along normals
+    femur_bone_scaled = dilate_mesh(femur_bone_mesh, initial_bone_dilation_mm)
+    
+    print('Performing boolean union of femur bone and cartilage...', flush=True)   
+    try:
+        if not isinstance(femur_bone_scaled, Mesh):
+            print('Converting femur_bone_scaled to Mesh...')
+            femur_bone_scaled = Mesh(femur_bone_scaled)
+        combined = femur_bone_scaled.boolean_union(femur_cart_mesh)
+        print('Union done', flush=True)
+    except Exception as e:
+        print(f"Boolean union of femur bone and cartilage failed with error: {e}")
+        print("This may indicate meshes have incompatible geometry or degenerate triangles.")
+        raise
+    print('labeling vertices as bone or cartilage...', flush=True)
+    # label vertices as bone or cartilage
+    combined = label_vertices_as_bone_or_cartilage(combined, femur_bone_mesh, femur_cart_mesh)
+    
+    print(f'Dilating bone region by {bone_region_dilation_mm} mm...')
+    # Further dilate bone-labeled vertices
+    combined_bone_extended = dilate_mesh(
+        mesh=combined, 
+        dilation_mm=bone_region_dilation_mm, 
+        mask=combined.point_data["is_bone"] == 1, 
+        scale_axis=1, 
+        scale_percentile=95, 
+        reference_mesh=femur_cart_mesh, 
+        reference_axis_filter=dilation_axis_filter
+    )
+    
+    # 
+    
+    # Process patella meshes
+    print('Processing patella meshes...')       
+    print(f'Dilating patella bone by {patella_dilation_mm} mm...')
+    # Dilate patella bone so can combine with patellar cartilage
+    patella_bone_extended = dilate_mesh(patella_bone_mesh, patella_dilation_mm)
+    
+    print('Boolean union of patella bone and cartilage...')
+    # Boolean union - do directly as in notebook
+    if not isinstance(patella_bone_extended, Mesh):
+        patella_bone_extended = Mesh(patella_bone_extended)
+    combined_patella = patella_bone_extended.boolean_union(patella_cart_mesh)
+
+    print('Subtracting patella from femur mesh...')
+    try:
+        if not isinstance(combined_bone_extended, Mesh):
+            print('Converting combined_bone_extended to Mesh...')
+            combined_bone_extended = Mesh(combined_bone_extended)
+        subtracted = combined_bone_extended.boolean_difference(combined_patella)
+    except Exception as e:
+        print(f"Boolean difference failed with error: {e}")
+        print("This may indicate meshes don't overlap or have incompatible geometry.")
+        raise
+    
+    # Check if subtraction resulted in valid mesh
+    if not isinstance(subtracted, pv.PolyData):
+        raise TypeError(f"Boolean difference did not return PolyData, got {type(subtracted)}")
+    if subtracted.n_points == 0:
+        raise ValueError("Boolean difference resulted in empty mesh. Meshes may not overlap properly.")
+    subtracted_mskt = Mesh(subtracted)
+    
+    print('Computing signed distance field to patella...')
+    # Compute SDF to patella - convert to Mesh object first
+    combined_patella_mskt = Mesh(combined_patella)
+    sdfs_patella_combined = combined_patella_mskt.get_sdf_pts(subtracted_mskt.points)
+    subtracted_mskt.point_data['sdf_patella_combined'] = sdfs_patella_combined
+    absolute_sdfs_patella_combined = np.abs(sdfs_patella_combined)
+    subtracted_mskt.point_data['d_patella_combined'] = absolute_sdfs_patella_combined
+    
+    # get distance to the combined_bone_extended so can see which is closer to new surface to 
+    # enable identifying source of each vertex
+    sdfs_combined_bone_extended = combined_bone_extended.get_sdf_pts(subtracted_mskt.points)
+    subtracted_mskt.point_data['sdf_combined_bone_extended'] = sdfs_combined_bone_extended
+    absolute_sdfs_combined_bone_extended = np.abs(sdfs_combined_bone_extended)
+    subtracted_mskt.point_data['d_combined_bone_extended'] = absolute_sdfs_combined_bone_extended
+    
+    is_patella = absolute_sdfs_patella_combined < absolute_sdfs_combined_bone_extended
+    subtracted_mskt.point_data['is_patella'] = is_patella.astype(float)
+    
+    # Copy over the is_bone data
+    subtracted_mskt.copy_scalars_from_other_mesh_to_current(combined_bone_extended, orig_scalars_name='is_bone')
+    
+    print(f'Filtering points within {max_distance_to_patella_mm} mm of patella...')
+    # Keep if: PointSource == 1 OR is_bone == 1
+    keep_surface = np.maximum(
+        subtracted_mskt.point_data["is_patella"], 
+        subtracted_mskt.point_data["is_bone"]
+    )
+    
+    # Also filter by distance to patella
+    keep_radial = subtracted_mskt.point_data['sdf_patella_combined'] < max_distance_to_patella_mm
+    
+    # get rid of fatpad that is too low - don't want in-advertant forces as we start flexion. 
+    # only get the points on the anterior 1/2 of the femur carilage (don't care about the posterior condyles height)
+    # max_y_fem_cart = np.max(femur_cart_mesh.points[femur_cart_mesh.points[:,0] > np.mean(femur_cart_mesh.points[:,0]), 1])
+    # min_y_fem_cart = np.min(femur_cart_mesh.points[:, 1])
+    # height_fem_cart = max_y_fem_cart - min_y_fem_cart
+    
+    percentile_threshold = (1 - percent_fem_cart_to_keep) * 100
+    y_percentile_threshold = np.percentile(femur_cart_mesh.points[femur_cart_mesh.points[:,0] > np.mean(femur_cart_mesh.points[:,0]), 1], percentile_threshold)
+    keep_vertical = subtracted_mskt.points[:, 1] > y_percentile_threshold
+    # keep_vertical = subtracted_mskt.points[:, 1] > (max_y_fem_cart - height_fem_cart * percent_fem_cart_to_keep)
+    
+    keep = keep_surface * keep_radial * keep_vertical
+    
+    subtracted_mskt.point_data["keep"] = keep.astype(float)
+    subtracted_mskt = subtracted_mskt.triangulate().clean()
+
+    
+    print('Removing filtered points...')
+    # Remove points where keep == 0
+    fatpad = subtracted_mskt.remove_points(subtracted_mskt.point_data['keep'] == 0)[0]
+    fatpad = Mesh(fatpad)
+    
+    print(f'Final resampling to {resample_clusters_final} clusters...')
+    fatpad.resample_surface(clusters=resample_clusters_final)
+    
+    print('Extracting largest component and cleaning...')
+    fatpad = fatpad.extract_largest()
+    fatpad = fatpad.clean()
+    
+    # Convert back to meters
+    if units == 'm':
+        print('Converting meshes to meters...')
+        fatpad.points /= 1000
+    elif units == 'mm':
+        pass
+    
+    # Save if output path is provided
+    if output_path is not None:
+        print(f'Saving to: {output_path}')
+        fatpad.save(output_path)
+    
+    print('Prefemoral fatpad mesh with patella subtraction created successfully')
+    return fatpad
+
 def optimize_patella_position(
     pat_articular_surfaces,
     fem_articular_surfaces,

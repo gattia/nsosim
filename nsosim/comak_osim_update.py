@@ -190,19 +190,6 @@ def update_osim_model(
     update_body_geometry_meshfile(model, dict_body_geometries_update)
     update_contact_mesh_files(model, dict_contact_mesh_files_update)
     
-    # iterate over all of the wrap objects and if wrap.body_name is in: 
-    # patella_r, tibia_proximal_r
-    
-    # for bone in dict_wrap_objects.keys():
-    #     for body in dict_wrap_objects[bone].keys():
-    #         if body in ['patella_r', 'tibia_proximal_r']:
-    #             for wrap_type, wrap_dicts in dict_wrap_objects[bone][body].items():
-    #                 for wrap_name, wrap in wrap_dicts.items():
-    #                     # the final rotation axis is negative.. 
-    #                     wrap.xyz_body_rotation = wrap.xyz_body_rotation * np.array([1, 1, -1])
-    #             # update the wrap objects for the model. 
-    #             update_wrap_objects(model, dict_wrap_objects)
-    #         else:
     # update the wrap objects for the model. 
     update_wrap_objects(model, dict_wrap_objects)
     
