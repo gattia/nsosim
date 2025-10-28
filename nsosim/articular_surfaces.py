@@ -431,6 +431,25 @@ def dilate_mesh(
     mesh_scaled.points = points_new
     return mesh_scaled
 
+def _type_check_mesh(mesh, mesh_name='mesh'):
+    """
+    Type check and convert mesh to pymskt.mesh.Mesh if needed.
+    
+    Args:
+        mesh: Input mesh (pymskt.mesh.Mesh, pyvista.PolyData, or path)
+        mesh_name: Name of the mesh for error messages
+        
+    Returns:
+        pymskt.mesh.Mesh: Validated mesh object
+    """
+    if not isinstance(mesh, Mesh):
+        if isinstance(mesh, pv.PolyData):
+            mesh = Mesh(mesh)
+        else:
+            raise TypeError(f'{mesh_name} is not a pv.PolyData or pymskt.mesh.Mesh: {type(mesh)}')
+    return mesh
+
+
 def label_vertices_as_bone_or_cartilage(mesh, bone_mesh, cart_mesh):
     """
     
@@ -470,79 +489,33 @@ def label_vertices_as_bone_or_cartilage(mesh, bone_mesh, cart_mesh):
     return mesh
 
 
-def create_prefemoral_fatpad_contact_mesh(
-    femur_bone_mesh,
-    femur_cart_mesh,
-    patella_bone_mesh,
-    patella_cart_mesh,
-    initial_bone_dilation_mm: float = 0.6,
-    bone_region_dilation_mm: float = 4.0,
-    patella_dilation_mm: float = 0.3,
-    max_distance_to_patella_mm: float = 30.0,
-    resample_clusters_initial: int = 10_000,
-    resample_clusters_final: int = 2_000,
-    output_path: str = None,
-    percent_fem_cart_to_keep: float = 0.15,
-    dilation_axis_filter: callable = lambda pts: pts[:, 0] > np.mean(pts[:, 0]),
-    units='m'
-):
+def _prepare_fatpad_input_meshes(femur_bone_mesh, femur_cart_mesh, patella_bone_mesh, patella_cart_mesh, units):
     """
-    Creates a prefemoral fatpad mesh by dilating and combining bone/cartilage meshes,
-    then subtracting the patella geometry and filtering by distance.
-    
-    This function creates a the prefemoral fatpad superior to the trochlea and posterior to the patella by:
-    1. Dilating the femur bone mesh slightly along surface normals
-    2. Performing a boolean union with the femur cartilage mesh
-    3. Resampling the combined surface
-    4. Labeling vertices as bone or cartilage based on proximity
-    5. Further dilating bone-labeled vertices
-    6. Dilating the patella bone and combining with patella cartilage
-    7. Subtracting the combined patella from the femur mesh
-    8. Keeping only points within specified distance to patella
-    9. Final resampling and cleanup
+    Type check, copy, and convert meshes to mm for processing.
     
     Args:
-        femur_bone_mesh: Femur bone mesh (pymskt.mesh.Mesh, pyvista.PolyData, or path)
-        femur_cart_mesh: Femur cartilage mesh (pymskt.mesh.Mesh, pyvista.PolyData, or path)
-        patella_bone_mesh: Patella bone mesh (pymskt.mesh.Mesh, pyvista.PolyData, or path)
-        patella_cart_mesh: Patella cartilage mesh (pymskt.mesh.Mesh, pyvista.PolyData, or path)
-        initial_bone_dilation_mm: Initial dilation of bone in mm (default: 0.3)
-        bone_region_dilation_mm: Additional dilation of bone region in mm (default: 4.0)
-        patella_dilation_mm: Dilation of patella bone in mm (default: 0.3)
-        max_distance_to_patella_mm: Maximum distance to patella to keep points (default: 30.0)
-        resample_clusters_initial: Number of clusters for initial resampling (default: 10,000)
-        resample_clusters_final: Number of clusters for final resampling (default: 2,000)
-        output_path: Optional path to save the result (default: None)
-    
+        femur_bone_mesh: Femur bone mesh
+        femur_cart_mesh: Femur cartilage mesh
+        patella_bone_mesh: Patella bone mesh
+        patella_cart_mesh: Patella cartilage mesh
+        units: 'm' or 'mm' - units of input meshes
+        
     Returns:
-        pymskt.mesh.Mesh: The processed prefemoral fatpad mesh with patella subtracted
-    
-    Notes:
-        Input meshes are assumed to be in meters (OpenSim standard).
-        Processing is done in mm for better numerical stability.
-        Either patella_translation or osim_model_path must be provided.
+        tuple: (femur_bone_mesh, femur_cart_mesh, patella_bone_mesh, patella_cart_mesh) in mm
     """
-    
-    def _type_check_mesh(mesh, mesh_name='mesh'):
-        if not isinstance(mesh, Mesh):
-            if isinstance(mesh, pv.PolyData):
-                mesh = Mesh(mesh)
-            else:
-                raise TypeError(f'{mesh_name} is not a pv.PolyData or pymskt.mesh.Mesh: {type(mesh)}')
-        return mesh
-    
+    # Type check all meshes
     femur_bone_mesh = _type_check_mesh(femur_bone_mesh, 'femur_bone_mesh')
     femur_cart_mesh = _type_check_mesh(femur_cart_mesh, 'femur_cart_mesh')
     patella_bone_mesh = _type_check_mesh(patella_bone_mesh, 'patella_bone_mesh')
     patella_cart_mesh = _type_check_mesh(patella_cart_mesh, 'patella_cart_mesh')
     
-    # copy the meshes to ensure they are not modified in place.
+    # Copy the meshes to ensure they are not modified in place
     femur_bone_mesh = femur_bone_mesh.copy()
     femur_cart_mesh = femur_cart_mesh.copy()
     patella_bone_mesh = patella_bone_mesh.copy()
     patella_cart_mesh = patella_cart_mesh.copy()
     
-    # Ensure meshes are triangulated and convert to mm
+    # Convert to mm if needed
     if units == 'm':
         print('Converting meshes to mm...')
         femur_bone_mesh.points *= 1000
@@ -551,12 +524,28 @@ def create_prefemoral_fatpad_contact_mesh(
         patella_bone_mesh.points *= 1000
     elif units == 'mm':
         print('Meshes are already in mm...')
-        pass
     else:
         raise ValueError(f'Invalid units: {units}, expected "m" or "mm"')
     
+    return femur_bone_mesh, femur_cart_mesh, patella_bone_mesh, patella_cart_mesh
+
+
+def _create_extended_femur_mesh(femur_bone_mesh, femur_cart_mesh, initial_bone_dilation_mm, 
+                                 bone_region_dilation_mm, dilation_axis_filter):
+    """
+    Dilate femur bone, union with cartilage, label vertices, and extend bone region.
+    
+    Args:
+        femur_bone_mesh: Femur bone mesh in mm
+        femur_cart_mesh: Femur cartilage mesh in mm
+        initial_bone_dilation_mm: Initial dilation of bone
+        bone_region_dilation_mm: Additional dilation of bone-labeled region
+        dilation_axis_filter: Filter function for dilation axis
+        
+    Returns:
+        pyvista.PolyData: Extended femur mesh with bone region dilated
+    """
     print(f'Initial bone dilation: {initial_bone_dilation_mm} mm')
-    # Dilate bone mesh along normals
     femur_bone_scaled = dilate_mesh(femur_bone_mesh, initial_bone_dilation_mm)
     
     print('Performing boolean union of femur bone and cartilage...', flush=True)   
@@ -570,12 +559,11 @@ def create_prefemoral_fatpad_contact_mesh(
         print(f"Boolean union of femur bone and cartilage failed with error: {e}")
         print("This may indicate meshes have incompatible geometry or degenerate triangles.")
         raise
-    print('labeling vertices as bone or cartilage...', flush=True)
-    # label vertices as bone or cartilage
+    
+    print('Labeling vertices as bone or cartilage...', flush=True)
     combined = label_vertices_as_bone_or_cartilage(combined, femur_bone_mesh, femur_cart_mesh)
     
     print(f'Dilating bone region by {bone_region_dilation_mm} mm...')
-    # Further dilate bone-labeled vertices
     combined_bone_extended = dilate_mesh(
         mesh=combined, 
         dilation_mm=bone_region_dilation_mm, 
@@ -586,20 +574,44 @@ def create_prefemoral_fatpad_contact_mesh(
         reference_axis_filter=dilation_axis_filter
     )
     
-    # 
+    return combined_bone_extended
+
+
+def _create_combined_patella_mesh(patella_bone_mesh, patella_dilation_mm, patella_cart_mesh):
+    """
+    Dilate patella bone and union with cartilage.
     
-    # Process patella meshes
+    Args:
+        patella_bone_mesh: Patella bone mesh in mm
+        patella_dilation_mm: Dilation amount for patella bone
+        patella_cart_mesh: Patella cartilage mesh in mm
+        
+    Returns:
+        pyvista.PolyData: Combined patella mesh (bone + cartilage)
+    """
     print('Processing patella meshes...')       
     print(f'Dilating patella bone by {patella_dilation_mm} mm...')
-    # Dilate patella bone so can combine with patellar cartilage
     patella_bone_extended = dilate_mesh(patella_bone_mesh, patella_dilation_mm)
     
     print('Boolean union of patella bone and cartilage...')
-    # Boolean union - do directly as in notebook
     if not isinstance(patella_bone_extended, Mesh):
         patella_bone_extended = Mesh(patella_bone_extended)
     combined_patella = patella_bone_extended.boolean_union(patella_cart_mesh)
+    
+    return combined_patella
 
+
+def _subtract_and_analyze_meshes(combined_bone_extended, combined_patella):
+    """
+    Subtract patella from femur and compute distance fields.
+    
+    Args:
+        combined_bone_extended: Extended femur mesh
+        combined_patella: Combined patella mesh
+        
+    Returns:
+        pymskt.mesh.Mesh: Subtracted mesh with distance fields and labels
+    """
     print('Subtracting patella from femur mesh...')
     try:
         if not isinstance(combined_bone_extended, Mesh):
@@ -619,15 +631,13 @@ def create_prefemoral_fatpad_contact_mesh(
     subtracted_mskt = Mesh(subtracted)
     
     print('Computing signed distance field to patella...')
-    # Compute SDF to patella - convert to Mesh object first
     combined_patella_mskt = Mesh(combined_patella)
     sdfs_patella_combined = combined_patella_mskt.get_sdf_pts(subtracted_mskt.points)
     subtracted_mskt.point_data['sdf_patella_combined'] = sdfs_patella_combined
     absolute_sdfs_patella_combined = np.abs(sdfs_patella_combined)
     subtracted_mskt.point_data['d_patella_combined'] = absolute_sdfs_patella_combined
     
-    # get distance to the combined_bone_extended so can see which is closer to new surface to 
-    # enable identifying source of each vertex
+    # Get distance to the combined_bone_extended
     sdfs_combined_bone_extended = combined_bone_extended.get_sdf_pts(subtracted_mskt.points)
     subtracted_mskt.point_data['sdf_combined_bone_extended'] = sdfs_combined_bone_extended
     absolute_sdfs_combined_bone_extended = np.abs(sdfs_combined_bone_extended)
@@ -639,56 +649,166 @@ def create_prefemoral_fatpad_contact_mesh(
     # Copy over the is_bone data
     subtracted_mskt.copy_scalars_from_other_mesh_to_current(combined_bone_extended, orig_scalars_name='is_bone')
     
+    return subtracted_mskt
+
+
+def _filter_fatpad_points(subtracted_mesh, femur_cart_mesh, max_distance_to_patella_mm, percent_fem_cart_to_keep):
+    """
+    Filter points based on distance to patella and height criteria.
+    
+    Args:
+        subtracted_mesh: Mesh after boolean subtraction with distance fields
+        femur_cart_mesh: Femur cartilage mesh for height filtering
+        max_distance_to_patella_mm: Maximum distance to patella to keep points
+        percent_fem_cart_to_keep: Percentage of femur cartilage height to keep
+        
+    Returns:
+        pymskt.mesh.Mesh: Filtered fatpad mesh
+    """
     print(f'Filtering points within {max_distance_to_patella_mm} mm of patella...')
-    # Keep if: PointSource == 1 OR is_bone == 1
+    
+    # Keep if: is_patella == 1 OR is_bone == 1
     keep_surface = np.maximum(
-        subtracted_mskt.point_data["is_patella"], 
-        subtracted_mskt.point_data["is_bone"]
+        subtracted_mesh.point_data["is_patella"], 
+        subtracted_mesh.point_data["is_bone"]
     )
     
-    # Also filter by distance to patella
-    keep_radial = subtracted_mskt.point_data['sdf_patella_combined'] < max_distance_to_patella_mm
+    # Filter by distance to patella
+    keep_radial = subtracted_mesh.point_data['sdf_patella_combined'] < max_distance_to_patella_mm
     
-    # get rid of fatpad that is too low - don't want in-advertant forces as we start flexion. 
-    # only get the points on the anterior 1/2 of the femur carilage (don't care about the posterior condyles height)
-    # max_y_fem_cart = np.max(femur_cart_mesh.points[femur_cart_mesh.points[:,0] > np.mean(femur_cart_mesh.points[:,0]), 1])
-    # min_y_fem_cart = np.min(femur_cart_mesh.points[:, 1])
-    # height_fem_cart = max_y_fem_cart - min_y_fem_cart
-    
+    # Filter by height - remove fatpad that is too low
     percentile_threshold = (1 - percent_fem_cart_to_keep) * 100
-    y_percentile_threshold = np.percentile(femur_cart_mesh.points[femur_cart_mesh.points[:,0] > np.mean(femur_cart_mesh.points[:,0]), 1], percentile_threshold)
-    keep_vertical = subtracted_mskt.points[:, 1] > y_percentile_threshold
-    # keep_vertical = subtracted_mskt.points[:, 1] > (max_y_fem_cart - height_fem_cart * percent_fem_cart_to_keep)
+    y_percentile_threshold = np.percentile(
+        femur_cart_mesh.points[femur_cart_mesh.points[:, 0] > np.mean(femur_cart_mesh.points[:, 0]), 1], 
+        percentile_threshold
+    )
+    keep_vertical = subtracted_mesh.points[:, 1] > y_percentile_threshold
     
     keep = keep_surface * keep_radial * keep_vertical
     
-    subtracted_mskt.point_data["keep"] = keep.astype(float)
-    subtracted_mskt = subtracted_mskt.triangulate().clean()
-
+    subtracted_mesh.point_data["keep"] = keep.astype(float)
+    subtracted_mesh = subtracted_mesh.triangulate().clean()
     
     print('Removing filtered points...')
-    # Remove points where keep == 0
-    fatpad = subtracted_mskt.remove_points(subtracted_mskt.point_data['keep'] == 0)[0]
+    fatpad = subtracted_mesh.remove_points(subtracted_mesh.point_data['keep'] == 0)[0]
     fatpad = Mesh(fatpad)
     
+    return fatpad
+
+
+def _finalize_fatpad_mesh(fatpad_mesh, resample_clusters_final, units, output_path):
+    """
+    Resample, clean, convert units, and optionally save the fatpad mesh.
+    
+    Args:
+        fatpad_mesh: Filtered fatpad mesh
+        resample_clusters_final: Number of clusters for final resampling
+        units: 'm' or 'mm' - desired output units
+        output_path: Optional path to save the mesh
+        
+    Returns:
+        pymskt.mesh.Mesh: Final processed fatpad mesh
+    """
     print(f'Final resampling to {resample_clusters_final} clusters...')
-    fatpad.resample_surface(clusters=resample_clusters_final)
+    fatpad_mesh.resample_surface(clusters=resample_clusters_final)
     
     print('Extracting largest component and cleaning...')
-    fatpad = fatpad.extract_largest()
-    fatpad = fatpad.clean()
+    fatpad_mesh = fatpad_mesh.extract_largest()
+    fatpad_mesh = fatpad_mesh.clean()
     
-    # Convert back to meters
+    # Convert back to meters if needed
     if units == 'm':
-        print('Converting meshes to meters...')
-        fatpad.points /= 1000
+        print('Converting mesh to meters...')
+        fatpad_mesh.points /= 1000
     elif units == 'mm':
         pass
     
     # Save if output path is provided
     if output_path is not None:
         print(f'Saving to: {output_path}')
-        fatpad.save(output_path)
+        fatpad_mesh.save(output_path)
+    
+    return fatpad_mesh
+
+
+def create_prefemoral_fatpad_contact_mesh(
+    femur_bone_mesh,
+    femur_cart_mesh,
+    patella_bone_mesh,
+    patella_cart_mesh,
+    initial_bone_dilation_mm: float = 0.6,
+    bone_region_dilation_mm: float = 4.0,
+    patella_dilation_mm: float = 0.3,
+    max_distance_to_patella_mm: float = 30.0,
+    resample_clusters_final: int = 2_000,
+    output_path: str = None,
+    percent_fem_cart_to_keep: float = 0.15,
+    dilation_axis_filter: callable = lambda pts: pts[:, 0] > np.mean(pts[:, 0]),
+    units='m'
+):
+    """
+    Creates a prefemoral fatpad mesh by dilating and combining bone/cartilage meshes,
+    then subtracting the patella geometry and filtering by distance.
+    
+    This function creates the prefemoral fatpad superior to the trochlea and posterior to the patella by:
+    1. Dilating the femur bone mesh slightly along surface normals
+    2. Performing a boolean union with the femur cartilage mesh
+    3. Resampling the combined surface
+    4. Labeling vertices as bone or cartilage based on proximity
+    5. Further dilating bone-labeled vertices
+    6. Dilating the patella bone and combining with patella cartilage
+    7. Subtracting the combined patella from the femur mesh
+    8. Keeping only points within specified distance to patella
+    9. Final resampling and cleanup
+    
+    Args:
+        femur_bone_mesh: Femur bone mesh (pymskt.mesh.Mesh, pyvista.PolyData, or path)
+        femur_cart_mesh: Femur cartilage mesh (pymskt.mesh.Mesh, pyvista.PolyData, or path)
+        patella_bone_mesh: Patella bone mesh (pymskt.mesh.Mesh, pyvista.PolyData, or path)
+        patella_cart_mesh: Patella cartilage mesh (pymskt.mesh.Mesh, pyvista.PolyData, or path)
+        initial_bone_dilation_mm: Initial dilation of bone in mm (default: 0.6)
+        bone_region_dilation_mm: Additional dilation of bone region in mm (default: 4.0)
+        patella_dilation_mm: Dilation of patella bone in mm (default: 0.3)
+        max_distance_to_patella_mm: Maximum distance to patella to keep points (default: 30.0)
+        resample_clusters_final: Number of clusters for final resampling (default: 2,000)
+        output_path: Optional path to save the result (default: None)
+        percent_fem_cart_to_keep: Percentage of femur cartilage height to keep (default: 0.15)
+        dilation_axis_filter: Filter function for dilation axis (default: anterior half)
+        units: Units of input meshes - 'm' or 'mm' (default: 'm')
+    
+    Returns:
+        pymskt.mesh.Mesh: The processed prefemoral fatpad mesh with patella subtracted
+    
+    Notes:
+        Input meshes are assumed to be in meters (OpenSim standard) by default.
+        Processing is done in mm for better numerical stability.
+    """
+    # Step 1: Prepare input meshes
+    femur_bone_mesh, femur_cart_mesh, patella_bone_mesh, patella_cart_mesh = _prepare_fatpad_input_meshes(
+        femur_bone_mesh, femur_cart_mesh, patella_bone_mesh, patella_cart_mesh, units
+    )
+    
+    # Step 2: Create extended femur mesh
+    combined_bone_extended = _create_extended_femur_mesh(
+        femur_bone_mesh, femur_cart_mesh, initial_bone_dilation_mm, 
+        bone_region_dilation_mm, dilation_axis_filter
+    )
+    
+    # Step 3: Create combined patella mesh
+    combined_patella = _create_combined_patella_mesh(
+        patella_bone_mesh, patella_dilation_mm, patella_cart_mesh
+    )
+    
+    # Step 4: Subtract patella from femur and analyze
+    subtracted_mesh = _subtract_and_analyze_meshes(combined_bone_extended, combined_patella)
+    
+    # Step 5: Filter fatpad points
+    fatpad = _filter_fatpad_points(
+        subtracted_mesh, femur_cart_mesh, max_distance_to_patella_mm, percent_fem_cart_to_keep
+    )
+    
+    # Step 6: Finalize fatpad mesh
+    fatpad = _finalize_fatpad_mesh(fatpad, resample_clusters_final, units, output_path)
     
     print('Prefemoral fatpad mesh with patella subtraction created successfully')
     return fatpad
