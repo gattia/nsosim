@@ -835,10 +835,361 @@ def create_prefemoral_fatpad_contact_mesh(
     )
     
     # Step 6: Finalize fatpad mesh
-    fatpad = _finalize_fatpad_mesh(fatpad, resample_clusters_final, units, output_path)
+    fatpad = _finalize_fatpad_mesh(fatpad, resample_clusters_final, units, final_smooth_iter=100, output_path=output_path)
     
     logger.info('Prefemoral fatpad mesh with patella subtraction created successfully')
     return fatpad
+
+
+def _forward_clearance_to_targets(
+    source_mesh: Mesh,
+    targets: list,  # [patella_bone_mesh, patella_cart_mesh]
+    ray_cast_length: float = 6.0,
+    safety_mm: float = 0.0,
+) -> np.ndarray:
+    """
+    For each vertex, compute forward ray-cast distance to targets.
+    Returns minimum clearance minus safety margin.
+    
+    Args:
+        source_mesh: Source mesh to compute clearance from
+        targets: List of target meshes (e.g., patella bone and cartilage)
+        ray_cast_length: Length of ray to cast (in mm)
+        safety_mm: Safety margin to subtract from clearance
+        
+    Returns:
+        np.ndarray: Per-vertex minimum clearance to any target (minus safety)
+    """
+    if not isinstance(source_mesh, Mesh):
+        source_mesh = Mesh(source_mesh)
+    
+    source_mesh.compute_normals(inplace=True, auto_orient_normals=True, consistent_normals=True)
+    
+    clearances = []
+    for i, tgt in enumerate(targets):
+        source_mesh.calc_distance_to_other_mesh(
+            list_other_meshes=[tgt],
+            ray_cast_length=ray_cast_length,
+            percent_ray_length_opposite_direction=0.1,
+            name=f'clear_{i}'
+        )
+        d = source_mesh.get_scalar(f'clear_{i}')
+        d = np.where(d > 0, d, np.inf)  # no-hit = infinite clearance
+        clearances.append(d)
+    
+    min_clear = np.min(np.vstack(clearances), axis=0)
+    min_clear = np.clip(min_clear - safety_mm, a_min=0.0, a_max=None)
+    return min_clear
+
+
+def _y_profile_mm(
+    mesh: pv.PolyData,
+    base_mm: float = 0.8,
+    top_mm: float = 5.5,
+    scale_axis: int = 1,
+    reference_mesh: pv.PolyData = None,
+    reference_axis_filter=lambda pts: pts[:, 0] > np.mean(pts[:, 0]),
+    scale_percentile: float = 95.0,
+    norm_function: str = 'log'
+) -> np.ndarray:
+    """
+    Compute per-vertex dilation target profile: base_mm at bottom → top_mm at top.
+    
+    Args:
+        mesh: Input mesh to compute profile for
+        base_mm: Minimum dilation at bottom (mm)
+        top_mm: Maximum dilation at top (mm)
+        scale_axis: Axis index (0=x, 1=y, 2=z) for vertical scaling
+        reference_mesh: Optional reference mesh for threshold calculation
+        reference_axis_filter: Function to filter reference points
+        scale_percentile: Percentile threshold for scaling start
+        norm_function: Scaling function ('linear', 'pow', 'exp', 'log')
+        
+    Returns:
+        np.ndarray: Per-vertex target dilation in mm
+    """
+    pts = mesh.points
+    ref_pts = reference_mesh.points if reference_mesh is not None else pts
+    
+    if reference_axis_filter is not None:
+        mask = reference_axis_filter(ref_pts)
+        ref_axis_vals = ref_pts[mask, scale_axis]
+    else:
+        ref_axis_vals = ref_pts[:, scale_axis]
+    
+    if ref_axis_vals.size == 0:
+        ref_axis_vals = ref_pts[:, scale_axis]
+    
+    threshold = np.percentile(ref_axis_vals, scale_percentile)
+    axis_vals = pts[:, scale_axis]
+    max_axis = np.max(axis_vals)
+    
+    prof = np.full(mesh.n_points, base_mm, dtype=float)
+    above = axis_vals > threshold
+    
+    if not np.any(above) or max_axis <= threshold:
+        return prof
+    
+    t = (axis_vals[above] - threshold) / (max_axis - threshold)
+    t = np.clip(t, 0.0, 1.0)
+    
+    # Apply non-linear scaling (same as existing dilate_mesh)
+    if norm_function == 'linear':
+        y = t
+    elif norm_function == 'pow':
+        y = t**2.0
+    elif norm_function == 'exp':
+        k = 5.0
+        y = np.expm1(k*t) / np.expm1(k)
+    elif norm_function == 'log':
+        k = 9.0
+        y = np.log1p(k*t) / np.log1p(k)
+    else:
+        y = t
+    
+    prof[above] = base_mm + (top_mm - base_mm) * y
+    return prof
+
+
+def dilate_mesh_with_profile_and_clearance(
+    femur_bone_mesh,
+    patella_bone_mesh,
+    patella_cart_mesh,
+    base_mm: float = 0.8,
+    top_mm: float = 6.0,
+    scale_axis: int = 1,
+    reference_mesh = None,
+    reference_axis_filter=lambda pts: pts[:, 0] > np.mean(pts[:, 0]),
+    scale_percentile: float = 95.0,
+    norm_function: str = 'log',
+    ray_cast_length: float = 6.0,
+    safety_mm: float = 0.0,
+    mask = None,
+):
+    """
+    Dilate femur bone limited by both y-profile and clearance to patella.
+    
+    This function computes a per-vertex dilation that is constrained by:
+    1. A vertical profile (increasing from base_mm to top_mm)
+    2. Forward clearance to patella structures (preventing penetration)
+    
+    Args:
+        femur_bone_mesh: Femur bone mesh to dilate
+        patella_bone_mesh: Patella bone mesh (clearance constraint)
+        patella_cart_mesh: Patella cartilage mesh (clearance constraint)
+        base_mm: Minimum dilation at bottom (mm)
+        top_mm: Maximum dilation at top (mm)
+        scale_axis: Axis for vertical scaling (0=x, 1=y, 2=z)
+        reference_mesh: Reference mesh for profile calculation
+        reference_axis_filter: Filter function for reference mesh
+        scale_percentile: Percentile threshold for scaling
+        norm_function: Scaling function type
+        ray_cast_length: Ray length for clearance calculation
+        safety_mm: Safety margin to maintain from patella
+        mask: Optional boolean mask to restrict dilation
+        
+    Returns:
+        tuple: (dilated_mesh, per_vertex_dilation_mm)
+    """
+    if not isinstance(femur_bone_mesh, Mesh):
+        femur_bone_mesh = Mesh(femur_bone_mesh)
+    
+    # 1. Compute target dilation profile based on y-position
+    target_profile = _y_profile_mm(
+        femur_bone_mesh, base_mm, top_mm,
+        scale_axis=scale_axis,
+        reference_mesh=reference_mesh,
+        reference_axis_filter=reference_axis_filter,
+        scale_percentile=scale_percentile,
+        norm_function=norm_function
+    )
+    
+    # 2. Compute forward clearance to patella
+    clearance = _forward_clearance_to_targets(
+        source_mesh=femur_bone_mesh,
+        targets=[patella_bone_mesh, patella_cart_mesh],
+        ray_cast_length=ray_cast_length,
+        safety_mm=safety_mm
+    )
+    
+    # 3. Actual dilation = min(profile, clearance)
+    actual = np.minimum(target_profile, clearance)
+    
+    # 4. Apply optional mask
+    if mask is not None:
+        if mask.ndim > 1:
+            mask = mask.ravel()
+        actual = np.where(mask, actual, 0.0)
+    
+    # 5. Dilate along normals
+    femur_bone_mesh.compute_normals(inplace=True, auto_orient_normals=True, consistent_normals=True)
+    pts = femur_bone_mesh.points.copy()
+    nrm = femur_bone_mesh.point_normals
+    pts_new = pts + (actual[:, None] * nrm)
+    
+    out = femur_bone_mesh.copy()
+    out.points = pts_new
+    return out, actual
+
+
+def create_prefemoral_fatpad_noboolean(
+    femur_bone_mesh,
+    femur_cart_mesh,
+    patella_bone_mesh,
+    patella_cart_mesh,
+    base_mm: float = 0.5,
+    top_mm: float = 6.0,
+    max_distance_to_patella_mm: float = 30.0,
+    percent_fem_cart_to_keep: float = 0.15,
+    resample_clusters_final: int = 2000,
+    output_path: str = None,
+    units: str = 'm',
+    ray_cast_length: float = 6.0,
+    safety_mm: float = 0.0,
+    norm_function: str = 'log',
+    final_smooth_iter: int = 100
+):
+    """
+    Creates a prefemoral fatpad mesh using clearance-limited dilation (no boolean operations).
+    
+    This is an alternative to create_prefemoral_fatpad_contact_mesh that avoids boolean
+    operations by using ray-cast clearance to limit dilation. The approach:
+    1. Extracts exposed femur bone surface (not covered by cartilage)
+    2. Applies progressive dilation (base_mm → top_mm) limited by clearance to patella
+    3. Filters to anterior/superior region near patella
+    4. Resamples and smooths the result
+    
+    Advantages over boolean approach:
+    - More numerically stable (no watertight mesh requirements)
+    - Faster computation
+    - More direct control over dilation profile
+    - Avoids boolean operation failures
+    
+    Args:
+        femur_bone_mesh: Femur bone mesh (pymskt.mesh.Mesh, pyvista.PolyData, or path)
+        femur_cart_mesh: Femur cartilage mesh (pymskt.mesh.Mesh, pyvista.PolyData, or path)
+        patella_bone_mesh: Patella bone mesh (pymskt.mesh.Mesh, pyvista.PolyData, or path)
+        patella_cart_mesh: Patella cartilage mesh (pymskt.mesh.Mesh, pyvista.PolyData, or path)
+        base_mm: Minimum dilation at inferior edge (default: 0.5 mm)
+        top_mm: Maximum dilation at superior edge (default: 6.0 mm)
+        max_distance_to_patella_mm: Maximum distance to patella to keep points (default: 30.0 mm)
+        percent_fem_cart_to_keep: Percentage of femur cartilage height to keep (default: 0.15)
+        resample_clusters_final: Number of clusters for final resampling (default: 2,000)
+        output_path: Optional path to save the result (default: None)
+        units: Units of input meshes - 'm' or 'mm' (default: 'm')
+        ray_cast_length: Ray length for clearance calculation (default: 6.0 mm)
+        safety_mm: Safety margin from patella (default: 0.0 mm)
+        norm_function: Dilation scaling function - 'linear', 'pow', 'exp', 'log' (default: 'log')
+        final_smooth_iter: Final smoothing iterations (default: 100)
+    
+    Returns:
+        pymskt.mesh.Mesh: The processed prefemoral fatpad mesh
+    
+    Notes:
+        Input meshes are assumed to be in meters (OpenSim standard) by default.
+        Processing is done in mm for better numerical stability.
+    """
+    # Step 0: Prep & convert to mm
+    femur_bone_mesh, femur_cart_mesh, patella_bone_mesh, patella_cart_mesh = \
+        _prepare_fatpad_input_meshes(
+            femur_bone_mesh, femur_cart_mesh, 
+            patella_bone_mesh, patella_cart_mesh, 
+            units
+        )
+    
+    # Step 1: Pre-process for reliable normals/topology
+    logger.info('Cleaning and orienting meshes...')
+    femur_bone_mesh = femur_bone_mesh.clean()
+    femur_cart_mesh = femur_cart_mesh.clean()
+    patella_bone_mesh = patella_bone_mesh.clean()
+    patella_cart_mesh = patella_cart_mesh.clean()
+    
+    # Ensure consistent normals BEFORE any ray operations
+    for mesh in [femur_bone_mesh, femur_cart_mesh, patella_bone_mesh, patella_cart_mesh]:
+        mesh.compute_normals(inplace=True, auto_orient_normals=True, consistent_normals=True)
+    
+    # Step 2: Extract exposed bone edge (not covered by cartilage)
+    logger.info('Extracting exposed bone edge (removing cartilage-covered regions)...')
+    femur_bone_mskt = Mesh(femur_bone_mesh) if not isinstance(femur_bone_mesh, Mesh) else femur_bone_mesh
+    
+    femur_bone_mskt.calc_distance_to_other_mesh(
+        femur_cart_mesh,
+        ray_cast_length=10.0,  # short ray just to detect cartilage
+        percent_ray_length_opposite_direction=0.1,
+        name='cart_coverage'
+    )
+    
+    cart_coverage = femur_bone_mskt.get_scalar('cart_coverage')
+    exposed_bone_mask = cart_coverage == 0  # no cartilage coverage
+    
+    # Also filter to anterior region immediately
+    anterior_mask = femur_bone_mskt.points[:, 0] > np.mean(femur_bone_mskt.points[:, 0])
+    combined_mask = exposed_bone_mask & anterior_mask
+    
+    logger.info(f'Exposed bone points: {np.sum(exposed_bone_mask)} / {len(exposed_bone_mask)}')
+    logger.info(f'Anterior+exposed: {np.sum(combined_mask)} / {len(combined_mask)}')
+    
+    starting_surface = femur_bone_mskt.remove_points(~combined_mask)[0]
+    starting_surface = Mesh(starting_surface).clean()
+    
+    # Step 3: Clearance-limited dilation
+    logger.info('Applying clearance-limited dilation...')
+    fatpad_dilated, per_vertex_mm = dilate_mesh_with_profile_and_clearance(
+        femur_bone_mesh=starting_surface,
+        patella_bone_mesh=patella_bone_mesh,
+        patella_cart_mesh=patella_cart_mesh,
+        base_mm=base_mm,
+        top_mm=top_mm,
+        scale_axis=1,
+        reference_mesh=femur_cart_mesh,
+        reference_axis_filter=lambda pts: pts[:, 0] > np.mean(pts[:, 0]),
+        scale_percentile=95.0,
+        norm_function=norm_function,
+        ray_cast_length=ray_cast_length,
+        safety_mm=safety_mm,
+        mask=None  # already filtered to anterior+exposed
+    )
+    
+    fatpad_dilated.point_data['offset_mm'] = per_vertex_mm
+    
+    # Step 4: Filter by proximity to patella and vertical position
+    logger.info('Filtering fatpad region...')
+    
+    # Distance to patella (min of bone and cart)
+    pat_b_mskt = Mesh(patella_bone_mesh)
+    pat_c_mskt = Mesh(patella_cart_mesh)
+    sdf_b = pat_b_mskt.get_sdf_pts(fatpad_dilated.points)
+    sdf_c = pat_c_mskt.get_sdf_pts(fatpad_dilated.points)
+    d_patella = np.minimum(np.abs(sdf_b), np.abs(sdf_c))
+    
+    # Vertical threshold
+    fem_cart_anterior_y = femur_cart_mesh.points[
+        femur_cart_mesh.points[:, 0] > np.mean(femur_cart_mesh.points[:, 0]), 1
+    ]
+    y_thresh = np.percentile(fem_cart_anterior_y, (1 - percent_fem_cart_to_keep) * 100)
+    
+    keep_radial = d_patella < max_distance_to_patella_mm
+    keep_vertical = fatpad_dilated.points[:, 1] > y_thresh
+    keep = keep_radial & keep_vertical
+    
+    logger.info(f'Points passing radial filter: {np.sum(keep_radial)} / {len(keep_radial)}')
+    logger.info(f'Points passing vertical filter: {np.sum(keep_vertical)} / {len(keep_vertical)}')
+    logger.info(f'Points passing both: {np.sum(keep)} / {len(keep)}')
+    
+    if np.sum(keep) == 0:
+        raise ValueError("All points filtered out. Adjust thresholds.")
+    
+    fatpad_dilated.point_data['keep'] = keep.astype(float)
+    fatpad = fatpad_dilated.remove_points(~keep)[0]
+    fatpad = Mesh(fatpad)
+    
+    # Step 5: Finalize
+    logger.info(f'Final resampling to {resample_clusters_final} clusters...')
+    fatpad = _finalize_fatpad_mesh(fatpad, resample_clusters_final, units, final_smooth_iter, output_path)
+    
+    logger.info('Prefemoral fatpad (no-boolean) created successfully')
+    return fatpad
+
 
 def optimize_patella_position(
     pat_articular_surfaces,
