@@ -8,6 +8,9 @@ from pymskt.mesh.meshCartilage import (
     extract_articular_surface
 )
 import gc
+import logging
+
+logger = logging.getLogger(__name__)
 
 def extract_meniscus_articulating_surface(
     meniscus_mesh: pv.PolyData,
@@ -117,10 +120,10 @@ def create_meniscus_articulating_surface(
         downsample_factor = current_density/triangle_density
         meniscus_clusters = int(meniscus_mesh.point_coords.shape[0]/downsample_factor)
         
-        print(f'current density: {current_density/1_000_000} triangles/mm^2')
-        print(f'target density: {triangle_density/1_000_000} triangles/mm^2')
-        print(f'current number of points: {meniscus_mesh.point_coords.shape[0]}')
-        print(f'target number of points: {meniscus_clusters}')
+        logger.info(f'current density: {current_density/1_000_000} triangles/mm^2')
+        logger.info(f'target density: {triangle_density/1_000_000} triangles/mm^2')
+        logger.info(f'current number of points: {meniscus_mesh.point_coords.shape[0]}')
+        logger.info(f'target number of points: {meniscus_clusters}')
         
     # convert meshes to mm (instead of meters)
     meniscus_mesh_ = meniscus_mesh.copy()
@@ -135,7 +138,7 @@ def create_meniscus_articulating_surface(
         meniscus_mesh_.resample_surface(subdivisions=1, clusters=meniscus_clusters)
         # density after resampling
         updated_density = meniscus_mesh_.mesh.n_cells/meniscus_mesh_.mesh.area
-        print(f'achieved density: {updated_density/1_000_000} triangles/mm^2')
+        logger.info(f'achieved density: {updated_density/1_000_000} triangles/mm^2')
     
     # resample bones if specified
     if upper_articulating_bone_clusters is not None:
@@ -228,13 +231,13 @@ def create_articular_surfaces(
         # calculate target number of points
         cart_clusters = int(cart_mesh_osim.point_coords.shape[0]/downsample_factor)
 
-        print(f'current density: {current_density/1_000_000} triangles/mm^2')
-        print(f'target density: {triangle_density/1_000_000} triangles/mm^2')
-        print(f'current number of points: {cart_mesh_osim.point_coords.shape[0]}')
-        print(f'target number of points: {cart_clusters}')
+        logger.info(f'current density: {current_density/1_000_000} triangles/mm^2')
+        logger.info(f'target density: {triangle_density/1_000_000} triangles/mm^2')
+        logger.info(f'current number of points: {cart_mesh_osim.point_coords.shape[0]}')
+        logger.info(f'target number of points: {cart_clusters}')
 
     # resample bone surface to be 10k points to reduce computation time
-    print('resampling femur surface')
+    logger.info('resampling femur surface')
     bone_mesh_osim_ = bone_mesh_osim.copy()
     bone_mesh_osim_.point_coords = bone_mesh_osim_.point_coords * 1000
     if bone_clusters is not None:
@@ -242,7 +245,7 @@ def create_articular_surfaces(
     bone_mesh_osim_ = BoneMesh(bone_mesh_osim_)
 
     # assign cartilage to bone
-    print('resample cartilage surface')
+    logger.info('resample cartilage surface')
     cart_mesh_osim_ = cart_mesh_osim.copy()
     cart_mesh_osim_.point_coords = cart_mesh_osim_.point_coords * 1000
     if cart_clusters is not None:
@@ -252,13 +255,13 @@ def create_articular_surfaces(
         cart_mesh_osim_.resample_surface(subdivisions=1, clusters=cart_clusters)
         # density after resampling
         updated_density = cart_mesh_osim_.mesh.n_cells/cart_mesh_osim_.mesh.area
-        print(f'achieved density: {updated_density/1_000_000} triangles/mm^2')
+        logger.info(f'achieved density: {updated_density/1_000_000} triangles/mm^2')
     cart_mesh_osim_.compute_normals(point_normals=True, cell_normals=False, auto_orient_normals=True, inplace=True)
     bone_mesh_osim_.list_cartilage_meshes = [CartilageMesh(cart_mesh_osim_)]
     
 
     # extract articular surface
-    print('extracting articular surface')
+    logger.info('extracting articular surface')
     articular_surfaces = extract_articular_surface(
         bone_mesh_osim_, 
         ray_length=ray_length, 
@@ -454,28 +457,28 @@ def label_vertices_as_bone_or_cartilage(mesh, bone_mesh, cart_mesh):
     """
     
     """
-    print('Computing normals...')
+    logger.info('Computing normals...')
     mesh.compute_normals(inplace=True, auto_orient_normals=True, consistent_normals=True)
     bone_mesh.compute_normals(inplace=True, auto_orient_normals=True, consistent_normals=True)
     cart_mesh.compute_normals(inplace=True, auto_orient_normals=True, consistent_normals=True)
-    print('Finding closest bone and cartilage points...')
+    logger.info('Finding closest bone and cartilage points...')
     # For each point on combined, compute closest distance to bone and cartilage
-    print('Finding closest bone points...')
+    logger.info('Finding closest bone points...')
     if not isinstance(bone_mesh, Mesh):
         bone_mesh = Mesh(bone_mesh)
     if not isinstance(cart_mesh, Mesh):
         cart_mesh = Mesh(cart_mesh)
     
-    print('getting cart sdf')
+    logger.info('getting cart sdf')
     cart_mesh.point_coords = cart_mesh.point_coords.astype(float)
     d_cart = cart_mesh.get_sdf_pts(mesh.points.astype(float))
     
-    print('getting bone sdf')
+    logger.info('getting bone sdf')
     bone_mesh.point_coords = bone_mesh.point_coords.astype(float)
     d_bone = bone_mesh.get_sdf_pts(mesh.points.astype(float))
     
     
-    print('Labeling bone/cartilage distances')
+    logger.info('Labeling bone/cartilage distances')
     # Create arrays in combined.point_data
     mesh.point_data["d_bone"] = d_bone
     mesh.point_data["d_cart"] = d_cart
@@ -517,13 +520,13 @@ def _prepare_fatpad_input_meshes(femur_bone_mesh, femur_cart_mesh, patella_bone_
     
     # Convert to mm if needed
     if units == 'm':
-        print('Converting meshes to mm...')
+        logger.info('Converting meshes to mm...')
         femur_bone_mesh.points *= 1000
         femur_cart_mesh.points *= 1000
         patella_cart_mesh.points *= 1000
         patella_bone_mesh.points *= 1000
     elif units == 'mm':
-        print('Meshes are already in mm...')
+        logger.info('Meshes are already in mm...')
     else:
         raise ValueError(f'Invalid units: {units}, expected "m" or "mm"')
     
@@ -545,25 +548,25 @@ def _create_extended_femur_mesh(femur_bone_mesh, femur_cart_mesh, initial_bone_d
     Returns:
         pyvista.PolyData: Extended femur mesh with bone region dilated
     """
-    print(f'Initial bone dilation: {initial_bone_dilation_mm} mm')
+    logger.info(f'Initial bone dilation: {initial_bone_dilation_mm} mm')
     femur_bone_scaled = dilate_mesh(femur_bone_mesh, initial_bone_dilation_mm)
     
-    print('Performing boolean union of femur bone and cartilage...', flush=True)   
+    logger.info('Performing boolean union of femur bone and cartilage...')   
     try:
         if not isinstance(femur_bone_scaled, Mesh):
-            print('Converting femur_bone_scaled to Mesh...')
+            logger.info('Converting femur_bone_scaled to Mesh...')
             femur_bone_scaled = Mesh(femur_bone_scaled)
         combined = femur_bone_scaled.boolean_union(femur_cart_mesh)
-        print('Union done', flush=True)
+        logger.info('Union done')
     except Exception as e:
-        print(f"Boolean union of femur bone and cartilage failed with error: {e}")
-        print("This may indicate meshes have incompatible geometry or degenerate triangles.")
+        logger.error(f"Boolean union of femur bone and cartilage failed with error: {e}")
+        logger.error("This may indicate meshes have incompatible geometry or degenerate triangles.")
         raise
     
-    print('Labeling vertices as bone or cartilage...', flush=True)
+    logger.info('Labeling vertices as bone or cartilage...')
     combined = label_vertices_as_bone_or_cartilage(combined, femur_bone_mesh, femur_cart_mesh)
     
-    print(f'Dilating bone region by {bone_region_dilation_mm} mm...')
+    logger.info(f'Dilating bone region by {bone_region_dilation_mm} mm...')
     combined_bone_extended = dilate_mesh(
         mesh=combined, 
         dilation_mm=bone_region_dilation_mm, 
@@ -589,11 +592,11 @@ def _create_combined_patella_mesh(patella_bone_mesh, patella_dilation_mm, patell
     Returns:
         pyvista.PolyData: Combined patella mesh (bone + cartilage)
     """
-    print('Processing patella meshes...')       
-    print(f'Dilating patella bone by {patella_dilation_mm} mm...')
+    logger.info('Processing patella meshes...')       
+    logger.info(f'Dilating patella bone by {patella_dilation_mm} mm...')
     patella_bone_extended = dilate_mesh(patella_bone_mesh, patella_dilation_mm)
     
-    print('Boolean union of patella bone and cartilage...')
+    logger.info('Boolean union of patella bone and cartilage...')
     if not isinstance(patella_bone_extended, Mesh):
         patella_bone_extended = Mesh(patella_bone_extended)
     combined_patella = patella_bone_extended.boolean_union(patella_cart_mesh)
@@ -612,15 +615,15 @@ def _subtract_and_analyze_meshes(combined_bone_extended, combined_patella):
     Returns:
         pymskt.mesh.Mesh: Subtracted mesh with distance fields and labels
     """
-    print('Subtracting patella from femur mesh...')
+    logger.info('Subtracting patella from femur mesh...')
     try:
         if not isinstance(combined_bone_extended, Mesh):
-            print('Converting combined_bone_extended to Mesh...')
+            logger.info('Converting combined_bone_extended to Mesh...')
             combined_bone_extended = Mesh(combined_bone_extended)
         subtracted = combined_bone_extended.boolean_difference(combined_patella)
     except Exception as e:
-        print(f"Boolean difference failed with error: {e}")
-        print("This may indicate meshes don't overlap or have incompatible geometry.")
+        logger.error(f"Boolean difference failed with error: {e}")
+        logger.error("This may indicate meshes don't overlap or have incompatible geometry.")
         raise
     
     # Check if subtraction resulted in valid mesh
@@ -630,7 +633,7 @@ def _subtract_and_analyze_meshes(combined_bone_extended, combined_patella):
         raise ValueError("Boolean difference resulted in empty mesh. Meshes may not overlap properly.")
     subtracted_mskt = Mesh(subtracted)
     
-    print('Computing signed distance field to patella...')
+    logger.info('Computing signed distance field to patella...')
     combined_patella_mskt = Mesh(combined_patella)
     sdfs_patella_combined = combined_patella_mskt.get_sdf_pts(subtracted_mskt.points)
     subtracted_mskt.point_data['sdf_patella_combined'] = sdfs_patella_combined
@@ -665,7 +668,7 @@ def _filter_fatpad_points(subtracted_mesh, femur_cart_mesh, max_distance_to_pate
     Returns:
         pymskt.mesh.Mesh: Filtered fatpad mesh
     """
-    print(f'Filtering points within {max_distance_to_patella_mm} mm of patella...')
+    logger.info(f'Filtering points within {max_distance_to_patella_mm} mm of patella...')
     
     # Keep if: is_patella == 1 OR is_bone == 1
     keep_surface = np.maximum(
@@ -689,7 +692,27 @@ def _filter_fatpad_points(subtracted_mesh, femur_cart_mesh, max_distance_to_pate
     subtracted_mesh.point_data["keep"] = keep.astype(float)
     subtracted_mesh = subtracted_mesh.triangulate().clean()
     
-    print('Removing filtered points...')
+    # Add diagnostic information
+    n_total = len(keep)
+    n_keep = np.sum(keep)
+    logger.info(f'Filtering diagnostics:')
+    logger.info(f'  - Total points: {n_total}')
+    logger.info(f'  - Points passing surface filter: {np.sum(keep_surface)}')
+    logger.info(f'  - Points passing radial filter: {np.sum(keep_radial)}')
+    logger.info(f'  - Points passing vertical filter: {np.sum(keep_vertical)}')
+    logger.info(f'  - Points passing all filters: {n_keep}')
+
+    # Check if any points remain
+    if n_keep == 0:
+        raise ValueError(
+            f"All points filtered out! No fatpad mesh can be created.\n"
+            f"Consider adjusting parameters:\n"
+            f"  - max_distance_to_patella_mm (current: {max_distance_to_patella_mm})\n"
+            f"  - percent_fem_cart_to_keep (current: {percent_fem_cart_to_keep})\n"
+            f"  - y_percentile_threshold (computed: {y_percentile_threshold:.2f})"
+        )
+    
+    logger.info('Removing filtered points...')
     fatpad = subtracted_mesh.remove_points(subtracted_mesh.point_data['keep'] == 0)[0]
     fatpad = Mesh(fatpad)
     
@@ -709,23 +732,23 @@ def _finalize_fatpad_mesh(fatpad_mesh, resample_clusters_final, units, output_pa
     Returns:
         pymskt.mesh.Mesh: Final processed fatpad mesh
     """
-    print(f'Final resampling to {resample_clusters_final} clusters...')
+    logger.info(f'Final resampling to {resample_clusters_final} clusters...')
     fatpad_mesh.resample_surface(clusters=resample_clusters_final)
     
-    print('Extracting largest component and cleaning...')
+    logger.info('Extracting largest component and cleaning...')
     fatpad_mesh = fatpad_mesh.extract_largest()
     fatpad_mesh = fatpad_mesh.clean()
     
     # Convert back to meters if needed
     if units == 'm':
-        print('Converting mesh to meters...')
+        logger.info('Converting mesh to meters...')
         fatpad_mesh.points /= 1000
     elif units == 'mm':
         pass
     
     # Save if output path is provided
     if output_path is not None:
-        print(f'Saving to: {output_path}')
+        logger.info(f'Saving to: {output_path}')
         fatpad_mesh.save(output_path)
     
     return fatpad_mesh
@@ -810,7 +833,7 @@ def create_prefemoral_fatpad_contact_mesh(
     # Step 6: Finalize fatpad mesh
     fatpad = _finalize_fatpad_mesh(fatpad, resample_clusters_final, units, output_path)
     
-    print('Prefemoral fatpad mesh with patella subtraction created successfully')
+    logger.info('Prefemoral fatpad mesh with patella subtraction created successfully')
     return fatpad
 
 def optimize_patella_position(
@@ -881,10 +904,10 @@ def optimize_patella_position(
 
     percent_non_zero, vert_overlap, total_vert, percent_vert_overlap = compute_overlap_metrics(pat_articular_surfaces, fem_articular_surfaces)
 
-    print(f'Percent of patella cartilage that is not overlapping with femoral cartilage: {percent_non_zero:.2f}%')
-    print(f'Percent vertical overlap: {percent_vert_overlap:.2f}%')
-    print(f'Vertical overlap: {vert_overlap*100:.2f} cm')
-    print(f'Total vertical: {total_vert*100:.2f} cm')
+    logger.info(f'Percent of patella cartilage that is not overlapping with femoral cartilage: {percent_non_zero:.2f}%')
+    logger.info(f'Percent vertical overlap: {percent_vert_overlap:.2f}%')
+    logger.info(f'Vertical overlap: {vert_overlap*100:.2f} cm')
+    logger.info(f'Total vertical: {total_vert*100:.2f} cm')
 
     # if the vertical overlap is less than 40%, then move the patella down
     # by the amount necessary to increase the overlap to 40%
@@ -893,7 +916,7 @@ def optimize_patella_position(
     move_down_contact_area = np.asarray([0., 0., 0.])
     if patella_adjust_rel_vert_overlap is not None:
         if percent_vert_overlap < patella_adjust_rel_vert_overlap: #0.4
-            print('Adjusting patella position - % vertical overlap to be 40%')
+            logger.info('Adjusting patella position - % vertical overlap to be 40%')
             move_down_rel_vert = (40 - percent_vert_overlap) * total_vert
             pat_articular_surfaces.point_coords[:, 1] -= move_down_rel_vert
             pat_mesh_osim.point_coords[:, 1] -= move_down_rel_vert
@@ -901,7 +924,7 @@ def optimize_patella_position(
             pass
     if patella_adjust_abs_vert_overlap is not None:
         if vert_overlap < patella_adjust_abs_vert_overlap: #0.012
-            print('Adjusting patella position - vertical overlap to be 1.2 cm')
+            logger.info('Adjusting patella position - vertical overlap to be 1.2 cm')
             move_down_abs_vert = patella_adjust_abs_vert_overlap - vert_overlap #0.012
             pat_articular_surfaces.point_coords[:, 1] -= move_down_abs_vert
             pat_mesh_osim.point_coords[:, 1] -= move_down_abs_vert
@@ -909,8 +932,8 @@ def optimize_patella_position(
             pass
     if patella_adjust_contact_area is not None:
         while percent_non_zero < patella_adjust_contact_area: #0.2
-            print('Percent non-zero:', percent_non_zero)
-            print('Adjusting patella down 1mm')
+            logger.info(f'Percent non-zero: {percent_non_zero}')
+            logger.info('Adjusting patella down 1mm')
             pat_articular_surfaces.point_coords -= contact_area_adjustment
             pat_mesh_osim.point_coords -= contact_area_adjustment
             move_down_contact_area += contact_area_adjustment
