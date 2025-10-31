@@ -719,21 +719,25 @@ def _filter_fatpad_points(subtracted_mesh, femur_cart_mesh, max_distance_to_pate
     return fatpad
 
 
-def _finalize_fatpad_mesh(fatpad_mesh, resample_clusters_final, units, output_path):
+def _finalize_fatpad_mesh(fatpad_mesh, resample_clusters_final, units, final_smooth_iter=100, output_path=None):
     """
     Resample, clean, convert units, and optionally save the fatpad mesh.
     
     Args:
         fatpad_mesh: Filtered fatpad mesh
-        resample_clusters_final: Number of clusters for final resampling
         units: 'm' or 'mm' - desired output units
-        output_path: Optional path to save the mesh
+        final_smooth_iter: Number of smoothing iterations for final smoothing (default: 100)
+        resample_clusters_final: Number of clusters for final resampling (default: 2,000)
+        output_path: Optional path to save the mesh (default: None)
         
     Returns:
         pymskt.mesh.Mesh: Final processed fatpad mesh
     """
+    logger.info(f'Final smoothing with {final_smooth_iter} iterations...')
+    fatpad_mesh.smooth(n_iter=final_smooth_iter, boundary_smoothing=False, feature_smoothing=False, inplace=True)
+    
     logger.info(f'Final resampling to {resample_clusters_final} clusters...')
-    fatpad_mesh.resample_surface(clusters=resample_clusters_final)
+    fatpad_mesh.resample_surface(subdivisions=2, clusters=resample_clusters_final)
     
     logger.info('Extracting largest component and cleaning...')
     fatpad_mesh = fatpad_mesh.extract_largest()
