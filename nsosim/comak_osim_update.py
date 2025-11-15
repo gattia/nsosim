@@ -157,6 +157,7 @@ def update_osim_model(
     dict_body_geometries_update=DICT_BODY_GEOMETRIES_UPDATE,
     dict_contact_mesh_files_update=DICT_CONTACT_MESHFILES_UPDATE,
     dict_ligament_stiffness_update=None,
+    dict_joints_coords_to_update=None,
 ):
     """
     Updates an entire OpenSim model with new geometry and attachments.
@@ -193,9 +194,6 @@ def update_osim_model(
     # update the wrap objects for the model. 
     update_wrap_objects(model, dict_wrap_objects)
     
-    # update the wrap objects for the model. 
-    update_wrap_objects(model, dict_wrap_objects)
-    
     # update the model ligament & muscle attachments, and then 
     # update the slack lengths of them.
     update_model_attachments_slacks(
@@ -219,6 +217,12 @@ def update_osim_model(
         model,
         dict_patella_default_update
     )
+    
+    if dict_joints_coords_to_update is not None:
+        update_joint_default_values(
+            model,
+            dict_joints_coords_to_update
+        )
     
     if dict_ligament_stiffness_update is not None:
         # update the ligament stiffness

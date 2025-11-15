@@ -872,7 +872,8 @@ class CylinderFitter(BaseShapeFitter):
         axis = self._apply_random_axis_rotation(axis)
         
         # Construct rotation matrix from axis for local coordinate calculations
-        R0 = construct_cylinder_basis(axis)
+        # Use default +X alignment for consistent quadrant orientation
+        R0 = construct_cylinder_basis(axis, reference_x_axis=None)
         
         # Local coords & extents
         u_local = X @ R0
@@ -927,7 +928,8 @@ class CylinderFitter(BaseShapeFitter):
             
             # CRITICAL FIX: Verify and correct half_length based on actual points
             # Construct rotation matrix from axis for point projection
-            R = construct_cylinder_basis(axis_vector)
+            # Use default +X alignment for consistent quadrant orientation
+            R = construct_cylinder_basis(axis_vector, reference_x_axis=None)
             local_points = (points_tensor - center) @ R
             actual_z_extent = local_points[:, 2].abs().max()
             
@@ -1018,8 +1020,8 @@ class CylinderFitter(BaseShapeFitter):
         r = torch.exp(torch.clamp(log_r, max=10))  # Prevent overflow
         h = torch.exp(torch.clamp(log_h, max=10))
         
-        # Use the new axis vector parameterization
-        return sd_cylinder_with_axis(points, center, r, h, axis_vector)
+        # Use the new axis vector parameterization with consistent orientation
+        return sd_cylinder_with_axis(points, center, r, h, axis_vector, reference_x_axis=None)
     
     def _compute_shape_loss(self, sdf, labels, sdf_ground_truth, near_surface_points_tensor, margin, epoch):
         # Apply margin decay for coarse-to-fine optimization
@@ -1086,7 +1088,8 @@ class CylinderFitter(BaseShapeFitter):
         axis_normalized = axis_vector.detach() / (torch.norm(axis_vector.detach()) + 1e-8)
         
         # Construct rotation matrix from normalized axis for compatibility with existing code
-        R = construct_cylinder_basis(axis_normalized)
+        # Use default +X alignment for consistent quadrant orientation
+        R = construct_cylinder_basis(axis_normalized, reference_x_axis=None)
         
         return (center,
                 torch.stack([torch.exp(log_r), torch.exp(log_h)]),
@@ -1117,11 +1120,13 @@ class CylinderFitter(BaseShapeFitter):
         half_length = half_length.detach().cpu().numpy()
         rot_matrix = rot_matrix.detach().cpu().numpy()
         
-        # Apply sign convention fix to ensure deterministic Euler angles
-        rot_matrix_fixed = RotationUtils.enforce_sign_convention(rot_matrix)
+        # For cylinders, DON'T apply enforce_sign_convention!
+        # The rotation matrix from construct_cylinder_basis already has the correct
+        # deterministic orientation (X-axis aligned with global +X by default).
+        # Flipping columns would arbitrarily change the quadrant orientation.
         
-        # convert rot_matrix to xyz euler angles
-        xyz_body_rotation = RotationUtils.rot_to_euler_xyz_body(rot_matrix_fixed)
+        # convert rot_matrix to xyz euler angles directly
+        xyz_body_rotation = RotationUtils.rot_to_euler_xyz_body(rot_matrix)
         
         return wrap_surface(
             name=None,
@@ -1408,40 +1413,68 @@ class EllipsoidFitter(BaseShapeFitter):
         )
 
 # Add a new utility function to construct coordinate system from axis vector
-def construct_cylinder_basis(axis_vector):
-    """Construct orthonormal basis for cylinder with given axis direction.
-    
-    Args:
-        axis_vector: (3,) tensor representing cylinder axis direction (will be normalized)
-        
-    Returns:
-        torch.Tensor: (3, 3) rotation matrix where columns are [x_local, y_local, z_local]
-                     and z_local is aligned with the normalized axis_vector
+def construct_cylinder_basis(axis_vector, reference_x_axis=None, eps=1e-8):
     """
-    # Normalize the axis vector
-    axis = axis_vector / (torch.norm(axis_vector) + 1e-8)
-    
-    # Choose an arbitrary vector not parallel to axis for cross product
-    # Use the coordinate axis that is least aligned with our axis
-    abs_axis = torch.abs(axis)
-    if abs_axis[0] < abs_axis[1] and abs_axis[0] < abs_axis[2]:
-        up = torch.tensor([1.0, 0.0, 0.0], device=axis.device, dtype=axis.dtype)
-    elif abs_axis[1] < abs_axis[2]:
-        up = torch.tensor([0.0, 1.0, 0.0], device=axis.device, dtype=axis.dtype)
+    Construct orthonormal basis for a cylinder with given axis direction.
+
+    Args:
+        axis_vector: (3,) tensor, cylinder axis direction (need not be unit).
+        reference_x_axis: (3,) optional tensor for desired X-axis direction.
+            - If provided, x_local is as aligned as possible with this direction,
+              projected onto the plane perpendicular to axis.
+            - If None, we default to global +X [1,0,0] for consistency with
+              typical femur cylinder orientations (anterior = +X, M/L axis = +Z).
+              Falls back to +Y or +Z if axis is nearly parallel to +X.
+
+    Returns:
+        R: (3, 3) rotation matrix with columns [x_local, y_local, z_local]
+           expressed in global coordinates. Guaranteed right-handed and
+           with x_local consistently oriented toward reference direction.
+    """
+    # Normalize axis (z_local)
+    z_local = axis_vector / (torch.norm(axis_vector) + eps)
+
+    # Global canonical directions
+    ex = torch.tensor([1.0, 0.0, 0.0], device=z_local.device, dtype=z_local.dtype)
+    ey = torch.tensor([0.0, 1.0, 0.0], device=z_local.device, dtype=z_local.dtype)
+    ez = torch.tensor([0.0, 0.0, 1.0], device=z_local.device, dtype=z_local.dtype)
+
+    # 1) Choose a preferred direction for x
+    if reference_x_axis is None:
+        preferred = ex  # default: global +X (anatomical anterior for femur)
     else:
-        up = torch.tensor([0.0, 0.0, 1.0], device=axis.device, dtype=axis.dtype)
-    
-    # Construct orthonormal basis using Gram-Schmidt
-    z_local = axis  # Cylinder axis
-    x_local = up - torch.dot(up, z_local) * z_local
-    x_local = x_local / (torch.norm(x_local) + 1e-8)
+        preferred = reference_x_axis.to(device=z_local.device, dtype=z_local.dtype)
+        preferred = preferred / (torch.norm(preferred) + eps)
+
+    # 2) Project preferred into the plane perpendicular to z_local
+    x_candidate = preferred - torch.dot(preferred, z_local) * z_local
+
+    # 3) If preferred is too parallel to axis, pick a fallback direction
+    if torch.norm(x_candidate) < 1e-6:
+        # Try ex, then ey, then ez
+        for d in (ex, ey, ez):
+            cand = d - torch.dot(d, z_local) * z_local
+            if torch.norm(cand) > 1e-6:
+                x_candidate = cand
+                preferred = d  # update for sign consistency check
+                break
+
+    x_local = x_candidate / (torch.norm(x_candidate) + eps)
+
+    # 4) Enforce consistent sign: align x_local with preferred direction
+    #    This prevents 180° flips that would change the quadrant
+    if torch.dot(x_local, preferred) < 0:
+        x_local = -x_local
+
+    # 5) Complete right-handed frame
     y_local = torch.cross(z_local, x_local)
-    
-    # Return rotation matrix [x_local, y_local, z_local] as columns
-    return torch.stack([x_local, y_local, z_local], dim=1)
+    y_local = y_local / (torch.norm(y_local) + eps)
+
+    R = torch.stack([x_local, y_local, z_local], dim=1)
+    return R
 
 
-def sd_cylinder_with_axis(points, center, radius, half_length, axis_vector):
+def sd_cylinder_with_axis(points, center, radius, half_length, axis_vector, reference_x_axis=None):
     """Signed distance function for finite cylinder using axis vector parameterization.
     
     Args:
@@ -1450,12 +1483,13 @@ def sd_cylinder_with_axis(points, center, radius, half_length, axis_vector):
         radius: scalar tensor cylinder radius  
         half_length: scalar tensor cylinder half-length
         axis_vector: (3,) tensor cylinder axis direction (will be normalized internally)
+        reference_x_axis: (3,) optional tensor for consistent X-axis orientation
         
     Returns:
         (N,) tensor of signed distances
     """
-    # Construct rotation matrix from axis vector
-    rotation_matrix = construct_cylinder_basis(axis_vector)
+    # Construct rotation matrix from axis vector with consistent orientation
+    rotation_matrix = construct_cylinder_basis(axis_vector, reference_x_axis=reference_x_axis)
     
     # Transform points to cylinder local coordinates
     p = (points - center) @ rotation_matrix                     # world → local
