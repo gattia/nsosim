@@ -164,6 +164,9 @@ class RotationUtils:
     def rot_to_euler_xyz_body(R: Union[torch.Tensor, np.ndarray]) -> Union[torch.Tensor, np.ndarray]:
         """Extract intrinsic XYZ (body) Euler angles from rotation matrix.
         
+        OpenSim/Simbody uses Body-fixed X-Y-Z Euler angles (Intrinsic).
+        R = Rx(x) * Ry(y) * Rz(z)
+        
         Args:
             R (torch.Tensor or np.ndarray): Rotation matrix of shape (3, 3)
             
@@ -179,22 +182,33 @@ class RotationUtils:
 
         eps = 1e-6
 
+        # Standard Intrinsic XYZ formulas:
+        # R[0, 2] = sin(y)
+        # R[1, 2] = -sin(x)cos(y)
+        # R[2, 2] = cos(x)cos(y)
+        # R[0, 1] = -cos(y)sin(z)
+        # R[0, 0] = cos(y)cos(z)
+
         if torch.abs(R[0, 2] - 1.0) < eps:
-            x = torch.tensor(0.0, dtype=R.dtype)
-            y = -torch.pi / 2
-            # Add small epsilon to prevent atan2(0,0) which is undefined
-            z = torch.atan2(-R[1, 0] + 1e-8, -R[2, 0] + 1e-8)
+            # Gimbal lock: y = pi/2
+            x = torch.tensor(0.0, dtype=R.dtype, device=R.device)
+            y = torch.tensor(np.pi / 2, dtype=R.dtype, device=R.device)
+            z = torch.atan2(R[1, 0], R[1, 1])
         elif torch.abs(R[0, 2] + 1.0) < eps:
-            x = torch.tensor(0.0, dtype=R.dtype)
-            y = torch.pi / 2
-            # Add small epsilon to prevent atan2(0,0) which is undefined
-            z = torch.atan2(R[1, 0] + 1e-8, R[2, 0] + 1e-8)
+            # Gimbal lock: y = -pi/2
+            x = torch.tensor(0.0, dtype=R.dtype, device=R.device)
+            y = torch.tensor(-np.pi / 2, dtype=R.dtype, device=R.device)
+            z = torch.atan2(-R[1, 0], R[1, 1])
         else:
-            # Clamp the value to prevent NaN from asin
-            y = torch.asin(torch.clamp(-R[0, 2], -1.0, 1.0))
-            # Add small epsilon to prevent atan2(0,0) which is undefined
-            x = torch.atan2(R[1, 2] + 1e-8, R[2, 2] + 1e-8)
-            z = torch.atan2(R[0, 1] + 1e-8, R[0, 0] + 1e-8)
+            # Standard case
+            # y is simply asin(R[0,2])
+            y = torch.asin(torch.clamp(R[0, 2], -1.0, 1.0))
+            
+            # x comes from -R[1,2] / R[2,2]
+            x = torch.atan2(-R[1, 2], R[2, 2])
+            
+            # z comes from -R[0,1] / R[0,0]
+            z = torch.atan2(-R[0, 1], R[0, 0])
 
         euler = torch.stack([x, y, z])
 
@@ -241,6 +255,10 @@ class RotationUtils:
         if R_fixed[1, 1] < 0:  # Y-axis pointing mostly -Y  
             R_fixed[:, 1] *= -1
         
+        # 3. Re-guarantee right-handedness (since flipping X or Y alone flips determinant)
+        if torch.det(R_fixed) < 0:
+            R_fixed[:, 2] *= -1
+
         if input_type == 'numpy':
             return R_fixed.numpy()
         return R_fixed

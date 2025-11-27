@@ -12,6 +12,380 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
+# ============================================================================
+# Helper functions for radial envelope refinement of meniscus surfaces
+# ============================================================================
+
+def add_polar_coordinates_about_center(mesh: pv.PolyData, center=None, theta_offset=0.0):
+    """
+    Add cylindrical coordinates (theta, r, y_rel) as point data to `mesh`,
+    using the given `center` (or mesh.center if None).
+    
+    - theta: angle in zx-plane, arctan2(x_rel, z_rel) + theta_offset
+    - r:     radial distance in zx-plane
+    - y_rel: y-relative to center
+    
+    Args:
+        mesh: PyVista mesh to add coordinates to
+        center: Center point for polar coordinates (default: mesh.center)
+        theta_offset: Rotation offset for theta in radians (default: 0.0).
+                     Positive rotates counterclockwise when viewed from +Y.
+                     Use to avoid discontinuity at ±π cutting through tissue
+                     (e.g., π/2 for medial meniscus, 0.0 for lateral).
+        
+    Returns:
+        center: The center point used
+    """
+    if center is None:
+        center = mesh.center
+    pts_centered = mesh.points - center
+    x_rel = pts_centered[:, 0]
+    y_rel = pts_centered[:, 1]
+    z_rel = pts_centered[:, 2]
+    theta = np.arctan2(x_rel, z_rel) + theta_offset
+    # Wrap theta to [-π, π]
+    theta = np.arctan2(np.sin(theta), np.cos(theta))
+    r = np.sqrt(x_rel**2 + z_rel**2)
+    mesh['theta']  = theta
+    mesh['r']      = r
+    mesh['y_rel']  = y_rel
+    return center
+
+
+def label_meniscus_regions_with_sdf(
+    meniscus_mesh: pv.PolyData,
+    lower_surface,
+    upper_surface,
+    distance_thresh: float = 0.1,
+    array_name: str = 'regions_label',
+):
+    """
+    Label meniscus points based on SDF distance to lower and upper surfaces.
+    
+    regions:
+      0 = neither
+      1 = near lower_surface (dist_lower < threshold)
+      2 = near upper_surface (dist_upper < threshold)
+      3 = near both
+      
+    Args:
+        meniscus_mesh: Full meniscus mesh
+        lower_surface: Lower articulating surface mesh
+        upper_surface: Upper articulating surface mesh
+        distance_thresh: Distance threshold for labeling (in mm)
+        array_name: Name for the region label array
+        
+    Returns:
+        regions_label: Array of region labels
+    """
+    pts = meniscus_mesh.points
+    
+    # Convert to Mesh objects if needed for SDF computation
+    if not isinstance(lower_surface, Mesh):
+        lower_surface = Mesh(lower_surface)
+    if not isinstance(upper_surface, Mesh):
+        upper_surface = Mesh(upper_surface)
+    
+    dist_lower = np.abs(lower_surface.get_sdf_pts(pts))
+    dist_upper = np.abs(upper_surface.get_sdf_pts(pts))
+    
+    regions_label = np.zeros(meniscus_mesh.n_points, dtype=np.int8)
+    regions_label[dist_lower < distance_thresh] = 1
+    regions_label[dist_upper < distance_thresh] = 2
+    regions_label[(dist_lower < distance_thresh) & (dist_upper < distance_thresh)] = 3
+    
+    meniscus_mesh[array_name] = regions_label.astype(float)  # pyvista likes float sometimes
+    return regions_label
+
+
+def compute_region_radial_percentiles(
+    mesh: pv.PolyData,
+    regions_array: str = 'regions_label',
+    percentile: float = 95.0,
+    n_theta_bins: int = 100,
+):
+    """
+    For each region label in `regions_array`, compute the given `percentile`
+    of r (radial distance) in theta bins.
+    
+    Args:
+        mesh: Mesh with polar coordinates and region labels
+        regions_array: Name of array containing region labels
+        percentile: Percentile to compute (default: 95.0)
+        n_theta_bins: Number of angular bins
+        
+    Returns:
+        region_percentiles: dict[region_label] -> {
+            'bin_centers': (B,),
+            'r_percentile': (B,)
+        }
+        theta_bins: The bin edges used
+        
+    Note: Assumes `mesh['theta']` and `mesh['r']` already exist.
+    """
+    theta = mesh['theta']
+    r = mesh['r']
+    regions = mesh[regions_array]
+    
+    theta_bins = np.linspace(theta.min(), theta.max(), n_theta_bins)
+    region_percentiles = {}
+    
+    for region_label in np.unique(regions):
+        # skip background (0)
+        if region_label == 0:
+            continue
+        
+        region_mask = regions == region_label
+        theta_region = theta[region_mask]
+        r_region = r[region_mask]
+        
+        bin_indices = np.digitize(theta_region, theta_bins)
+        r_p = []
+        bin_centers = []
+        
+        for i in range(1, len(theta_bins)):
+            bin_mask = bin_indices == i
+            if np.any(bin_mask):
+                r_p.append(np.percentile(r_region[bin_mask], percentile))
+                bin_centers.append(0.5 * (theta_bins[i - 1] + theta_bins[i]))
+        
+        if bin_centers:
+            region_percentiles[region_label] = {
+                'bin_centers': np.asarray(bin_centers),
+                'r_percentile': np.asarray(r_p),
+            }
+    
+    return region_percentiles, theta_bins
+
+
+def smooth_1d(y, window_size=7):
+    """
+    Simple moving-average smoother for 1D arrays.
+    
+    Args:
+        y: 1D array to smooth
+        window_size: Window size (should be odd, > 1)
+        
+    Returns:
+        Smoothed array
+    """
+    if window_size <= 1:
+        return y
+    kernel = np.ones(window_size, dtype=float) / float(window_size)
+    return np.convolve(y, kernel, mode='same')
+
+
+def build_min_radial_envelope(
+    region_percentiles: dict,
+    smooth_window: int = 7,
+    theta_min: float = None,
+    theta_max: float = None,
+    n_theta_grid: int = 200,
+):
+    """
+    From per-region percentile curves, build a single 'min envelope':
+        r_min(theta) = min_over_regions r_percentile_region(theta)
+    
+    Steps:
+      1. Smooth each region's r_percentile over theta.
+      2. Interpolate all to a common theta_grid.
+      3. Take elementwise minimum.
+      
+    Args:
+        region_percentiles: Dict from compute_region_radial_percentiles
+        smooth_window: Window size for smoothing
+        theta_min: Minimum theta value (auto-detect if None)
+        theta_max: Maximum theta value (auto-detect if None)
+        n_theta_grid: Number of points in output grid
+        
+    Returns:
+        theta_grid: Angular grid
+        r_min_grid: Minimum radial envelope
+    """
+    # Determine theta range if not provided
+    all_theta = []
+    for pdata in region_percentiles.values():
+        all_theta.append(pdata['bin_centers'])
+    all_theta = np.concatenate(all_theta)
+    
+    if theta_min is None:
+        theta_min = float(all_theta.min())
+    if theta_max is None:
+        theta_max = float(all_theta.max())
+    
+    theta_grid = np.linspace(theta_min, theta_max, n_theta_grid)
+    r_min_grid = np.full_like(theta_grid, np.inf, dtype=float)
+    
+    for region_label, pdata in region_percentiles.items():
+        bc = pdata['bin_centers']
+        rp = pdata['r_percentile']
+        
+        rp_smooth = smooth_1d(rp, window_size=smooth_window)
+        r_interp = np.interp(theta_grid, bc, rp_smooth,
+                             left=np.nan, right=np.nan)
+        
+        valid = ~np.isnan(r_interp)
+        r_min_grid[valid] = np.minimum(r_min_grid[valid], r_interp[valid])
+    
+    # where nothing was valid, set to nan
+    r_min_grid[~np.isfinite(r_min_grid)] = np.nan
+    
+    return theta_grid, r_min_grid
+
+
+def mask_points_by_radial_envelope(
+    mesh: pv.PolyData,
+    center,
+    theta_grid,
+    r_thresh_grid,
+    theta_offset=0.0,
+):
+    """
+    Compute theta, r for `mesh` about `center`, and return:
+        keep_mask: boolean array of points where r <= r_thresh(theta)
+        theta, r: per-point values (for debugging / plotting)
+        
+    Args:
+        mesh: Mesh to filter
+        center: Center point for polar coordinates
+        theta_grid: Angular grid for envelope
+        r_thresh_grid: Radial threshold values at each theta
+        theta_offset: Rotation offset for theta (must match envelope computation)
+        
+    Returns:
+        keep: Boolean mask of points to keep
+        theta: Angular coordinate for each point
+        r: Radial coordinate for each point
+    """
+    pts_centered = mesh.points - center
+    x_rel = pts_centered[:, 0]
+    y_rel = pts_centered[:, 1]
+    z_rel = pts_centered[:, 2]
+    
+    theta = np.arctan2(x_rel, z_rel) + theta_offset
+    # Wrap theta to [-π, π]
+    theta = np.arctan2(np.sin(theta), np.cos(theta))
+    r = np.sqrt(x_rel**2 + z_rel**2)
+    
+    r_cutoff = np.interp(theta, theta_grid, r_thresh_grid,
+                         left=np.nan, right=np.nan)
+    
+    keep = (r <= r_cutoff) & ~np.isnan(r_cutoff)
+    
+    return keep, theta, r
+
+
+def trim_mesh_by_radial_envelope(
+    mesh: pv.PolyData,
+    center,
+    theta_grid,
+    r_thresh_grid,
+    theta_offset=0.0,
+    adjacent_cells: bool = True,
+):
+    """
+    Return a new mesh that only includes points with r <= r_thresh(theta)
+    as defined by (theta_grid, r_thresh_grid).
+    
+    Args:
+        mesh: Mesh to trim
+        center: Center point for polar coordinates
+        theta_grid: Angular grid for envelope
+        r_thresh_grid: Radial threshold values at each theta
+        theta_offset: Rotation offset for theta (must match envelope computation)
+        adjacent_cells: Whether to include adjacent cells
+        
+    Returns:
+        Trimmed mesh
+    """
+    keep, theta, r = mask_points_by_radial_envelope(mesh, center, theta_grid, r_thresh_grid, theta_offset=theta_offset)
+    return mesh.extract_points(keep, adjacent_cells=adjacent_cells)
+
+
+def refine_meniscus_articular_surfaces(
+    meniscus_mesh: pv.PolyData,
+    lower_surface: pv.PolyData,
+    upper_surface: pv.PolyData,
+    center=None,
+    distance_thresh: float = 0.1,
+    percentile: float = 95.0,
+    n_theta_bins: int = 100,
+    smooth_window: int = 7,
+    n_theta_grid: int = 200,
+    theta_offset: float = 0.0,
+):
+    """
+    Full pipeline for refining meniscus articular surfaces using radial envelope.
+    
+    Steps:
+      1. Add polar coordinates to meniscus_mesh about center point.
+      2. Label regions via SDF to lower/upper surfaces.
+      3. Compute radial percentile envelopes by region.
+      4. Build a single min radial envelope across regions 1 and 2.
+      5. Trim upper and lower surfaces using this envelope.
+      
+    Args:
+        meniscus_mesh: Full meniscus mesh
+        lower_surface: Lower articulating surface (initial extraction)
+        upper_surface: Upper articulating surface (initial extraction)
+        center: Center point for polar coordinates (if None, uses meniscus centroid).
+                For diseased/partial menisci, provide a consistent center point 
+                (e.g., based on tibial plateau center).
+        distance_thresh: Distance threshold for SDF labeling (mm)
+        percentile: Percentile for radial envelope (e.g., 95.0)
+        n_theta_bins: Number of angular bins for percentile computation
+        smooth_window: Window size for smoothing radial envelope
+        n_theta_grid: Grid resolution for radial envelope interpolation
+        theta_offset: Rotation offset for polar coordinates in radians (default: 0.0).
+                     Use to avoid discontinuity cutting through tissue.
+                     Typically: π/2 for medial meniscus, 0.0 for lateral meniscus.
+        
+    Returns:
+        lower_surface_trimmed: Refined lower surface
+        upper_surface_trimmed: Refined upper surface
+        (theta_grid, r_min_grid): The radial envelope used
+    """
+    # 1. Polar coords - use provided center or default to meniscus centroid
+    center = add_polar_coordinates_about_center(meniscus_mesh, center=center, theta_offset=theta_offset)
+    
+    # 2. Region labels
+    label_meniscus_regions_with_sdf(
+        meniscus_mesh, lower_surface, upper_surface,
+        distance_thresh=distance_thresh,
+        array_name='regions_label'
+    )
+    
+    # 3. Percentile envelopes per region
+    region_percentiles, _ = compute_region_radial_percentiles(
+        meniscus_mesh,
+        regions_array='regions_label',
+        percentile=percentile,
+        n_theta_bins=n_theta_bins,
+    )
+    
+    # 4. Combined min envelope
+    theta_grid, r_min_grid = build_min_radial_envelope(
+        region_percentiles,
+        smooth_window=smooth_window,
+        n_theta_grid=n_theta_grid,
+    )
+    
+    # 5. Trim articular surfaces (with same theta_offset used to compute envelope)
+    lower_trimmed = trim_mesh_by_radial_envelope(
+        lower_surface, center, theta_grid, r_min_grid, theta_offset=theta_offset
+    )
+    upper_trimmed = trim_mesh_by_radial_envelope(
+        upper_surface, center, theta_grid, r_min_grid, theta_offset=theta_offset
+    )
+    
+    return lower_trimmed, upper_trimmed, (theta_grid, r_min_grid)
+
+
+# ============================================================================
+# Main meniscus surface extraction functions
+# ============================================================================
+
 def extract_meniscus_articulating_surface(
     meniscus_mesh: pv.PolyData,
     articulating_bone_mesh: pv.PolyData,
@@ -106,14 +480,61 @@ def create_meniscus_articulating_surface(
     meniscus_clusters=None,
     upper_articulating_bone_clusters=None,
     lower_articulating_bone_clusters=None,
+    # Radial envelope refinement parameters
+    meniscus_center=None,  # if None, will use meniscus centroid
+    refine_by_radial_envelope=True,
+    distance_thresh=0.1,  # mm for SDF labeling
+    radial_percentile=95.0,
+    n_theta_bins=100,
+    smooth_window=7,
+    n_theta_grid=200,
+    theta_offset=0.0,  # radians, rotate polar coords to avoid discontinuity
 ):
     """
-    Creates a meniscus articulating surface from a meniscus mesh and two articulating bone meshes.
+    Creates meniscus articulating surfaces from a meniscus mesh and two articulating bone meshes.
+    
+    This function performs the following steps:
+      1. Computes density metrics and resampling parameters
+      2. Converts meshes from meters to mm for processing
+      3. Resamples meshes as specified
+      4. Extracts initial upper and lower articulating surfaces
+      5. (Optional) Refines surfaces using radial envelope filtering
+      6. Converts results back to meters
+      
+    Args:
+        meniscus_mesh: Full meniscus mesh (pymskt.mesh.Mesh)
+        upper_articulating_bone_mesh: Upper bone mesh (femur) for defining superior surface
+        lower_articulating_bone_mesh: Lower bone mesh (tibia) for defining inferior surface
+        ray_length: Ray casting length for surface extraction (mm)
+        n_largest: Number of largest connected components to keep
+        smooth_iter: Smoothing iterations for extracted surfaces
+        boundary_smoothing: Whether to fix boundaries during smoothing
+        triangle_density: Target triangle density for resampling (triangles/m^2)
+        meniscus_clusters: Number of clusters for meniscus resampling
+        upper_articulating_bone_clusters: Clusters for upper bone resampling
+        lower_articulating_bone_clusters: Clusters for lower bone resampling
+        meniscus_center: Center point for radial envelope (if None, uses meniscus centroid)
+        refine_by_radial_envelope: Whether to apply radial envelope refinement (default: True)
+        distance_thresh: Distance threshold (mm) for SDF-based region labeling
+        radial_percentile: Percentile for radial envelope (e.g., 95.0)
+        n_theta_bins: Number of angular bins for percentile computation
+        smooth_window: Window size for smoothing radial envelope
+        n_theta_grid: Grid resolution for radial envelope interpolation
+        theta_offset: Rotation offset for polar coordinates in radians (default: 0.0).
+                     Use to avoid polar discontinuity cutting through meniscus tissue.
+                     Typically: np.pi/2 for medial meniscus, 0.0 for lateral meniscus.
+        
+    Returns:
+        upper_meniscus_articulating_surface: Refined superior surface (pymskt.mesh.Mesh)
+        lower_meniscus_articulating_surface: Refined inferior surface (pymskt.mesh.Mesh)
     """
     
-    # compute density metrics for resampling while in meters space. 
+    # ============================================================================
+    # STEP 1: Compute density metrics for resampling (in meters space)
+    # ============================================================================
     if triangle_density is not None:
-        meniscus_mesh.compute_normals(point_normals=True, cell_normals=False, auto_orient_normals=True, inplace=True)
+        meniscus_mesh.compute_normals(point_normals=True, cell_normals=False, 
+                                      auto_orient_normals=True, inplace=True)
         # compute the triangle density of the cart mesh now
         current_density = meniscus_mesh.n_cells/meniscus_mesh.area
         # downsample factor
@@ -125,7 +546,9 @@ def create_meniscus_articulating_surface(
         logger.info(f'current number of points: {meniscus_mesh.point_coords.shape[0]}')
         logger.info(f'target number of points: {meniscus_clusters}')
         
-    # convert meshes to mm (instead of meters)
+    # ============================================================================
+    # STEP 2: Convert meshes to mm (instead of meters)
+    # ============================================================================
     meniscus_mesh_ = meniscus_mesh.copy()
     meniscus_mesh_.point_coords = meniscus_mesh_.point_coords * 1000
     upper_articulating_bone_mesh_ = upper_articulating_bone_mesh.copy()
@@ -133,11 +556,19 @@ def create_meniscus_articulating_surface(
     lower_articulating_bone_mesh_ = lower_articulating_bone_mesh.copy()
     lower_articulating_bone_mesh_.point_coords = lower_articulating_bone_mesh_.point_coords * 1000
     
-    # resample while in mm space 
+    # Handle meniscus_center conversion to mm if provided
+    if meniscus_center is not None:
+        meniscus_center_mm = np.array(meniscus_center) * 1000
+    else:
+        meniscus_center_mm = None
+    
+    # ============================================================================
+    # STEP 3: Resample meshes (in mm space)
+    # ============================================================================
     if meniscus_clusters is not None:
         meniscus_mesh_.resample_surface(subdivisions=1, clusters=meniscus_clusters)
         # density after resampling
-        updated_density = meniscus_mesh_.mesh.n_cells/meniscus_mesh_.mesh.area
+        updated_density = meniscus_mesh_.n_cells/meniscus_mesh_.area
         logger.info(f'achieved density: {updated_density/1_000_000} triangles/mm^2')
     
     # resample bones if specified
@@ -145,7 +576,10 @@ def create_meniscus_articulating_surface(
         upper_articulating_bone_mesh_.resample_surface(subdivisions=1, clusters=upper_articulating_bone_clusters)
     if lower_articulating_bone_clusters is not None:
         lower_articulating_bone_mesh_.resample_surface(subdivisions=1, clusters=lower_articulating_bone_clusters)
-        
+    
+    # ============================================================================
+    # STEP 4: Extract initial articulating surfaces
+    # ============================================================================
     # extract upper articulating surface of the meniscus
     upper_meniscus_articulating_surface = extract_meniscus_articulating_surface(
         meniscus_mesh_,
@@ -166,7 +600,55 @@ def create_meniscus_articulating_surface(
         boundary_smoothing=boundary_smoothing
     )
     
-    # convert back to meters space
+    # ============================================================================
+    # STEP 5: Refine surfaces using radial envelope filtering
+    # ============================================================================
+    if refine_by_radial_envelope:
+        logger.info('Refining meniscus surfaces with radial envelope filtering...')
+        
+        # Apply refinement
+        lower_refined, upper_refined, (theta_grid, r_min_grid) = refine_meniscus_articular_surfaces(
+            meniscus_mesh=meniscus_mesh_.copy(),
+            lower_surface=lower_meniscus_articulating_surface.copy(),
+            upper_surface=upper_meniscus_articulating_surface.copy(),
+            center=meniscus_center_mm,  # Use provided center or None (defaults to centroid)
+            distance_thresh=distance_thresh,
+            percentile=radial_percentile,
+            n_theta_bins=n_theta_bins,
+            smooth_window=smooth_window,
+            n_theta_grid=n_theta_grid,
+            theta_offset=theta_offset,  # Rotate polar coords to avoid discontinuity
+        )
+        
+        # Final cleanup: get largest component and remove isolated cells
+        logger.info('Final cleanup of refined surfaces...')
+        
+        # Ensure results are PolyData before passing to get_n_largest
+        # (trim_mesh_by_radial_envelope uses extract_points which can return UnstructuredGrid)
+        if not isinstance(upper_refined, pv.PolyData):
+            upper_refined = upper_refined.extract_surface()
+        if not isinstance(lower_refined, pv.PolyData):
+            lower_refined = lower_refined.extract_surface()
+        
+        # Upper surface cleanup
+        upper_refined = get_n_largest(upper_refined, n=n_largest)
+        if not isinstance(upper_refined, pv.PolyData):
+            upper_refined = upper_refined.extract_surface()
+        upper_refined = remove_isolated_cells(upper_refined)
+        
+        # Lower surface cleanup
+        lower_refined = get_n_largest(lower_refined, n=n_largest)
+        if not isinstance(lower_refined, pv.PolyData):
+            lower_refined = lower_refined.extract_surface()
+        lower_refined = remove_isolated_cells(lower_refined)
+        
+        # Convert back to Mesh objects
+        upper_meniscus_articulating_surface = Mesh(upper_refined)
+        lower_meniscus_articulating_surface = Mesh(lower_refined)
+    
+    # ============================================================================
+    # STEP 6: Convert back to meters and return
+    # ============================================================================
     upper_meniscus_articulating_surface.point_coords = upper_meniscus_articulating_surface.point_coords / 1000
     lower_meniscus_articulating_surface.point_coords = lower_meniscus_articulating_surface.point_coords / 1000
     
@@ -321,118 +803,7 @@ def compute_overlap_metrics(pat_articular_surfaces, fem_articular_surfaces):
 
     return percent_non_zero, vert_overlap, total_vert, percent_vert_overlap
 
-def dilate_mesh(
-    mesh, 
-    dilation_mm, 
-    mask=None, 
-    scale_axis=None, 
-    scale_percentile=None, 
-    reference_mesh=None, 
-    reference_axis_filter=lambda pts: pts[:, 0] > np.mean(pts[:, 0]),
-    norm_function='log'
-):
-    """
-    Dilate bone mesh along normals with optional scaled dilation.
-    
-    Parameters
-    ----------
-    mesh : pyvista.PolyData
-        Input mesh to dilate
-    dilation_mm : float
-        Base dilation amount in mm
-    mask : np.ndarray, optional
-        Mask to apply to dilation (n_points,) or (n_points, 1)
-    scale_axis : int, optional
-        Axis index (0=x, 1=y, 2=z) for scaled dilation. If None, uniform dilation.
-    scale_percentile : float, optional
-        Percentile threshold (0-100) along scale_axis. Points below this have
-        no dilation, points above have scaled dilation increasing linearly from
-        0 at the threshold to dilation_mm at the maximum coordinate.
-    reference_mesh : pyvista.PolyData, optional
-        Reference mesh to use for determining the percentile threshold.
-        If None, uses the input mesh itself. Useful for scaling based on 
-        patella cartilage coordinates instead of bone coordinates.
-    reference_axis_filter : callable, optional
-        Function to filter reference_mesh points before calculating percentile.
-        E.g., lambda pts: pts[:, 0] > np.mean(pts[:, 0]) for anterior half.
-    
-    Returns
-    -------
-    mesh_scaled : pyvista.PolyData
-        Dilated mesh
-    """
-    # Dilate bone mesh along normals
-    mesh_scaled = mesh.copy()
-    mesh_scaled.compute_normals(inplace=True, auto_orient_normals=True, consistent_normals=True)
-    
-    if mask is None:
-        mask = np.ones((mesh_scaled.n_points, 1), dtype=float)
-    else:
-        if len(mask.shape) == 1:
-            mask = mask[:,None]
-    
-    points = mesh_scaled.points.copy()
-    normals = mesh_scaled.point_normals
-    
-    # Calculate dilation scaling based on position
-    dilation_scale = np.ones((mesh_scaled.n_points, 1), dtype=float)
-    
-    if scale_axis is not None and scale_percentile is not None:
-        # Determine which mesh to use for calculating the threshold
-        if reference_mesh is not None:
-            ref_points = reference_mesh.points
-        else:
-            ref_points = points
-        
-        # Apply filter if provided (e.g., to get anterior half only)
-        if reference_axis_filter is not None:
-            filter_mask = reference_axis_filter(ref_points)
-            filtered_coords = ref_points[filter_mask, scale_axis]
-        else:
-            filtered_coords = ref_points[:, scale_axis]
-        
-        # Calculate threshold from reference mesh
-        threshold = np.percentile(filtered_coords, scale_percentile)
-        
-        # Get the max coordinate for normalization (from filtered reference if applicable)
-        max_coord = np.max(points[:, scale_axis])
-        
-        # Apply scaling to the actual mesh points
-        axis_coords = points[:, scale_axis]
-        above_threshold = axis_coords > threshold
-        
-        if np.any(above_threshold):
-            # Normalized distance from threshold (0 at threshold, 1 at max)
-            norm_distance = np.zeros_like(axis_coords)
-            if max_coord > threshold:
-                denom = max_coord - threshold
-                if denom > 0:
-                    idx = above_threshold  # cache the mask
-                    t = (axis_coords[idx] - threshold) / denom
-                    t = np.clip(t, 0.0, 1.0)
-                    if norm_function == 'linear':
-                        y = t
-                    elif norm_function == 'pow':
-                        gamma = 2.0
-                        y = t**gamma
-                    elif norm_function == 'exp':
-                        k = 5.0
-                        y = np.expm1(k*t) / np.expm1(k)
-                    elif norm_function == 'log':
-                        k = 9.0
-                        y = np.log1p(k*t) / np.log1p(k)
-                    else:
-                        y = t  # safe default
 
-                    norm_distance[idx] = y
-            
-            # Scale dilation: gradually increase from 0 at threshold to 1.0 at max
-            dilation_scale = norm_distance.reshape(-1, 1)
-    
-    # Apply dilation with scaling
-    points_new = points + dilation_mm * normals * mask * dilation_scale
-    mesh_scaled.points = points_new
-    return mesh_scaled
 
 def _type_check_mesh(mesh, mesh_name='mesh'):
     """
@@ -453,43 +824,7 @@ def _type_check_mesh(mesh, mesh_name='mesh'):
     return mesh
 
 
-def label_vertices_as_bone_or_cartilage(mesh, bone_mesh, cart_mesh):
-    """
-    
-    """
-    logger.info('Computing normals...')
-    mesh.compute_normals(inplace=True, auto_orient_normals=True, consistent_normals=True)
-    bone_mesh.compute_normals(inplace=True, auto_orient_normals=True, consistent_normals=True)
-    cart_mesh.compute_normals(inplace=True, auto_orient_normals=True, consistent_normals=True)
-    logger.info('Finding closest bone and cartilage points...')
-    # For each point on combined, compute closest distance to bone and cartilage
-    logger.info('Finding closest bone points...')
-    if not isinstance(bone_mesh, Mesh):
-        bone_mesh = Mesh(bone_mesh)
-    if not isinstance(cart_mesh, Mesh):
-        cart_mesh = Mesh(cart_mesh)
-    
-    logger.info('getting cart sdf')
-    cart_mesh.point_coords = cart_mesh.point_coords.astype(float)
-    d_cart = cart_mesh.get_sdf_pts(mesh.points.astype(float))
-    
-    logger.info('getting bone sdf')
-    bone_mesh.point_coords = bone_mesh.point_coords.astype(float)
-    d_bone = bone_mesh.get_sdf_pts(mesh.points.astype(float))
-    
-    
-    logger.info('Labeling bone/cartilage distances')
-    # Create arrays in combined.point_data
-    mesh.point_data["d_bone"] = d_bone
-    mesh.point_data["d_cart"] = d_cart
-    
-    # labeling vertices as bone or cartilage
-    # Label vertices as bone (1) or cartilage (0)
-    is_bone = np.zeros(mesh.n_points, dtype=int)
-    is_bone[d_bone < d_cart] = 1
-    mesh.point_data["is_bone"] = is_bone
-    
-    return mesh
+
 
 
 def _prepare_fatpad_input_meshes(femur_bone_mesh, femur_cart_mesh, patella_bone_mesh, patella_cart_mesh, units):
@@ -533,190 +868,7 @@ def _prepare_fatpad_input_meshes(femur_bone_mesh, femur_cart_mesh, patella_bone_
     return femur_bone_mesh, femur_cart_mesh, patella_bone_mesh, patella_cart_mesh
 
 
-def _create_extended_femur_mesh(femur_bone_mesh, femur_cart_mesh, initial_bone_dilation_mm, 
-                                 bone_region_dilation_mm, dilation_axis_filter):
-    """
-    Dilate femur bone, union with cartilage, label vertices, and extend bone region.
-    
-    Args:
-        femur_bone_mesh: Femur bone mesh in mm
-        femur_cart_mesh: Femur cartilage mesh in mm
-        initial_bone_dilation_mm: Initial dilation of bone
-        bone_region_dilation_mm: Additional dilation of bone-labeled region
-        dilation_axis_filter: Filter function for dilation axis
-        
-    Returns:
-        pyvista.PolyData: Extended femur mesh with bone region dilated
-    """
-    logger.info(f'Initial bone dilation: {initial_bone_dilation_mm} mm')
-    femur_bone_scaled = dilate_mesh(femur_bone_mesh, initial_bone_dilation_mm)
-    
-    logger.info('Performing boolean union of femur bone and cartilage...')   
-    try:
-        if not isinstance(femur_bone_scaled, Mesh):
-            logger.info('Converting femur_bone_scaled to Mesh...')
-            femur_bone_scaled = Mesh(femur_bone_scaled)
-        combined = femur_bone_scaled.boolean_union(femur_cart_mesh)
-        logger.info('Union done')
-    except Exception as e:
-        logger.error(f"Boolean union of femur bone and cartilage failed with error: {e}")
-        logger.error("This may indicate meshes have incompatible geometry or degenerate triangles.")
-        raise
-    
-    logger.info('Labeling vertices as bone or cartilage...')
-    combined = label_vertices_as_bone_or_cartilage(combined, femur_bone_mesh, femur_cart_mesh)
-    
-    logger.info(f'Dilating bone region by {bone_region_dilation_mm} mm...')
-    combined_bone_extended = dilate_mesh(
-        mesh=combined, 
-        dilation_mm=bone_region_dilation_mm, 
-        mask=combined.point_data["is_bone"] == 1, 
-        scale_axis=1, 
-        scale_percentile=95, 
-        reference_mesh=femur_cart_mesh, 
-        reference_axis_filter=dilation_axis_filter
-    )
-    
-    return combined_bone_extended
 
-
-def _create_combined_patella_mesh(patella_bone_mesh, patella_dilation_mm, patella_cart_mesh):
-    """
-    Dilate patella bone and union with cartilage.
-    
-    Args:
-        patella_bone_mesh: Patella bone mesh in mm
-        patella_dilation_mm: Dilation amount for patella bone
-        patella_cart_mesh: Patella cartilage mesh in mm
-        
-    Returns:
-        pyvista.PolyData: Combined patella mesh (bone + cartilage)
-    """
-    logger.info('Processing patella meshes...')       
-    logger.info(f'Dilating patella bone by {patella_dilation_mm} mm...')
-    patella_bone_extended = dilate_mesh(patella_bone_mesh, patella_dilation_mm)
-    
-    logger.info('Boolean union of patella bone and cartilage...')
-    if not isinstance(patella_bone_extended, Mesh):
-        patella_bone_extended = Mesh(patella_bone_extended)
-    combined_patella = patella_bone_extended.boolean_union(patella_cart_mesh)
-    
-    return combined_patella
-
-
-def _subtract_and_analyze_meshes(combined_bone_extended, combined_patella):
-    """
-    Subtract patella from femur and compute distance fields.
-    
-    Args:
-        combined_bone_extended: Extended femur mesh
-        combined_patella: Combined patella mesh
-        
-    Returns:
-        pymskt.mesh.Mesh: Subtracted mesh with distance fields and labels
-    """
-    logger.info('Subtracting patella from femur mesh...')
-    try:
-        if not isinstance(combined_bone_extended, Mesh):
-            logger.info('Converting combined_bone_extended to Mesh...')
-            combined_bone_extended = Mesh(combined_bone_extended)
-        subtracted = combined_bone_extended.boolean_difference(combined_patella)
-    except Exception as e:
-        logger.error(f"Boolean difference failed with error: {e}")
-        logger.error("This may indicate meshes don't overlap or have incompatible geometry.")
-        raise
-    
-    # Check if subtraction resulted in valid mesh
-    if not isinstance(subtracted, pv.PolyData):
-        raise TypeError(f"Boolean difference did not return PolyData, got {type(subtracted)}")
-    if subtracted.n_points == 0:
-        raise ValueError("Boolean difference resulted in empty mesh. Meshes may not overlap properly.")
-    subtracted_mskt = Mesh(subtracted)
-    
-    logger.info('Computing signed distance field to patella...')
-    combined_patella_mskt = Mesh(combined_patella)
-    sdfs_patella_combined = combined_patella_mskt.get_sdf_pts(subtracted_mskt.points)
-    subtracted_mskt.point_data['sdf_patella_combined'] = sdfs_patella_combined
-    absolute_sdfs_patella_combined = np.abs(sdfs_patella_combined)
-    subtracted_mskt.point_data['d_patella_combined'] = absolute_sdfs_patella_combined
-    
-    # Get distance to the combined_bone_extended
-    sdfs_combined_bone_extended = combined_bone_extended.get_sdf_pts(subtracted_mskt.points)
-    subtracted_mskt.point_data['sdf_combined_bone_extended'] = sdfs_combined_bone_extended
-    absolute_sdfs_combined_bone_extended = np.abs(sdfs_combined_bone_extended)
-    subtracted_mskt.point_data['d_combined_bone_extended'] = absolute_sdfs_combined_bone_extended
-    
-    is_patella = absolute_sdfs_patella_combined < absolute_sdfs_combined_bone_extended
-    subtracted_mskt.point_data['is_patella'] = is_patella.astype(float)
-    
-    # Copy over the is_bone data
-    subtracted_mskt.copy_scalars_from_other_mesh_to_current(combined_bone_extended, orig_scalars_name='is_bone')
-    
-    return subtracted_mskt
-
-
-def _filter_fatpad_points(subtracted_mesh, femur_cart_mesh, max_distance_to_patella_mm, percent_fem_cart_to_keep):
-    """
-    Filter points based on distance to patella and height criteria.
-    
-    Args:
-        subtracted_mesh: Mesh after boolean subtraction with distance fields
-        femur_cart_mesh: Femur cartilage mesh for height filtering
-        max_distance_to_patella_mm: Maximum distance to patella to keep points
-        percent_fem_cart_to_keep: Percentage of femur cartilage height to keep
-        
-    Returns:
-        pymskt.mesh.Mesh: Filtered fatpad mesh
-    """
-    logger.info(f'Filtering points within {max_distance_to_patella_mm} mm of patella...')
-    
-    # Keep if: is_patella == 1 OR is_bone == 1
-    keep_surface = np.maximum(
-        subtracted_mesh.point_data["is_patella"], 
-        subtracted_mesh.point_data["is_bone"]
-    )
-    
-    # Filter by distance to patella
-    keep_radial = subtracted_mesh.point_data['sdf_patella_combined'] < max_distance_to_patella_mm
-    
-    # Filter by height - remove fatpad that is too low
-    percentile_threshold = (1 - percent_fem_cart_to_keep) * 100
-    y_percentile_threshold = np.percentile(
-        femur_cart_mesh.points[femur_cart_mesh.points[:, 0] > np.mean(femur_cart_mesh.points[:, 0]), 1], 
-        percentile_threshold
-    )
-    keep_vertical = subtracted_mesh.points[:, 1] > y_percentile_threshold
-    
-    keep = keep_surface * keep_radial * keep_vertical
-    
-    subtracted_mesh.point_data["keep"] = keep.astype(float)
-    subtracted_mesh = subtracted_mesh.triangulate().clean()
-    
-    # Add diagnostic information
-    n_total = len(keep)
-    n_keep = np.sum(keep)
-    logger.info(f'Filtering diagnostics:')
-    logger.info(f'  - Total points: {n_total}')
-    logger.info(f'  - Points passing surface filter: {np.sum(keep_surface)}')
-    logger.info(f'  - Points passing radial filter: {np.sum(keep_radial)}')
-    logger.info(f'  - Points passing vertical filter: {np.sum(keep_vertical)}')
-    logger.info(f'  - Points passing all filters: {n_keep}')
-
-    # Check if any points remain
-    if n_keep == 0:
-        raise ValueError(
-            f"All points filtered out! No fatpad mesh can be created.\n"
-            f"Consider adjusting parameters:\n"
-            f"  - max_distance_to_patella_mm (current: {max_distance_to_patella_mm})\n"
-            f"  - percent_fem_cart_to_keep (current: {percent_fem_cart_to_keep})\n"
-            f"  - y_percentile_threshold (computed: {y_percentile_threshold:.2f})"
-        )
-    
-    logger.info('Removing filtered points...')
-    fatpad = subtracted_mesh.remove_points(subtracted_mesh.point_data['keep'] == 0)[0]
-    fatpad = Mesh(fatpad)
-    
-    return fatpad
 
 
 def _finalize_fatpad_mesh(fatpad_mesh, resample_clusters_final, units, final_smooth_iter=100, output_path=None):
@@ -758,87 +910,6 @@ def _finalize_fatpad_mesh(fatpad_mesh, resample_clusters_final, units, final_smo
     return fatpad_mesh
 
 
-def create_prefemoral_fatpad_contact_mesh(
-    femur_bone_mesh,
-    femur_cart_mesh,
-    patella_bone_mesh,
-    patella_cart_mesh,
-    initial_bone_dilation_mm: float = 0.6,
-    bone_region_dilation_mm: float = 4.0,
-    patella_dilation_mm: float = 0.3,
-    max_distance_to_patella_mm: float = 30.0,
-    resample_clusters_final: int = 2_000,
-    output_path: str = None,
-    percent_fem_cart_to_keep: float = 0.15,
-    dilation_axis_filter: callable = lambda pts: pts[:, 0] > np.mean(pts[:, 0]),
-    units='m'
-):
-    """
-    Creates a prefemoral fatpad mesh by dilating and combining bone/cartilage meshes,
-    then subtracting the patella geometry and filtering by distance.
-    
-    This function creates the prefemoral fatpad superior to the trochlea and posterior to the patella by:
-    1. Dilating the femur bone mesh slightly along surface normals
-    2. Performing a boolean union with the femur cartilage mesh
-    3. Resampling the combined surface
-    4. Labeling vertices as bone or cartilage based on proximity
-    5. Further dilating bone-labeled vertices
-    6. Dilating the patella bone and combining with patella cartilage
-    7. Subtracting the combined patella from the femur mesh
-    8. Keeping only points within specified distance to patella
-    9. Final resampling and cleanup
-    
-    Args:
-        femur_bone_mesh: Femur bone mesh (pymskt.mesh.Mesh, pyvista.PolyData, or path)
-        femur_cart_mesh: Femur cartilage mesh (pymskt.mesh.Mesh, pyvista.PolyData, or path)
-        patella_bone_mesh: Patella bone mesh (pymskt.mesh.Mesh, pyvista.PolyData, or path)
-        patella_cart_mesh: Patella cartilage mesh (pymskt.mesh.Mesh, pyvista.PolyData, or path)
-        initial_bone_dilation_mm: Initial dilation of bone in mm (default: 0.6)
-        bone_region_dilation_mm: Additional dilation of bone region in mm (default: 4.0)
-        patella_dilation_mm: Dilation of patella bone in mm (default: 0.3)
-        max_distance_to_patella_mm: Maximum distance to patella to keep points (default: 30.0)
-        resample_clusters_final: Number of clusters for final resampling (default: 2,000)
-        output_path: Optional path to save the result (default: None)
-        percent_fem_cart_to_keep: Percentage of femur cartilage height to keep (default: 0.15)
-        dilation_axis_filter: Filter function for dilation axis (default: anterior half)
-        units: Units of input meshes - 'm' or 'mm' (default: 'm')
-    
-    Returns:
-        pymskt.mesh.Mesh: The processed prefemoral fatpad mesh with patella subtracted
-    
-    Notes:
-        Input meshes are assumed to be in meters (OpenSim standard) by default.
-        Processing is done in mm for better numerical stability.
-    """
-    # Step 1: Prepare input meshes
-    femur_bone_mesh, femur_cart_mesh, patella_bone_mesh, patella_cart_mesh = _prepare_fatpad_input_meshes(
-        femur_bone_mesh, femur_cart_mesh, patella_bone_mesh, patella_cart_mesh, units
-    )
-    
-    # Step 2: Create extended femur mesh
-    combined_bone_extended = _create_extended_femur_mesh(
-        femur_bone_mesh, femur_cart_mesh, initial_bone_dilation_mm, 
-        bone_region_dilation_mm, dilation_axis_filter
-    )
-    
-    # Step 3: Create combined patella mesh
-    combined_patella = _create_combined_patella_mesh(
-        patella_bone_mesh, patella_dilation_mm, patella_cart_mesh
-    )
-    
-    # Step 4: Subtract patella from femur and analyze
-    subtracted_mesh = _subtract_and_analyze_meshes(combined_bone_extended, combined_patella)
-    
-    # Step 5: Filter fatpad points
-    fatpad = _filter_fatpad_points(
-        subtracted_mesh, femur_cart_mesh, max_distance_to_patella_mm, percent_fem_cart_to_keep
-    )
-    
-    # Step 6: Finalize fatpad mesh
-    fatpad = _finalize_fatpad_mesh(fatpad, resample_clusters_final, units, final_smooth_iter=100, output_path=output_path)
-    
-    logger.info('Prefemoral fatpad mesh with patella subtraction created successfully')
-    return fatpad
 
 
 def _forward_clearance_to_targets(
@@ -863,7 +934,8 @@ def _forward_clearance_to_targets(
     if not isinstance(source_mesh, Mesh):
         source_mesh = Mesh(source_mesh)
     
-    source_mesh.compute_normals(inplace=True, auto_orient_normals=True, consistent_normals=True)
+    # this can cause issues because the source_mesh 
+    # source_mesh.compute_normals(inplace=True, auto_orient_normals=True, consistent_normals=True)
     
     clearances = []
     for i, tgt in enumerate(targets):
@@ -1022,7 +1094,10 @@ def dilate_mesh_with_profile_and_clearance(
         actual = np.where(mask, actual, 0.0)
     
     # 5. Dilate along normals
-    femur_bone_mesh.compute_normals(inplace=True, auto_orient_normals=True, consistent_normals=True)
+    # commened out the below - at this point, there are points on the surface removed
+    # so, running compute_normals may cause issues pointing the normals in the wrong
+    # direction.
+    # femur_bone_mesh.compute_normals(inplace=True, auto_orient_normals=True, consistent_normals=True)
     pts = femur_bone_mesh.points.copy()
     nrm = femur_bone_mesh.point_normals
     pts_new = pts + (actual[:, None] * nrm)
@@ -1111,6 +1186,8 @@ def create_prefemoral_fatpad_noboolean(
     # Step 2: Extract exposed bone edge (not covered by cartilage)
     logger.info('Extracting exposed bone edge (removing cartilage-covered regions)...')
     femur_bone_mskt = Mesh(femur_bone_mesh) if not isinstance(femur_bone_mesh, Mesh) else femur_bone_mesh
+    # fix faces again... 
+    # femur_bone_mskt.consistent_faces()
     
     femur_bone_mskt.calc_distance_to_other_mesh(
         femur_cart_mesh,
