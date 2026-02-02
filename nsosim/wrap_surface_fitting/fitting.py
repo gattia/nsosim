@@ -1412,10 +1412,19 @@ class EllipsoidFitter(BaseShapeFitter):
             dimensions=axes
         )
 
-# Add a new utility function to construct coordinate system from axis vector
+# Construct coordinate system from axis vector for cylinder wrap surfaces.
+# IMPORTANT: This function's design is critical for OpenSim cylinder quadrant
+# orientation. The X-axis alignment and sign consistency preserve the quadrant
+# parameter semantics (which side of a partial cylinder is active for wrapping).
+# See commit 629e02d for full context on the quadrant orientation fix.
 def construct_cylinder_basis(axis_vector, reference_x_axis=None, eps=1e-8):
     """
     Construct orthonormal basis for a cylinder with given axis direction.
+
+    This function ensures consistent cylinder orientation for OpenSim wrap
+    surfaces. The X-axis alignment and sign consistency are critical for
+    preserving the quadrant parameter semantics (which side of a partial
+    cylinder is active for muscle/ligament wrapping).
 
     Args:
         axis_vector: (3,) tensor, cylinder axis direction (need not be unit).
