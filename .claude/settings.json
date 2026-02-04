@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "View",
+      "Read",
+      "Glob",
+      "Grep",
+      "LS"
+    ]
+  }
+}
