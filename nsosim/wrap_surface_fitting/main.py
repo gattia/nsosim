@@ -25,7 +25,10 @@ class wrap_surface:
             dimensions (e.g., radii along x, y, z axes) of the wrap surface,
             applicable if `type_` is 'WrapEllipsoid'.
     """
-    def __init__(self, name, body, type_, xyz_body_rotation, translation, radius, length, dimensions):
+
+    def __init__(
+        self, name, body, type_, xyz_body_rotation, translation, radius, length, dimensions
+    ):
         self.name = name
         self.body = body
         self.type_ = type_
@@ -34,3 +37,22 @@ class wrap_surface:
         self.radius = radius
         self.length = length
         self.dimensions = dimensions
+
+    def to_dict(self):
+        import numpy as np
+
+        def _convert(v):
+            if isinstance(v, np.ndarray):
+                return v.tolist()
+            return v
+
+        return {
+            "name": self.name,
+            "body": self.body,
+            "type_": self.type_,
+            "xyz_body_rotation": _convert(self.xyz_body_rotation),
+            "translation": _convert(self.translation),
+            "radius": _convert(self.radius),
+            "length": _convert(self.length),
+            "dimensions": _convert(self.dimensions),
+        }

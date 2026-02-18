@@ -22,7 +22,8 @@ make lint          # Check formatting (isort + black)
 make autoformat    # Auto-format code
 
 # Tests
-pytest             # Runs all tests (skips train_test.py by default)
+pytest             # Test suite is minimal — being built out (see .claude/plans/repo-hardening.md)
+                   # `make test` is currently commented out in the Makefile
 
 # Build
 make build         # Build wheel to wheelhouse/
@@ -410,3 +411,10 @@ DICT_LIGAMENTS_UPDATE_STIFFNESS = {
     ...
 }
 ```
+
+
+# NOTE!!!
+There seemed to be some stochasticity in the extracted meniscal cartilage surfaces. this was debugged by my AI in a nother repo and they wrote a report here:
+/dataNAS/people/aagatti/programming/nsosim/MENISCUS_ARTICULAR_SURFACE_INSTABILITY.md
+
+This should be high on our list to fix. 

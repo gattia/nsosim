@@ -33,9 +33,9 @@ dev-conda:
 # 	rm -rf docs/NSM
 
 
-# test:
-# 	set -e
-# 	pytest
+test:
+	set -e
+	pytest
 
 lint:
 	set -e

@@ -1,16 +1,17 @@
-import pyvista as pv
-import numpy as np
-import re
-from pymskt.mesh.anatomical import FemurACS
-from pymskt.mesh import Mesh
-from NSM.models import TriplanarDecoder, Decoder
-from NSM.reconstruct import reconstruct_mesh
-import torch
 import json
 import os
+import re
+
+import numpy as np
+import pyvista as pv
+import torch
+from NSM.models import Decoder, TriplanarDecoder
+from NSM.reconstruct import reconstruct_mesh
+from pymskt.mesh import Mesh
+from pymskt.mesh.anatomical import FemurACS
 
 
-def load_model(config, path_model_state, model_type='triplanar'):
+def load_model(config, path_model_state, model_type="triplanar"):
     """
     Loads a pre-trained Neural Shape Model (NSM) from configuration and state files.
 
@@ -33,47 +34,46 @@ def load_model(config, path_model_state, model_type='triplanar'):
         ValueError: If `model_type` is not one of the supported values.
     """
 
-    if model_type == 'triplanar':
+    if model_type == "triplanar":
         model_class = TriplanarDecoder
         params = {
-            'latent_dim': config['latent_size'],
-            'n_objects': config['objects_per_decoder'],
-            'conv_hidden_dims': config['conv_hidden_dims'],
-            'conv_deep_image_size': config['conv_deep_image_size'],
-            'conv_norm': config['conv_norm'], 
-            'conv_norm_type': config['conv_norm_type'],
-            'conv_start_with_mlp': config['conv_start_with_mlp'],
-            'sdf_latent_size': config['sdf_latent_size'],
-            'sdf_hidden_dims': config['sdf_hidden_dims'],
-            'sdf_weight_norm': config['weight_norm'],
-            'sdf_final_activation': config['final_activation'],
-            'sdf_activation': config['activation'],
-            'sdf_dropout_prob': config['dropout_prob'],
-            'sum_sdf_features': config['sum_conv_output_features'],
-            'conv_pred_sdf': config['conv_pred_sdf'],
+            "latent_dim": config["latent_size"],
+            "n_objects": config["objects_per_decoder"],
+            "conv_hidden_dims": config["conv_hidden_dims"],
+            "conv_deep_image_size": config["conv_deep_image_size"],
+            "conv_norm": config["conv_norm"],
+            "conv_norm_type": config["conv_norm_type"],
+            "conv_start_with_mlp": config["conv_start_with_mlp"],
+            "sdf_latent_size": config["sdf_latent_size"],
+            "sdf_hidden_dims": config["sdf_hidden_dims"],
+            "sdf_weight_norm": config["weight_norm"],
+            "sdf_final_activation": config["final_activation"],
+            "sdf_activation": config["activation"],
+            "sdf_dropout_prob": config["dropout_prob"],
+            "sum_sdf_features": config["sum_conv_output_features"],
+            "conv_pred_sdf": config["conv_pred_sdf"],
         }
-    elif model_type == 'deepsdf':
+    elif model_type == "deepsdf":
         model_class = Decoder
         params = {
-            'latent_size': config['latent_size'],
-            'dims': config['layer_dimensions'],
-            'dropout': config['layers_with_dropout'],
-            'dropout_prob': config['dropout_prob'],
-            'norm_layers': config['layers_with_norm'],
-            'latent_in': config['layer_latent_in'],
-            'weight_norm': config['weight_norm'],
-            'xyz_in_all': config['xyz_in_all'],
-            'latent_dropout': config['latent_dropout'],
-            'activation': config['activation'],
-            'final_activation': config['final_activation'],
-            'concat_latent_input': config['concat_latent_input'],
-            'n_objects': config['objects_per_decoder'],
-            'progressive_add_depth': config['progressive_add_depth'],
-            'layer_split': config['layer_split'],
+            "latent_size": config["latent_size"],
+            "dims": config["layer_dimensions"],
+            "dropout": config["layers_with_dropout"],
+            "dropout_prob": config["dropout_prob"],
+            "norm_layers": config["layers_with_norm"],
+            "latent_in": config["layer_latent_in"],
+            "weight_norm": config["weight_norm"],
+            "xyz_in_all": config["xyz_in_all"],
+            "latent_dropout": config["latent_dropout"],
+            "activation": config["activation"],
+            "final_activation": config["final_activation"],
+            "concat_latent_input": config["concat_latent_input"],
+            "n_objects": config["objects_per_decoder"],
+            "progressive_add_depth": config["progressive_add_depth"],
+            "layer_split": config["layer_split"],
         }
     else:
-        raise ValueError(f'Unknown model type: {model_type}')
-
+        raise ValueError(f"Unknown model type: {model_type}")
 
     model = model_class(**params)
     saved_model_state = torch.load(path_model_state)
@@ -83,37 +83,38 @@ def load_model(config, path_model_state, model_type='triplanar'):
     return model
 
 
-def clip_bone_end(mesh_orig, bone_type='femur', max_z_rel_x=0.7):
-    if bone_type not in ['femur', 'tibia']:
+def clip_bone_end(mesh_orig, bone_type="femur", max_z_rel_x=0.7):
+    if bone_type not in ["femur", "tibia"]:
         return mesh_orig
-    
+
     # Always center (both approaches can use this)
     centroid = np.mean(mesh_orig.points, axis=0)
     mesh_orig.point_coords -= centroid
-    
-    # Calculate dimensions 
+
+    # Calculate dimensions
     bounds = mesh_orig.bounds
     x_dimension = bounds[1] - bounds[0]
-    y_dimension = bounds[3] - bounds[2] 
+    y_dimension = bounds[3] - bounds[2]
     z_dimension = bounds[5] - bounds[4]
-    
+
     # Unified offset calculation (both approaches use same logic)
     if z_dimension > max_z_rel_x * y_dimension:
         offset = max_z_rel_x * x_dimension
     else:
         offset = 0.95 * z_dimension
-    
+
     # Calculate clip value based on bone type
-    is_femur = bone_type == 'femur'
+    is_femur = bone_type == "femur"
     clip_value = (bounds[4] + offset) if is_femur else (bounds[5] - offset)
-    
+
     # Clip (same for both approaches)
     mesh_orig.clip("z", value=clip_value, invert=is_femur, inplace=True)
-    
+
     # Translate back
     mesh_orig.point_coords += centroid
-    
+
     return mesh_orig
+
 
 def read_iv(file_path):
     """
@@ -133,7 +134,7 @@ def read_iv(file_path):
         ValueError: If the "Coordinate3" or "IndexedFaceSet" sections are not
                     found, or if parsing fails.
     """
-    with open(file_path, 'r') as f:
+    with open(file_path, "r") as f:
         lines = f.readlines()
 
     coord_start_idx = -1
@@ -158,40 +159,41 @@ def read_iv(file_path):
 
     # Extract coordinates
     points_str = "".join(lines[coord_start_idx:coord_end_idx])
-    points_str = points_str.replace('\n', '').replace('[', '').replace(']', '')
-    points_list = [float(p) for p in re.split(r'[\s,]+', points_str) if p]
+    points_str = points_str.replace("\n", "").replace("[", "").replace("]", "")
+    points_list = [float(p) for p in re.split(r"[\s,]+", points_str) if p]
     points = np.array(points_list).reshape(-1, 3)
 
     # Extract face indices
     faces_str = "".join(lines[face_start_idx:face_end_idx])
-    faces_str = faces_str.replace('\n', '').replace('[', '').replace(']', '')
+    faces_str = faces_str.replace("\n", "").replace("[", "").replace("]", "")
     # Split by comma, then handle potential extra spaces and filter out -1 (end of face marker)
-    faces_list_str = [f.strip() for f in faces_str.split(',') if f.strip()]
-    
+    faces_list_str = [f.strip() for f in faces_str.split(",") if f.strip()]
+
     faces_connectivity = []
     current_face = []
     count = 0
     for val_str in faces_list_str:
         if val_str == "-1":
-            if current_face: # ensure current_face is not empty
+            if current_face:  # ensure current_face is not empty
                 # Prepend the number of points in the face
                 faces_connectivity.extend([len(current_face)] + current_face)
                 current_face = []
-            count = 0 # reset point counter for the new face
+            count = 0  # reset point counter for the new face
         else:
             try:
                 current_face.append(int(val_str))
-                count +=1
+                count += 1
             except ValueError:
                 print(f"Warning: Could not convert '{val_str}' to int. Skipping.")
-                continue # skip if conversion fails
-    
+                continue  # skip if conversion fails
+
     # Ensure the last face is added if the file doesn't end with -1 explicitly for the last face index list
     if current_face:
         faces_connectivity.extend([len(current_face)] + current_face)
 
     mesh = pv.PolyData(points, faces=np.array(faces_connectivity))
     return mesh
+
 
 def recon_mesh(
     mesh_paths,
@@ -248,94 +250,94 @@ def recon_mesh(
     Notes:
         Ordering assumptions in ``mesh_result['mesh']``:
         * ``len == 3`` - the third mesh (index 2) is treated as a fibula (tibia case).
-        * ``len == 4`` - the third and fourth meshes (indices 2 and 3) are treated as the medial 
+        * ``len == 4`` - the third and fourth meshes (indices 2 and 3) are treated as the medial
         and lateral menisci respectively (femur case).
 
-        The current pipeline therefore relies on passing exactly one additional mesh for a tibia 
-        reconstruction and exactly two additional meshes for a femur reconstruction. Supplying a 
-        different number or ordering of meshes will break this heuristic. If you anticipate other 
+        The current pipeline therefore relies on passing exactly one additional mesh for a tibia
+        reconstruction and exactly two additional meshes for a femur reconstruction. Supplying a
+        different number or ordering of meshes will break this heuristic. If you anticipate other
         combinations, consider adding an explicit flag or more robust logic.
     """
-    
+
     if scale_jointly is not None:
-        raise ValueError('scale_jointly is deprecated, it is automatically extracted from the model config')
-    
-    if clip_bone and model_config['bone'] in ['femur', 'tibia']:
+        raise ValueError(
+            "scale_jointly is deprecated, it is automatically extracted from the model config"
+        )
+
+    if clip_bone and model_config["bone"] in ["femur", "tibia"]:
         if mesh_paths[0] is None:
-            print('No bone mesh provided, skipping clipping')
+            print("No bone mesh provided, skipping clipping")
         else:
             print(f'Clipping bone mesh: {model_config["bone"]}')
             # load the mesh, do the clip, save a temp clipped mesh
-            temp_bone_mesh_path = mesh_paths[0] + '_temp.vtk'
+            temp_bone_mesh_path = mesh_paths[0] + "_temp.vtk"
             orig_bone_mesh_path = mesh_paths[0]
             orig_bone_mesh = Mesh(orig_bone_mesh_path)
-            clipped_bone_mesh = clip_bone_end(orig_bone_mesh, bone_type=model_config['bone'], max_z_rel_x=clip_bone_max_z_rel_x)
+            clipped_bone_mesh = clip_bone_end(
+                orig_bone_mesh, bone_type=model_config["bone"], max_z_rel_x=clip_bone_max_z_rel_x
+            )
             clipped_bone_mesh.save_mesh(temp_bone_mesh_path)
             mesh_paths[0] = temp_bone_mesh_path
-        
 
     mesh_result = reconstruct_mesh(
         path=mesh_paths,
         decoders=model,
-        latent_size=model_config['latent_size'],
+        latent_size=model_config["latent_size"],
         # Fitting parameters:
-        num_iterations=model_config['num_iterations_recon'] if num_iter is None else num_iter,
-        l2reg=model_config['l2reg_recon'],
+        num_iterations=model_config["num_iterations_recon"] if num_iter is None else num_iter,
+        l2reg=model_config["l2reg_recon"],
         latent_reg_weight=1e-4,
-        loss_type='l1',
-        lr=model_config['lr_recon'],
-        lr_update_factor=model_config['lr_update_factor_recon'],
-        n_lr_updates=model_config['n_lr_updates_recon'],
+        loss_type="l1",
+        lr=model_config["lr_recon"],
+        lr_update_factor=model_config["lr_update_factor_recon"],
+        n_lr_updates=model_config["n_lr_updates_recon"],
         return_latent=True,
         register_similarity=True,
-        scale_jointly=model_config['scale_jointly'],
+        scale_jointly=model_config["scale_jointly"],
         scale_all_meshes=True,
-        mesh_to_scale=model_config['mesh_to_scale'],
-        objects_per_decoder=model_config['objects_per_decoder'],
-        batch_size_latent_recon=model_config['batch_size_latent_recon'],
-        get_rand_pts=model_config['get_rand_pts_recon'],
-        n_pts_random=model_config['n_pts_random_recon'],
-        sigma_rand_pts=model_config['sigma_rand_pts_recon'],
+        mesh_to_scale=model_config["mesh_to_scale"],
+        objects_per_decoder=model_config["objects_per_decoder"],
+        batch_size_latent_recon=model_config["batch_size_latent_recon"],
+        get_rand_pts=model_config["get_rand_pts_recon"],
+        n_pts_random=model_config["n_pts_random_recon"],
+        sigma_rand_pts=model_config["sigma_rand_pts_recon"],
         n_samples_latent_recon=n_samples_latent_recon,
-
         calc_symmetric_chamfer=False,
         calc_assd=False,
         calc_emd=False,
-        
         # convergence=model_config['convergence_type_recon'],
-        convergence=10, 
-        convergence_patience=model_config['convergence_patience_recon'],
+        convergence=10,
+        convergence_patience=model_config["convergence_patience_recon"],
         # convergence_patience=model_config['convergence_patience_recon'] if convergence_patience is None else convergence_patience,
-        clamp_dist=model_config['clamp_dist_recon'],
-
-        fix_mesh=model_config['fix_mesh_recon'],
+        clamp_dist=model_config["clamp_dist_recon"],
+        fix_mesh=model_config["fix_mesh_recon"],
         verbose=verbose,
         return_registration_params=True,
     )
-    
-    if clip_bone and (model_config['bone'] in ['femur', 'tibia']) and (mesh_paths[0] is not None):
+
+    if clip_bone and (model_config["bone"] in ["femur", "tibia"]) and (mesh_paths[0] is not None):
         # delete the temp clipped mesh
         os.remove(temp_bone_mesh_path)
-    
+
     # get latent
-    latent = mesh_result['latent'].detach().cpu().numpy().tolist()
+    latent = mesh_result["latent"].detach().cpu().numpy().tolist()
 
     output_dict = {
-        'latent': latent,
-        'bone_mesh': mesh_result['mesh'][0],
-        'cart_mesh': mesh_result['mesh'][1],
-        'mesh_result': mesh_result
+        "latent": latent,
+        "bone_mesh": mesh_result["mesh"][0],
+        "cart_mesh": mesh_result["mesh"][1],
+        "mesh_result": mesh_result,
     }
-    
-    if len(mesh_result['mesh']) == 3:
-        output_dict['fibula_mesh'] = mesh_result['mesh'][2]
-        
-    elif len(mesh_result['mesh']) == 4:
-        output_dict['med_men_mesh'] = mesh_result['mesh'][2]
-        output_dict['lat_men_mesh'] = mesh_result['mesh'][3]
 
-        
+    if len(mesh_result["mesh"]) == 3:
+        output_dict["fibula_mesh"] = mesh_result["mesh"][2]
+
+    elif len(mesh_result["mesh"]) == 4:
+        output_dict["med_men_mesh"] = mesh_result["mesh"][2]
+        output_dict["lat_men_mesh"] = mesh_result["mesh"][3]
+
     return output_dict
+
 
 def load_preprocess_opensim_ref_mesh(path, z_rel_x, bone):
     """
@@ -364,15 +366,15 @@ def load_preprocess_opensim_ref_mesh(path, z_rel_x, bone):
     """
     # Import the transformation matrix
     from .nsm_fitting import OSIM_TO_NSM_TRANSFORM
-    
+
     ref_ = Mesh(path)
-    
+
     # Step 1: Convert coordinate system from OSIM to NSM orientation
     ref_.point_coords = ref_.point_coords @ OSIM_TO_NSM_TRANSFORM
-    
+
     # Step 2: Clip bone if needed (done in NSM coordinate system)
-    if bone in ['femur', 'tibia']:
-        print(f'Clipping {bone} mesh')
+    if bone in ["femur", "tibia"]:
+        print(f"Clipping {bone} mesh")
         ref_ = clip_bone_end(ref_, bone_type=bone, max_z_rel_x=z_rel_x)
 
     # Step 3: Scale from meters to millimeters
@@ -384,8 +386,9 @@ def load_preprocess_opensim_ref_mesh(path, z_rel_x, bone):
 
     # Step 5: Ensure proper data type
     ref_.point_coords = ref_.point_coords.astype(np.float64)
-    
+
     return ref_, mean_
+
 
 def load_preprocess_opensim_ref_menisci(med_meniscus_path, lat_meniscus_path):
     """
@@ -410,36 +413,37 @@ def load_preprocess_opensim_ref_menisci(med_meniscus_path, lat_meniscus_path):
             - mean_ (numpy.ndarray): The mean vector that was subtracted to center
               both meshes (after all transformations).
     """
-     # Import the transformation matrix
+    # Import the transformation matrix
     from .nsm_fitting import OSIM_TO_NSM_TRANSFORM
-    
+
     # Load both meniscus meshes
     med_meniscus = Mesh(med_meniscus_path)
     lat_meniscus = Mesh(lat_meniscus_path)
-    
+
     # Step 1: Convert coordinate system from OSIM to NSM orientation
     med_meniscus.point_coords = med_meniscus.point_coords @ OSIM_TO_NSM_TRANSFORM
     lat_meniscus.point_coords = lat_meniscus.point_coords @ OSIM_TO_NSM_TRANSFORM
-    
+
     # Step 2: Scale from meters to millimeters
     med_meniscus.point_coords = med_meniscus.point_coords * 1000
     lat_meniscus.point_coords = lat_meniscus.point_coords * 1000
-    
+
     # Step 3: Create a temporary combined mesh to calculate the overall centroid
     combined_mesh_pv = med_meniscus.mesh + lat_meniscus.mesh
     combined_menisci = Mesh(combined_mesh_pv)
-    
+
     # Step 4: Calculate the mean from the combined mesh
     mean_ = np.mean(combined_menisci.point_coords, axis=0)
-    
+
     # Step 5: Apply centering to both individual meshes
     med_meniscus.point_coords = med_meniscus.point_coords - mean_
     med_meniscus.point_coords = med_meniscus.point_coords.astype(np.float64)
-    
+
     lat_meniscus.point_coords = lat_meniscus.point_coords - mean_
     lat_meniscus.point_coords = lat_meniscus.point_coords.astype(np.float64)
-    
+
     return med_meniscus, lat_meniscus, mean_
+
 
 def acs_align_femur(femur):
     """
@@ -467,21 +471,22 @@ def acs_align_femur(femur):
     four_by_four[:3, -1] = femur_acs.origin
     four_by_four[:3, 0] = femur_acs.ml_axis
     four_by_four[:3, 1] = femur_acs.ap_axis
-    four_by_four[:3, 2] = -1 *femur_acs.is_axis
+    four_by_four[:3, 2] = -1 * femur_acs.is_axis
     inverse = np.linalg.inv(four_by_four)
 
     femur.apply_transform_to_mesh(inverse)
 
     return inverse
 
+
 def fit_nsm(
-        path_model_state,
-        path_model_config,
-        list_paths_meshes,
-        n_samples_latent_recon=20_000,
-        num_iter=None,
-        convergence_patience=10,
-        dict_update_params=None
+    path_model_state,
+    path_model_config,
+    list_paths_meshes,
+    n_samples_latent_recon=20_000,
+    num_iter=None,
+    convergence_patience=10,
+    dict_update_params=None,
 ):
     """
     Fits a Neural Shape Model (NSM) to a list of target meshes.
@@ -512,16 +517,15 @@ def fit_nsm(
             - result_mesh (dict): A dictionary containing detailed results from
               `recon_mesh`, including the loaded `model` itself.
     """
-    with open(path_model_config, 'r') as f:
+    with open(path_model_config, "r") as f:
         model_config = json.load(f)
-    
+
     if dict_update_params is not None:
         for key, value in dict_update_params.items():
             model_config[key] = value
 
-    model = load_model(model_config, path_model_state, model_type='triplanar')
+    model = load_model(model_config, path_model_state, model_type="triplanar")
 
-    
     recon_output = recon_mesh(
         list_paths_meshes,
         model,
@@ -532,7 +536,7 @@ def fit_nsm(
     )
 
     # Add the model to the mesh_result dictionary within recon_output
-    recon_output['mesh_result']['model'] = model
+    recon_output["mesh_result"]["model"] = model
 
     # recon_output now contains all necessary information, including the model
     # and meniscus meshes if they were returned by recon_mesh.
