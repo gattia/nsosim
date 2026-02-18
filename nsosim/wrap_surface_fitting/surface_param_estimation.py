@@ -1,3 +1,5 @@
+"""Geometric initialization for cylinder and ellipsoid fitters."""
+
 import warnings
 
 import numpy as np

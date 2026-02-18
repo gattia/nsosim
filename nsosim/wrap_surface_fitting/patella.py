@@ -1,3 +1,5 @@
+"""Specialized ellipsoid fitting for patella wrap surfaces."""
+
 import numpy as np
 
 from .main import wrap_surface

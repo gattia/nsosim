@@ -1,3 +1,5 @@
+"""Low-level OpenSim XML manipulation helpers for contact meshes, forces, and model components."""
+
 import json
 import logging
 from typing import Union

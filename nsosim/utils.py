@@ -1,3 +1,5 @@
+"""Utilities for NSM model loading, mesh I/O, and anatomical coordinate system alignment."""
+
 import json
 import logging
 import os

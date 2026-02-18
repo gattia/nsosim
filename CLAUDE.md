@@ -129,7 +129,7 @@ class TestCylinderFitterRotated:
 | `comak_osim_update.py` | Update OpenSim XML with subject-specific meshes, attachments, wrap surfaces |
 | `osim_utils.py` | Low-level OpenSim XML manipulation via Python API |
 | `utils.py` | NSM model loading, mesh I/O, anatomical coordinate system (ACS) alignment utilities |
-| `wraps.py` | **DEPRECATED** - Old manual wrap surface fitting. Use `wrap_surface_fitting/` instead |
+
 
 ### Wrap Surface Fitting Submodule (`wrap_surface_fitting/`)
 
@@ -375,6 +375,9 @@ fitted_wrap_parameters = {
 
 ## Key Design Decisions
 
+### `LOC_SDF_CACHE` Environment Variable
+`nsm_fitting.py:13` sets `os.environ["LOC_SDF_CACHE"] = ""` at import time. This is a workaround — the upstream NSM library expects this env var to exist but nsosim doesn't use it. Without this line, importing from `NSM.mesh.interpolate` would fail.
+
 ### Patella Centering
 The patella is centered by subtracting its mean position before saving to OpenSim. The offset is saved as `patella_offset.json` and used to update the default patella joint coordinates:
 ```python
@@ -499,8 +502,7 @@ DICT_LIGAMENTS_UPDATE_STIFFNESS = {
 ```
 
 
-# NOTE!!!
-There seemed to be some stochasticity in the extracted meniscal cartilage surfaces. this was debugged by my AI in a nother repo and they wrote a report here:
-/dataNAS/people/aagatti/programming/nsosim/MENISCUS_ARTICULAR_SURFACE_INSTABILITY.md
+## Known Issues
 
-This should be high on our list to fix. 
+### Meniscus Articular Surface Instability
+`create_meniscus_articulating_surface()` produces stochastic variation in the medial meniscus inferior surface (~40% point count variation, ASSD ~0.455mm across identical runs). Root causes: non-deterministic marching cubes in NSM reconstruction, non-deterministic mesh resampling, and ray-casting sensitivity to topology changes. See `MENISCUS_ARTICULAR_SURFACE_INSTABILITY.md` for full analysis and proposed fixes.

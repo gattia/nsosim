@@ -1,8 +1,3 @@
-# Note
-The above is likely stale. Please read CLAUDE.md for current state. 
-Once current refactor is done, this readme should be updated. 
-
-
 ```bash
 # create environment
 conda create -n nsosim python=3.9
@@ -39,7 +34,7 @@ The `nsosim` library serves a crucial role in the larger Gait Simulation Project
 *   **Anatomical Alignment & Registration:** Includes utilities for aligning bone meshes to anatomical coordinate systems (e.g., femur ACS) and registering them to template models, ensuring consistency.
 *   **Articular Surface Processing:** Provides tools to extract and refine articular cartilage surfaces from the NSM-reconstructed meshes, critical for accurate contact modeling.
 *   **OpenSim Model Component Management:** Facilitates updates to OpenSim model components, such as wrapping surfaces, to reflect subject-specific anatomy.
-*   **Modular Toolkit:** Organized into distinct modules (`nsm_fitting.py`, `comak_osim_update.py`, `articular_surfaces.py`, `utils.py`, `wraps.py`) for a clear and maintainable workflow.
+*   **Modular Toolkit:** Organized into distinct modules (`nsm_fitting.py`, `comak_osim_update.py`, `articular_surfaces.py`, `utils.py`, `wrap_surface_fitting/`) for a clear and maintainable workflow.
 
 ## Overview
 
@@ -51,7 +46,7 @@ The library is organized into the following main modules:
 *   `comak_osim_update.py`: Contains functions to modify and update OpenSim models. This can include adjusting model parameters based on subject-specific data or for compatibility with specific analyses like COMAK (Concurrent Optimization of Muscle Activations and Kinematics).
 *   `nsm_fitting.py`: Implements the pipeline for fitting NSMs to subject-specific bone and cartilage data. This includes aligning raw scan data (e.g., using anatomical coordinate systems), registering it to template models, fitting the NSM to capture the subject's unique anatomy, and transforming these personalized models into the OpenSim coordinate framework.
 *   `utils.py`: A collection of helper functions supporting the NSM fitting and model update processes. These utilities handle tasks such as loading NSM models, reconstructing mesh geometry from NSM latent codes, and performing anatomical alignments.
-*   `wraps.py`: Defines structures and functions for managing wrapping surfaces in OpenSim models. Wrapping surfaces are used to guide the paths of muscles and ligaments around bones and other structures.
+*   `wrap_surface_fitting/`: PyTorch-based optimization submodule for fitting OpenSim wrap surfaces (cylinders and ellipsoids) to subject-specific bone geometries using signed distance functions (SDF). Replaces the former `wraps.py` module.
 
 The `__init__.py` file ensures all these modules are accessible under the `nsosim` package.
 
@@ -87,8 +82,8 @@ The typical workflow using the `nsosim` library involves the following conceptua
 5.  **Interpolation of Anatomical Landmark and Wrapping Points (using `nsm_fitting.py`):**
     *   Interpolate the locations of anatomical landmarks, muscle/ligament attachment points, and points defining wrapping surfaces from a reference model to the subject-specific bone geometries in the OpenSim coordinate system. This is typically done using `nsm_fitting.interp_ref_to_subject_to_osim`.
 
-6.  **Definition of Wrapping Surfaces (using `wraps.py`):**
-    *   Utilize the interpolated points from the previous step to define or update OpenSim wrapping surfaces. Specific functions within `wraps.py` (e.g., `wraps.knee_ext_r_wrap`, `wraps.gastroc_condyles_r_wrap`) are used to create these surfaces tailored to the subject's anatomy.
+6.  **Definition of Wrapping Surfaces (using `wrap_surface_fitting/`):**
+    *   Fit wrap surfaces to subject-specific bone geometries using SDF-based optimization. `CylinderFitter` and `EllipsoidFitter` (from `wrap_surface_fitting/fitting.py`) fit cylinders and ellipsoids to labeled bone mesh regions, producing `wrap_surface` objects with translation, rotation, and dimension parameters for OpenSim.
 
 7.  **OpenSim Model Update and Finalization (using `comak_osim_update.py`):**
     *   Start with a generic or template OpenSim (`.osim`) knee model.
@@ -137,7 +132,7 @@ Based on scripted used in Gatt AA. et al. for OARSI 2025: `comak_1_update_comak_
     - Convert the NSM-reconstructed femur and cartilage meshes to OpenSim coordinates using `nsm_recon_to_osim`.
     - Extract the femoral articular surface using `create_articular_surfaces`.
     - Interpolate reference wrap surface points to the subject femur using `interp_ref_to_subject_to_osim`.
-    - Use these points to define subject-specific femur wrap surfaces via functions like `knee_ext_r_wrap`, `gastroc_condyles_r_wrap`, etc.
+    - Fit subject-specific femur wrap surfaces using `CylinderFitter` and `EllipsoidFitter` from `wrap_surface_fitting/`.
 
 5. **Tibia Processing**
     - Repeat the above steps for the tibia: NSM reconstruction, coordinate conversion, articular surface extraction, wrap point interpolation, and wrap surface definition.

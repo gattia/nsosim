@@ -1,3 +1,5 @@
+"""Data loading, SDF computation, and point classification for wrap surface fitting."""
+
 import logging
 import xml.etree.ElementTree as ET
 from typing import Dict, Tuple, Union

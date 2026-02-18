@@ -1,3 +1,5 @@
+"""Quaternion/Euler angle conversions and rotation matrix utilities."""
+
 import logging
 from typing import Union
 

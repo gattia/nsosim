@@ -1,3 +1,5 @@
+"""Articular surface extraction, meniscus processing, and prefemoral fat pad generation."""
+
 import gc
 import logging
 

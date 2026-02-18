@@ -1,3 +1,5 @@
+"""NSM fitting pipeline: align meshes, fit Neural Shape Models, and convert to OpenSim coordinates."""
+
 import json
 import logging
 import os

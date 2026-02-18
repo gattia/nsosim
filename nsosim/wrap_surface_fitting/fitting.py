@@ -1,3 +1,5 @@
+"""PyTorch-based cylinder and ellipsoid fitters using SDF optimization."""
+
 import logging
 import warnings
 from abc import ABC, abstractmethod

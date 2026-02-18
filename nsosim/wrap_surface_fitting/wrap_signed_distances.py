@@ -1,3 +1,5 @@
+"""Signed distance functions for cylinders and ellipsoids."""
+
 import torch
 
 
