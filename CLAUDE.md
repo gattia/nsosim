@@ -32,6 +32,81 @@ make clean         # Remove build artifacts
 
 **Code style:** Black with 100 char line length, isort with black profile.
 
+## Testing Guidelines
+
+When writing or modifying tests for this repo, follow these rules strictly.
+
+### Core Principle: Tests Must Be Able to Fail
+
+A test that cannot fail when the code is wrong is worse than no test — it gives false confidence. Every test you write should have a clear scenario where incorrect code would cause it to fail.
+
+### Anti-Patterns (DO NOT DO THESE)
+
+**Never wrap assertions in try/except/pytest.skip.** This silently hides real failures:
+```python
+# BAD — this test can never fail
+try:
+    result = create_articular_surfaces(bone, cart, ...)
+    assert result.n_points > 0
+except Exception as e:
+    pytest.skip(f"failed: {e}")  # silently passes even if code is broken
+
+# GOOD — failures are reported
+result = create_articular_surfaces(bone, cart, ...)
+assert result.n_points > 0
+```
+
+**Never loosen tolerances just to make a test pass.** If a test fails, fix the code or understand why the tolerance needs to be what it is. Document the reasoning if a loose tolerance is genuinely required:
+```python
+# BAD — atol=0.5 on a function that interpolates 3 exact values
+np.testing.assert_allclose(r_min, [5.0, 4.0, 5.0], atol=0.5)
+
+# GOOD — tolerance matches actual function precision
+np.testing.assert_allclose(r_min, [5.0, 4.0, 5.0], atol=0.01)
+
+# GOOD — loose tolerance with documented reason
+# SDF gradient approximation underestimates distance far from surface (see docstring)
+assert abs(sdf.item() - expected) < 0.3, f"At d={d}, SDF={sdf.item():.4f}"
+```
+
+**Never over-test trivial code.** A one-line function (e.g., `np.convolve(y, kernel, 'same')`) does not need 10+ tests. Two or three tests covering the key behaviors are sufficient. Spend test-writing effort on functions with complex logic, edge cases, or numerical sensitivity.
+
+**Never create fixtures "just in case."** Every fixture in conftest.py should be used by at least one test. Remove unused fixtures promptly.
+
+### What to Test
+
+**Prioritize by risk, not by simplicity.** Functions that are easy to test but never break are low value. Focus on:
+1. **Numerical edge cases**: gimbal lock, degenerate inputs, near-zero denominators
+2. **Non-trivial configurations**: rotated/translated/scaled inputs, not just axis-aligned defaults
+3. **Roundtrip consistency**: encode → decode should recover the original (e.g., rotation matrix → Euler → rotation matrix)
+4. **Cross-validation against reference implementations**: compare against SciPy, numpy, or analytical solutions where possible
+
+For this repo specifically, wrap surface fitters should always be tested with non-axis-aligned geometry. Real OpenSim wrap surfaces are never perfectly aligned with coordinate axes. An axis-aligned-only test suite will miss orientation bugs.
+
+### Practical Patterns for This Codebase
+
+**Fitter tests**: Use `scope="class"` fixtures for expensive fitting operations so the optimizer runs once and multiple test methods check different properties of the result:
+```python
+class TestCylinderFitterRotated:
+    @pytest.fixture(scope="class")
+    def fitted(self):
+        # Expensive: runs optimizer once
+        fitter = CylinderFitter(...)
+        fitter.fit(points=pts, labels=labels, ...)
+        return fitter
+
+    def test_recovers_center(self, fitted):  # cheap: just checks a property
+        ...
+    def test_recovers_radius(self, fitted):  # cheap: just checks a property
+        ...
+```
+
+**Rotation/transform tests**: Always validate against `scipy.spatial.transform.Rotation` as the reference. Test both the standard case AND gimbal lock (Y = ±90°).
+
+**Smoke tests**: Mark expensive integration tests with `@pytest.mark.slow`. These should verify the function runs without error and produces plausible output shape/type — but they must NOT swallow exceptions.
+
+**SDF tests**: Surface points should have SDF ≈ 0 with tight tolerance (1e-4). Interior points negative, exterior positive. Test with translated and rotated geometry, not just origin-centered axis-aligned shapes.
+
 ## Architecture
 
 ### Core Modules
