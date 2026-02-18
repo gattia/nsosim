@@ -376,16 +376,16 @@ class TestPatellaFitter:
 # ---------------------------------------------------------------------------
 
 
-def _rotated_cylinder_surface_points(center, radius, half_length, axis, n=800, noise=0.0003, seed=42):
+def _rotated_cylinder_surface_points(
+    center, radius, half_length, axis, n=800, noise=0.0003, seed=42
+):
     """Points on a cylinder surface with arbitrary axis orientation."""
     rng = np.random.default_rng(seed)
     theta = rng.uniform(0, 2 * np.pi, n)
     z = rng.uniform(-half_length, half_length, n)
 
     # Generate in local frame (Z-aligned), then rotate to world
-    pts_local = np.column_stack(
-        [radius * np.cos(theta), radius * np.sin(theta), z]
-    )
+    pts_local = np.column_stack([radius * np.cos(theta), radius * np.sin(theta), z])
 
     # Build rotation from Z to the target axis
     axis_unit = axis / np.linalg.norm(axis)

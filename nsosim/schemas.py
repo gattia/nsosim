@@ -184,9 +184,7 @@ def _validate_single_wrap_surface(wrap_params, wrap_type, path):
             if val is None:
                 raise ValidationError(f"{path}.{attr} is None")
             if not isinstance(val, (int, float, np.floating)):
-                raise ValidationError(
-                    f"{path}.{attr} must be numeric, got {type(val).__name__}"
-                )
+                raise ValidationError(f"{path}.{attr} must be numeric, got {type(val).__name__}")
 
     elif wrap_type == "ellipsoid":
         if not hasattr(wrap_params, "dimensions"):
@@ -212,8 +210,6 @@ def validate_surface_idx(surface_idx, max_idx=3):
         ValidationError: If surface_idx is out of range or wrong type.
     """
     if not isinstance(surface_idx, int):
-        raise ValidationError(
-            f"surface_idx must be an int, got {type(surface_idx).__name__}"
-        )
+        raise ValidationError(f"surface_idx must be an int, got {type(surface_idx).__name__}")
     if surface_idx < 0 or surface_idx > max_idx:
         raise ValidationError(f"surface_idx={surface_idx} out of range [0, {max_idx}]")

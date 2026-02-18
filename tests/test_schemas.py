@@ -11,7 +11,6 @@ from nsosim.schemas import (
 )
 from nsosim.wrap_surface_fitting.main import wrap_surface
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

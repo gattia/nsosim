@@ -58,5 +58,3 @@ def random_rotation_torch():
 
     R = torch.eye(3, dtype=torch.float64) + torch.sin(angle) * K + (1 - torch.cos(angle)) * (K @ K)
     return R
-
-
