@@ -105,6 +105,22 @@ class TestEulerRoundTrip:
             euler_ours, euler_scipy, atol=1e-6
         ), f"Mismatch at {angle_deg}deg X rotation"
 
+    @pytest.mark.parametrize("sign", [1, -1])
+    def test_gimbal_lock_roundtrip(self, sign):
+        """At Y=+/-90deg (gimbal lock), euler->matrix should still recover the rotation.
+
+        The Euler angle decomposition is not unique at gimbal lock (X and Z are
+        coupled), but reconstructing a matrix from the extracted angles must still
+        yield the original rotation matrix.
+        """
+        # Y = +/-90 degrees -> R[0,2] = +/-1 (gimbal lock)
+        R = ScipyR.from_euler("XYZ", [0.3, sign * np.pi / 2, 0.5]).as_matrix()
+        euler_ours = RotationUtils.rot_to_euler_xyz_body(R)
+        R_reconstructed = ScipyR.from_euler("XYZ", np.asarray(euler_ours)).as_matrix()
+        assert np.allclose(
+            R_reconstructed, R, atol=1e-6
+        ), f"Gimbal lock roundtrip failed for Y={sign}*90deg"
+
 
 # ---------------------------------------------------------------------------
 # Axis-angle <-> rotation matrix round-trips

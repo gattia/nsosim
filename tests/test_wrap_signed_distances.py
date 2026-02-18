@@ -38,7 +38,7 @@ class TestSdEllipsoidImproved:
         point = torch.tensor([[1.0, 0.0, 0.0]], dtype=torch.float64)
 
         sdf = self.sd_ellipsoid(point, center, axes, R)
-        assert abs(sdf.item()) < 0.1, f"Surface SDF should be ~0, got {sdf.item()}"
+        assert abs(sdf.item()) < 1e-4, f"Surface SDF should be ~0, got {sdf.item()}"
 
     def test_outside_is_positive(self):
         """Point well outside should have positive SDF."""
@@ -195,7 +195,7 @@ class TestSdCylinderWithAxis:
         point = torch.tensor([[1.0, 0.0, 0.0]], dtype=torch.float64)
 
         sdf = self.sd_cylinder(point, center, radius, half_length, axis)
-        assert abs(sdf.item()) < 0.1, f"Surface SDF should be ~0, got {sdf.item()}"
+        assert abs(sdf.item()) < 1e-4, f"Surface SDF should be ~0, got {sdf.item()}"
 
     def test_outside_radial_positive(self):
         """Point well outside radially should have positive SDF."""

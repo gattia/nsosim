@@ -168,7 +168,7 @@ class TestBuildMinRadialEnvelope:
         # At theta=0: min(5, 6) = 5
         # At theta=1: min(8, 4) = 4
         # At theta=2: min(5, 7) = 5
-        np.testing.assert_allclose(r_min, [5.0, 4.0, 5.0], atol=0.5)
+        np.testing.assert_allclose(r_min, [5.0, 4.0, 5.0], atol=0.01)
 
     def test_single_region(self):
         """With one region, envelope equals that region's percentile."""
@@ -182,7 +182,7 @@ class TestBuildMinRadialEnvelope:
             region_percentiles, smooth_window=1, n_theta_grid=3
         )
 
-        np.testing.assert_allclose(r_min, [3.0, 4.0, 5.0], atol=0.5)
+        np.testing.assert_allclose(r_min, [3.0, 4.0, 5.0], atol=0.01)
 
     def test_output_shape(self):
         """Output should have the requested grid resolution."""
@@ -314,21 +314,18 @@ class TestCreateArticularSurfaces:
         bone_mesh = Mesh(bone)
         cart_mesh = Mesh(cart)
 
-        try:
-            result = create_articular_surfaces(
-                bone_mesh,
-                cart_mesh,
-                triangle_density=None,
-                bone_clusters=None,
-                cart_clusters=None,
-                ray_length=10,
-                smooth_iter=5,
-                n_largest=1,
-            )
-            assert isinstance(result, pv.PolyData)
-            assert result.n_points > 0
-        except Exception as e:
-            pytest.skip(f"create_articular_surfaces failed on synthetic data: {e}")
+        result = create_articular_surfaces(
+            bone_mesh,
+            cart_mesh,
+            triangle_density=None,
+            bone_clusters=None,
+            cart_clusters=None,
+            ray_length=10,
+            smooth_iter=5,
+            n_largest=1,
+        )
+        assert isinstance(result, pv.PolyData)
+        assert result.n_points > 0
 
 
 # ---------------------------------------------------------------------------
@@ -353,21 +350,17 @@ class TestCreateMeniscusArticulatingSurface:
         upper_mesh = Mesh(upper)
         lower_mesh = Mesh(lower)
 
-        try:
-            upper_surf, lower_surf = create_meniscus_articulating_surface(
-                meniscus_mesh=men_mesh,
-                upper_articulating_bone_mesh=upper_mesh,
-                lower_articulating_bone_mesh=lower_mesh,
-                ray_length=10.0,
-                n_largest=1,
-                smooth_iter=5,
-                triangle_density=None,
-                refine_by_radial_envelope=False,
-            )
-            # Basic assertions: both should be mesh-like objects
-            assert upper_surf is not None
-            assert lower_surf is not None
-            assert hasattr(upper_surf, "point_coords")
-            assert hasattr(lower_surf, "point_coords")
-        except Exception as e:
-            pytest.skip(f"create_meniscus_articulating_surface failed on synthetic data: {e}")
+        upper_surf, lower_surf = create_meniscus_articulating_surface(
+            meniscus_mesh=men_mesh,
+            upper_articulating_bone_mesh=upper_mesh,
+            lower_articulating_bone_mesh=lower_mesh,
+            ray_length=10.0,
+            n_largest=1,
+            smooth_iter=5,
+            triangle_density=None,
+            refine_by_radial_envelope=False,
+        )
+        assert upper_surf is not None
+        assert lower_surf is not None
+        assert hasattr(upper_surf, "point_coords")
+        assert hasattr(lower_surf, "point_coords")

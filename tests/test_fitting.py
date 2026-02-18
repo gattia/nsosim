@@ -372,6 +372,202 @@ class TestPatellaFitter:
 
 
 # ---------------------------------------------------------------------------
+# CylinderFitter with tilted axis (production-realistic)
+# ---------------------------------------------------------------------------
+
+
+def _rotated_cylinder_surface_points(center, radius, half_length, axis, n=800, noise=0.0003, seed=42):
+    """Points on a cylinder surface with arbitrary axis orientation."""
+    rng = np.random.default_rng(seed)
+    theta = rng.uniform(0, 2 * np.pi, n)
+    z = rng.uniform(-half_length, half_length, n)
+
+    # Generate in local frame (Z-aligned), then rotate to world
+    pts_local = np.column_stack(
+        [radius * np.cos(theta), radius * np.sin(theta), z]
+    )
+
+    # Build rotation from Z to the target axis
+    axis_unit = axis / np.linalg.norm(axis)
+    z_hat = np.array([0.0, 0.0, 1.0])
+    v = np.cross(z_hat, axis_unit)
+    c = np.dot(z_hat, axis_unit)
+    if np.linalg.norm(v) < 1e-10:
+        R = np.eye(3) if c > 0 else np.diag([1, -1, -1])
+    else:
+        vx = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
+        R = np.eye(3) + vx + vx @ vx * (1 / (1 + c))
+
+    pts_world = (R @ pts_local.T).T + center
+    if noise > 0:
+        pts_world += rng.normal(0, noise, pts_world.shape)
+    return pts_world, R
+
+
+class TestCylinderFitterRotated:
+    """Fit a tilted cylinder and verify recovered parameters.
+
+    This exercises the axis-vector parameterization which is the real-world case:
+    wrap surfaces in OpenSim are never perfectly axis-aligned.
+    """
+
+    TRUE_CENTER = np.array([0.04, 0.05, -0.02])
+    TRUE_RADIUS = 0.018
+    TRUE_HALF_LENGTH = 0.035
+    TRUE_AXIS = np.array([1.0, 2.0, 1.0])  # tilted
+
+    @pytest.fixture(scope="class")
+    def fitted(self):
+        axis_unit = self.TRUE_AXIS / np.linalg.norm(self.TRUE_AXIS)
+        pts, _ = _rotated_cylinder_surface_points(
+            self.TRUE_CENTER, self.TRUE_RADIUS, self.TRUE_HALF_LENGTH, axis_unit, n=1000
+        )
+        labels = np.ones(len(pts))
+
+        fitter = CylinderFitter(
+            epochs=0,
+            use_lbfgs=True,
+            lbfgs_epochs=30,
+            alpha=1.0,
+            beta=0.0,
+            gamma=0.0,
+            initialization="pca",
+            center_transform="linear",
+            margin_decay_type=None,
+        )
+        result = fitter.fit(points=pts, labels=labels, margin=1e-6, plot=False)
+        return fitter, result
+
+    def test_recovers_center(self, fitted):
+        fitter, _ = fitted
+        wp = fitter.wrap_params
+        np.testing.assert_allclose(
+            wp.translation, self.TRUE_CENTER, atol=0.003, err_msg="Center off by >3 mm"
+        )
+
+    def test_recovers_radius(self, fitted):
+        fitter, _ = fitted
+        wp = fitter.wrap_params
+        rel_err = abs(float(wp.radius) - self.TRUE_RADIUS) / self.TRUE_RADIUS
+        assert rel_err < 0.05, f"Radius relative error {rel_err:.2%} exceeds 5%"
+
+    def test_recovers_axis(self, fitted):
+        _, result = fitted
+        R = result[2].detach().cpu().numpy()
+        recovered_axis = R[:, 2]
+        axis_unit = self.TRUE_AXIS / np.linalg.norm(self.TRUE_AXIS)
+        cos_sim = abs(np.dot(recovered_axis, axis_unit))
+        assert cos_sim > 0.99, f"Axis cosine similarity {cos_sim:.6f} < 0.99"
+
+
+# ---------------------------------------------------------------------------
+# EllipsoidFitter with rotated orientation (production-realistic)
+# ---------------------------------------------------------------------------
+
+
+def _rotated_ellipsoid_labeled_points(center, axes, rotation_matrix, n_per_side=600, seed=42):
+    """Near-surface inside/outside labeled points for a rotated ellipsoid."""
+    rng = np.random.default_rng(seed)
+
+    u = rng.uniform(0, 2 * np.pi, n_per_side)
+    v = rng.uniform(0, np.pi, n_per_side)
+
+    # Points in local (axis-aligned) frame
+    r_inside = rng.uniform(0.85, 0.99, n_per_side)
+    pts_in_local = np.column_stack(
+        [
+            axes[0] * r_inside * np.sin(v) * np.cos(u),
+            axes[1] * r_inside * np.sin(v) * np.sin(u),
+            axes[2] * r_inside * np.cos(v),
+        ]
+    )
+
+    r_outside = rng.uniform(1.01, 1.15, n_per_side)
+    pts_out_local = np.column_stack(
+        [
+            axes[0] * r_outside * np.sin(v) * np.cos(u),
+            axes[1] * r_outside * np.sin(v) * np.sin(u),
+            axes[2] * r_outside * np.cos(v),
+        ]
+    )
+
+    # Rotate to world frame
+    R = rotation_matrix
+    pts_in = (R @ pts_in_local.T).T + center
+    pts_out = (R @ pts_out_local.T).T + center
+
+    all_pts = np.vstack([pts_in, pts_out])
+    labels = np.concatenate([np.ones(n_per_side), np.zeros(n_per_side)])
+
+    # Compute SDF in rotated frame
+    pts_t = torch.tensor(all_pts, dtype=torch.float32)
+    center_t = torch.tensor(center, dtype=torch.float32)
+    axes_t = torch.tensor(axes, dtype=torch.float32)
+    R_t = torch.tensor(R, dtype=torch.float32)
+    with torch.no_grad():
+        sdf = sd_ellipsoid_improved(pts_t, center_t, axes_t, R_t).numpy()
+
+    return all_pts, labels, sdf
+
+
+class TestEllipsoidFitterRotated:
+    """Fit a rotated ellipsoid and verify recovered parameters.
+
+    This exercises the quaternion parameterization with non-identity rotation,
+    which is the real-world case for OpenSim wrap surfaces.
+    """
+
+    TRUE_CENTER = np.array([0.04, 0.05, -0.02])
+    TRUE_AXES = np.array([0.03, 0.02, 0.015])
+
+    @staticmethod
+    def _make_rotation():
+        """45-degree rotation about [1, 1, 0] axis."""
+        from scipy.spatial.transform import Rotation as ScipyR
+
+        axis = np.array([1.0, 1.0, 0.0])
+        axis = axis / np.linalg.norm(axis)
+        return ScipyR.from_rotvec(axis * np.radians(45)).as_matrix()
+
+    @pytest.fixture(scope="class")
+    def fitted(self):
+        R_true = self._make_rotation()
+        pts, labels, sdf = _rotated_ellipsoid_labeled_points(
+            self.TRUE_CENTER, self.TRUE_AXES, R_true, seed=42
+        )
+        fitter = EllipsoidFitter(
+            lr=5e-3,
+            epochs=500,
+            use_lbfgs=True,
+            lbfgs_epochs=30,
+            alpha=1.0,
+            beta=0.5,
+            gamma=0.0,
+            initialization="pca",
+            center_transform="linear",
+            margin_decay_type="linear",
+        )
+        result = fitter.fit(points=pts, labels=labels, sdf=sdf, margin=0.005, plot=False)
+        return fitter, result
+
+    def test_recovers_center(self, fitted):
+        fitter, _ = fitted
+        wp = fitter.wrap_params
+        np.testing.assert_allclose(
+            wp.translation, self.TRUE_CENTER, atol=0.002, err_msg="Center off by >2 mm"
+        )
+
+    def test_recovers_axes(self, fitted):
+        fitter, _ = fitted
+        wp = fitter.wrap_params
+        recovered = np.sort(wp.dimensions)
+        expected = np.sort(self.TRUE_AXES)
+        for r, e in zip(recovered, expected):
+            rel_err = abs(r - e) / e
+            assert rel_err < 0.10, f"Axis {r:.4f} vs {e:.4f}: relative error {rel_err:.2%} > 10%"
+
+
+# ---------------------------------------------------------------------------
 # construct_cylinder_basis
 # ---------------------------------------------------------------------------
 

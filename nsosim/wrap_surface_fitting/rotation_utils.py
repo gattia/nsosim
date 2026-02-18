@@ -213,9 +213,10 @@ class RotationUtils:
             z = torch.atan2(R[1, 0], R[1, 1])
         elif torch.abs(R[0, 2] + 1.0) < eps:
             # Gimbal lock: y = -pi/2
+            # R[1,0] = sin(z - x), R[1,1] = cos(z - x); setting x=0 gives z
             x = torch.tensor(0.0, dtype=R.dtype, device=R.device)
             y = torch.tensor(-np.pi / 2, dtype=R.dtype, device=R.device)
-            z = torch.atan2(-R[1, 0], R[1, 1])
+            z = torch.atan2(R[1, 0], R[1, 1])
         else:
             # Standard case
             # y is simply asin(R[0,2])
