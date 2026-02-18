@@ -138,9 +138,12 @@ This plan is designed to be handed to an AI agent phase-by-phase. Follow these r
 
 ### 5.2 Update `CLAUDE.md`
 - Document the `LOC_SDF_CACHE` environment variable hack in `nsm_fitting.py:10`
+    - Should this be a hack? Should we fix this? 
 - Note the `print()` vs `logging` inconsistency (until Phase 4.2 fixes it)
+    - But is this done now? 
 - Add note about meniscus instability issue and link to `MENISCUS_ARTICULAR_SURFACE_INSTABILITY.md`
 - Document which functions have type annotations and which don't (so AI agents know where to be extra careful)
+    - Document this where? Im not sure this is needed? This seems like bloated text as its subject to change. 
 
 ### 5.3 Add module docstrings to files missing them
 - `nsm_fitting.py`, `utils.py`, `osim_utils.py`, `articular_surfaces.py` (core modules)
