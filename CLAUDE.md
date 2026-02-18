@@ -32,6 +32,17 @@ make clean         # Remove build artifacts
 
 **Code style:** Black with 100 char line length, isort with black profile.
 
+### Commit Discipline for Formatting
+
+**Always commit code changes BEFORE running `make autoformat`.** Autoformat reformats the entire repo, not just your changes. If you mix code changes with repo-wide reformatting in one commit, the diff becomes unreadable and hard to review. The workflow is:
+
+1. Make your code changes
+2. `git add` and `git commit` the code changes
+3. Run `make autoformat`
+4. `git add` and `git commit` the formatting changes separately (e.g., "Apply autoformat")
+
+This keeps the meaningful diff in one commit and the mechanical formatting in another.
+
 ## Testing Guidelines
 
 When writing or modifying tests for this repo, follow these rules strictly.
