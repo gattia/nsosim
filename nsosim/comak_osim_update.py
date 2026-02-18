@@ -10,6 +10,7 @@ from nsosim.osim_utils import (
     update_wrap_cylinder,
     update_wrap_ellipsoid,
 )
+from nsosim.schemas import validate_fitted_wrap_parameters
 
 DICT_CONTACT_MESHFILES_UPDATE = {
     "femur_cartilage": {
@@ -166,6 +167,9 @@ def update_osim_model(
             timestamped name.
 
     """
+
+    # Validate wrap objects structure before processing
+    validate_fitted_wrap_parameters(dict_wrap_objects)
 
     # update the geometry files used for visualization & for contact force
     # simulations.

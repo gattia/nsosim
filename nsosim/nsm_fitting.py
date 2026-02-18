@@ -7,6 +7,7 @@ import pyvista as pv
 import vtk
 from pymskt.mesh import Mesh
 
+from .schemas import ValidationError, validate_dict_bones, validate_surface_idx
 from .utils import acs_align_femur, fit_nsm, read_iv
 
 os.environ["LOC_SDF_CACHE"] = ""  # SET DUMMY BECUASE LIBRARY CURRENTLY LOOKS FOR IT.
@@ -323,6 +324,9 @@ def align_knee_osim_fit_nsm(
         dict: The updated `dict_bones` with results from NSM fitting for all bones.
     """
 
+    # Validate dict_bones structure before processing
+    validate_dict_bones(dict_bones)
+
     # Ensure the femur (which provides the reference transform) is always processed first.
     # Python ≥3.7 preserves insertion order for normal dicts, but callers might build the
     # dictionary with a comprehension or in another order.  We therefore build an explicit
@@ -476,6 +480,8 @@ def interpolate_ref_points_nsm_space(
     Raises:
         ValueError: If `ref_mesh_path` has an unrecognized file extension.
     """
+    validate_surface_idx(surface_idx)
+
     if isinstance(ref_mesh, str):
         ref_mesh = pv.PolyData(ref_mesh)
     elif isinstance(ref_mesh, (pv.PolyData, Mesh)):
