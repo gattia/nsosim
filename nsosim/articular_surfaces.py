@@ -13,6 +13,17 @@ from pymskt.mesh.meshCartilage import (
 
 logger = logging.getLogger(__name__)
 
+# --- Default constants ---
+# Meniscus surface extraction / refinement
+DEFAULT_MENISCUS_SDF_THRESHOLD = 0.1  # mm, SDF label threshold
+DEFAULT_RADIAL_PERCENTILE = 95.0  # percentile for radial envelope
+DEFAULT_TRIANGLE_DENSITY = 4_000_000  # target triangle density (~2.6 tri/mm²)
+
+# Prefemoral fat pad
+DEFAULT_FATPAD_BASE_MM = 0.5
+DEFAULT_FATPAD_TOP_MM = 6.0
+DEFAULT_MAX_DISTANCE_TO_PATELLA_MM = 30.0
+
 
 # ============================================================================
 # Helper functions for radial envelope refinement of meniscus surfaces
@@ -310,8 +321,8 @@ def refine_meniscus_articular_surfaces(
     lower_surface: pv.PolyData,
     upper_surface: pv.PolyData,
     center=None,
-    distance_thresh: float = 0.1,
-    percentile: float = 95.0,
+    distance_thresh: float = DEFAULT_MENISCUS_SDF_THRESHOLD,
+    percentile: float = DEFAULT_RADIAL_PERCENTILE,
     n_theta_bins: int = 100,
     smooth_window: int = 7,
     n_theta_grid: int = 200,
@@ -487,15 +498,15 @@ def create_meniscus_articulating_surface(
     n_largest=1,
     smooth_iter=50,
     boundary_smoothing=False,
-    triangle_density=4_000_000,  # 2.6 triangles/mm^2
+    triangle_density=DEFAULT_TRIANGLE_DENSITY,  # ~2.6 triangles/mm^2
     meniscus_clusters=None,
     upper_articulating_bone_clusters=None,
     lower_articulating_bone_clusters=None,
     # Radial envelope refinement parameters
     meniscus_center=None,  # if None, will use meniscus centroid
     refine_by_radial_envelope=True,
-    distance_thresh=0.1,  # mm for SDF labeling
-    radial_percentile=95.0,
+    distance_thresh=DEFAULT_MENISCUS_SDF_THRESHOLD,  # mm for SDF labeling
+    radial_percentile=DEFAULT_RADIAL_PERCENTILE,
     n_theta_bins=100,
     smooth_window=7,
     n_theta_grid=200,
@@ -681,7 +692,7 @@ def create_articular_surfaces(
     n_largest=1,
     bone_clusters=None,
     cart_clusters=None,
-    triangle_density=4_000_000,  # 2.6 triangles/mm^2
+    triangle_density=DEFAULT_TRIANGLE_DENSITY,  # ~2.6 triangles/mm^2
     ray_length=10,
     smooth_iter=100,
 ):
@@ -1133,9 +1144,9 @@ def create_prefemoral_fatpad_noboolean(
     femur_cart_mesh,
     patella_bone_mesh,
     patella_cart_mesh,
-    base_mm: float = 0.5,
-    top_mm: float = 6.0,
-    max_distance_to_patella_mm: float = 30.0,
+    base_mm: float = DEFAULT_FATPAD_BASE_MM,
+    top_mm: float = DEFAULT_FATPAD_TOP_MM,
+    max_distance_to_patella_mm: float = DEFAULT_MAX_DISTANCE_TO_PATELLA_MM,
     percent_fem_cart_to_keep: float = 0.15,
     resample_clusters_final: int = 2000,
     output_path: str = None,

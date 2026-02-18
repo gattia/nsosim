@@ -1,6 +1,6 @@
 import logging
 
-from . import articular_surfaces, comak_osim_update, nsm_fitting, osim_utils, utils, wraps
+from . import articular_surfaces, comak_osim_update, nsm_fitting, osim_utils, utils
 
 __version__ = "0.0.1"
 
@@ -11,7 +11,6 @@ __all__ = [
     "comak_osim_update",
     "nsm_fitting",
     "utils",
-    "wraps",
 ]
 
 

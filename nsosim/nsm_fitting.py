@@ -109,7 +109,9 @@ def align_bone_osim_fit_nsm(
 
     # align the subject's bone with the anatomical coordinate system of the femur
     # then rigidly register to the femur bone of template
-    # TODO: get rid of this extra alignment transform later?
+    # NOTE: ACS alignment is a legacy step that pre-aligns the femur before rigid registration.
+    # It can be skipped by setting acs_align=False (already the default). Removing this code path
+    # entirely would require verifying all downstream consumers no longer pass acs_align=True.
     if bone == "femur":
         if acs_align:
             femur_acs_inverse = acs_align_femur(subject_bone)
@@ -168,7 +170,8 @@ def align_bone_osim_fit_nsm(
     cart_mesh.apply_transform_to_mesh(femur_transform)
 
     # create filenames to save meshes - so they can be loaded into the nsm recon function.
-    # TODO: Update NSM recon function to
+    # TODO: Update NSM recon function to accept mesh objects directly instead of file paths,
+    # avoiding the need to save/reload aligned meshes to disk.
     new_bone_filename = dict_bone["subject"]["bone_filename"].replace(".vtk", "_aligned.vtk")
     new_cart_filename = dict_bone["subject"]["cart_filename"].replace(".vtk", "_aligned.vtk")
 
@@ -762,8 +765,7 @@ def check_icp_transform(icp_transform):
         if icp_transform.shape != (4, 4) and np.product(icp_transform.shape) == 16:
             icp_transform = icp_transform.reshape(4, 4)
     else:
-        print(type(icp_transform))
-        print(icp_transform)
+        logger.error("Unexpected icp_transform type: %s\n%s", type(icp_transform), icp_transform)
         raise ValueError("icp_transform not a valid type")
 
     return icp_transform

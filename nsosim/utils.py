@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import re
 
@@ -9,6 +10,10 @@ from NSM.models import Decoder, TriplanarDecoder
 from NSM.reconstruct import reconstruct_mesh
 from pymskt.mesh import Mesh
 from pymskt.mesh.anatomical import FemurACS
+
+logger = logging.getLogger(__name__)
+
+BONE_CLIPPING_FACTOR = 0.95
 
 
 def load_model(config, path_model_state, model_type="triplanar"):
@@ -101,7 +106,7 @@ def clip_bone_end(mesh_orig, bone_type="femur", max_z_rel_x=0.7):
     if z_dimension > max_z_rel_x * y_dimension:
         offset = max_z_rel_x * x_dimension
     else:
-        offset = 0.95 * z_dimension
+        offset = BONE_CLIPPING_FACTOR * z_dimension
 
     # Calculate clip value based on bone type
     is_femur = bone_type == "femur"
@@ -184,7 +189,7 @@ def read_iv(file_path):
                 current_face.append(int(val_str))
                 count += 1
             except ValueError:
-                print(f"Warning: Could not convert '{val_str}' to int. Skipping.")
+                logger.warning("Could not convert '%s' to int. Skipping.", val_str)
                 continue  # skip if conversion fails
 
     # Ensure the last face is added if the file doesn't end with -1 explicitly for the last face index list
@@ -266,9 +271,9 @@ def recon_mesh(
 
     if clip_bone and model_config["bone"] in ["femur", "tibia"]:
         if mesh_paths[0] is None:
-            print("No bone mesh provided, skipping clipping")
+            logger.info("No bone mesh provided, skipping clipping")
         else:
-            print(f'Clipping bone mesh: {model_config["bone"]}')
+            logger.info("Clipping bone mesh: %s", model_config["bone"])
             # load the mesh, do the clip, save a temp clipped mesh
             temp_bone_mesh_path = mesh_paths[0] + "_temp.vtk"
             orig_bone_mesh_path = mesh_paths[0]
@@ -399,7 +404,7 @@ def load_preprocess_opensim_ref_mesh(path, z_rel_x, bone):
 
     # Step 2: Clip bone if needed (done in NSM coordinate system)
     if bone in ["femur", "tibia"]:
-        print(f"Clipping {bone} mesh")
+        logger.info("Clipping %s mesh", bone)
         ref_ = clip_bone_end(ref_, bone_type=bone, max_z_rel_x=z_rel_x)
 
     # Step 3: Scale from meters to millimeters

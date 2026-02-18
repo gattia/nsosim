@@ -91,8 +91,11 @@ def update_wrap_objects(model, dict_wrap_objects):
     for bone, bone_dict in dict_wrap_objects.items():
         for body, body_dict in bone_dict.items():
             if body == "femur_r":
-                # TODO: update dictionaries to include parent/child info so
-                # this doesnt need to be inferred?
+                # TODO: update dictionaries to include parent/child info so this doesn't
+                # need to be inferred. Target structure: each body entry would include a
+                # 'parent_body' key, e.g.:
+                #   {'femur_distal_r': {'parent_body': 'femur_r', 'cylinder': {...}, ...}}
+                # This would replace the hardcoded `if body == "femur_r"` check below.
                 # get the offset between the femur_r and femur_distal_r
                 offset = express_point_in_frame(
                     xyz_in_source=np.array([0, 0, 0]),

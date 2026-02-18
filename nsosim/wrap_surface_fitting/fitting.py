@@ -1490,7 +1490,7 @@ def construct_cylinder_basis(axis_vector, reference_x_axis=None, eps=1e-8):
         x_local = -x_local
 
     # 5) Complete right-handed frame
-    y_local = torch.cross(z_local, x_local)
+    y_local = torch.linalg.cross(z_local, x_local)
     y_local = y_local / (torch.norm(y_local) + eps)
 
     R = torch.stack([x_local, y_local, z_local], dim=1)
