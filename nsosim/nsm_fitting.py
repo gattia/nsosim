@@ -15,7 +15,6 @@ from .utils import acs_align_femur, fit_nsm, read_iv
 os.environ["LOC_SDF_CACHE"] = ""  # SET DUMMY BECUASE LIBRARY CURRENTLY LOOKS FOR IT.
 
 from NSM.mesh.interpolate import interpolate_points
-from pymskt.mesh import Mesh
 from pymskt.mesh.meshTransform import get_linear_transform_matrix
 
 # Module-level logger. Configure with nsosim.configure_logging()
@@ -702,6 +701,9 @@ def convert_nsm_recon_to_OSIM_(
     2. Scaling from millimeters to meters.
     3. Applying a combined coordinate transformation and rotation to OSIM space.
 
+    Note: Mutates ``points_`` in-place (via ``+=`` and ``/=``). Pass ``.copy()`` if
+    you need to preserve the original array.
+
     Args:
         points_ (numpy.ndarray): Nx3 array of points in the source space (e.g., mm, NSM-aligned).
         ref_mesh_orig_center (numpy.ndarray): The original centering vector that was
@@ -732,6 +734,9 @@ def convert_OSIM_to_nsm_(
     1. Applying the inverse combined coordinate transformation and rotation.
     2. Scaling from meters to millimeters.
     3. Subtracting the original reference mesh centering bias.
+
+    Note: Mutates ``points_`` in-place (via ``*=`` and ``-=``). Pass ``.copy()`` if
+    you need to preserve the original array.
 
     Args:
         points_ (numpy.ndarray): Nx3 array of points in OSIM coordinates (meters).

@@ -1,7 +1,9 @@
 pyvista
 numpy
 vtk
-mskt
+pymskt
 nibabel
-#NSM
 scipy
+torch
+# NSM — install manually: pip install git+https://github.com/gattia/nsm.git
+# opensim — requires JAM/COMAK fork built from source, not pip-installable

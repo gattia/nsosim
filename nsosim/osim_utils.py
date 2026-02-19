@@ -8,7 +8,7 @@ import numpy as np
 import opensim as osim
 from pymskt.mesh import Mesh
 
-ROUND_DIGITS = 6
+ROUND_DIGITS = 6  # Decimal precision for OpenSim XML coordinates (6 digits ≈ 1 µm in meters)
 
 # Module-level logger. Configure in nsosim.configure_logging()
 logger = logging.getLogger(__name__)
@@ -395,17 +395,15 @@ def update_joint_default_values(model, dict_joint_default_values_update, increme
 def update_wrap_cylinder(
     model, body_name, wrap_name, translation=None, xyz_body_rotation=None, radius=None, length=None
 ):
-
-    # assert that translation, xyz_body_rotation, radius, and length are all float
     if translation is not None:
-        assert isinstance(
-            translation, (list, np.ndarray)
-        ), f"translation must be a list or numpy array, got {type(translation)}"
+        if not isinstance(translation, (list, np.ndarray)):
+            raise TypeError(f"translation must be a list or numpy array, got {type(translation)}")
         translation = np.asarray(translation, dtype=float).round(ROUND_DIGITS)
     if xyz_body_rotation is not None:
-        assert isinstance(
-            xyz_body_rotation, (list, np.ndarray)
-        ), f"xyz_body_rotation must be a list or numpy array, got {type(xyz_body_rotation)}"
+        if not isinstance(xyz_body_rotation, (list, np.ndarray)):
+            raise TypeError(
+                f"xyz_body_rotation must be a list or numpy array, got {type(xyz_body_rotation)}"
+            )
         xyz_body_rotation = np.asarray(xyz_body_rotation, dtype=float).round(ROUND_DIGITS)
     if radius is not None:
         radius = round(float(radius), ROUND_DIGITS)
@@ -416,14 +414,8 @@ def update_wrap_cylinder(
     wrap_object = body.getWrapObject(wrap_name)
     wrap_cylinder = osim.WrapCylinder.safeDownCast(wrap_object)
     if translation is not None:
-        assert isinstance(
-            translation, (list, np.ndarray)
-        ), f"translation must be a list or numpy array, got {type(translation)}"
         wrap_cylinder.set_translation(osim.Vec3(translation))
     if xyz_body_rotation is not None:
-        assert isinstance(
-            xyz_body_rotation, (list, np.ndarray)
-        ), f"xyz_body_rotation must be a list or numpy array, got {type(xyz_body_rotation)}"
         wrap_cylinder.set_xyz_body_rotation(osim.Vec3(xyz_body_rotation))
     if radius is not None:
         wrap_cylinder.set_radius(radius)
@@ -434,45 +426,36 @@ def update_wrap_cylinder(
 def update_wrap_ellipsoid(
     model, body_name, wrap_name, translation=None, xyz_body_rotation=None, dimensions=None
 ):
-    # assert that translation, xyz_body_rotation, and dimensions are all float
     if translation is not None:
-        assert isinstance(
-            translation, (list, np.ndarray)
-        ), f"translation must be a list or numpy array, got {type(translation)}"
+        if not isinstance(translation, (list, np.ndarray)):
+            raise TypeError(f"translation must be a list or numpy array, got {type(translation)}")
         translation = np.asarray(translation, dtype=float).round(ROUND_DIGITS)
     if xyz_body_rotation is not None:
-        assert isinstance(
-            xyz_body_rotation, (list, np.ndarray)
-        ), f"xyz_body_rotation must be a list or numpy array, got {type(xyz_body_rotation)}"
+        if not isinstance(xyz_body_rotation, (list, np.ndarray)):
+            raise TypeError(
+                f"xyz_body_rotation must be a list or numpy array, got {type(xyz_body_rotation)}"
+            )
         xyz_body_rotation = np.asarray(xyz_body_rotation, dtype=float).round(ROUND_DIGITS)
     if dimensions is not None:
-        assert isinstance(
-            dimensions, (list, np.ndarray)
-        ), f"dimensions must be a list or numpy array, got {type(dimensions)}"
+        if not isinstance(dimensions, (list, np.ndarray)):
+            raise TypeError(
+                f"dimensions must be a list or numpy array, got {type(dimensions)}"
+            )
         dimensions = np.asarray(dimensions, dtype=float).round(ROUND_DIGITS)
 
-    # if any value in dimensions is zero, then set it to 1e-7, and print a warning
-    if np.any(dimensions == 0):
-        logger.warning("One or more dimensions are zero, setting to 1e-7")
-        dimensions[dimensions == 0] = 1e-7
+        # if any value in dimensions is zero, then set it to 1e-7
+        if np.any(dimensions == 0):
+            logger.warning("One or more dimensions are zero, setting to 1e-7")
+            dimensions[dimensions == 0] = 1e-7
 
     body = model.getBodySet().get(body_name)
     wrap_object = body.getWrapObject(wrap_name)
     wrap_ellipsoid = osim.WrapEllipsoid.safeDownCast(wrap_object)
     if translation is not None:
-        assert isinstance(
-            translation, (list, np.ndarray)
-        ), f"translation must be a list or numpy array, got {type(translation)}"
         wrap_ellipsoid.set_translation(osim.Vec3(translation))
     if xyz_body_rotation is not None:
-        assert isinstance(
-            xyz_body_rotation, (list, np.ndarray)
-        ), f"xyz_body_rotation must be a list or numpy array, got {type(xyz_body_rotation)}"
         wrap_ellipsoid.set_xyz_body_rotation(osim.Vec3(xyz_body_rotation))
     if dimensions is not None:
-        assert isinstance(
-            dimensions, (list, np.ndarray)
-        ), f"dimensions must be a list or numpy array, got {type(dimensions)}"
         wrap_ellipsoid.set_dimensions(osim.Vec3(dimensions))
 
 
@@ -689,7 +672,10 @@ def update_single_osim_ligament_muscle_attachment(
     """
     force_name = force.getName()
 
-    assert force_dict["name"] == force_name
+    if force_dict["name"] != force_name:
+        raise ValueError(
+            f"force_dict name '{force_dict['name']}' does not match force name '{force_name}'"
+        )
 
     if force_dict["class"] == "Blankevoort1991Ligament":
         force = osim.Blankevoort1991Ligament.safeDownCast(force)
@@ -701,7 +687,11 @@ def update_single_osim_ligament_muscle_attachment(
     geom_path = force.getGeometryPath()
     path_point_set = geom_path.getPathPointSet()
 
-    assert path_point_set.getSize() == len(force_dict["points"])
+    if path_point_set.getSize() != len(force_dict["points"]):
+        raise ValueError(
+            f"Path point set size ({path_point_set.getSize()}) does not match "
+            f"force_dict points length ({len(force_dict['points'])})"
+        )
 
     for i, point in enumerate(force_dict["points"]):
         if point["include"] == True:
@@ -882,7 +872,11 @@ def update_slack_lengths(model, force_length_dict: dict, state: osim.State = Non
 
         force_dict_ = force_length_dict[force_name]
 
-        assert force_dict_["class"] == force_.getConcreteClassName()
+        if force_dict_["class"] != force_.getConcreteClassName():
+            raise ValueError(
+                f"Force '{force_name}' class mismatch: dict says '{force_dict_['class']}', "
+                f"model says '{force_.getConcreteClassName()}'"
+            )
 
         if force_.getConcreteClassName() == "Millard2012EquilibriumMuscle":
             # get the muscle

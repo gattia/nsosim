@@ -8,11 +8,14 @@ This is a thin wrapper around existing functionality in utils.py, providing
 a cleaner API as part of the wrap surface fitting refactor.
 """
 
+import logging
 from typing import Dict, Optional, Union
 
 import pyvista as pv
 
 from .config import DEFAULT_SMITH2019_BONES
+
+logger = logging.getLogger(__name__)
 from .utils import create_cylinder_polydata, create_ellipsoid_polydata, extract_wrap_parameters
 
 
@@ -86,9 +89,8 @@ def create_meshes_from_wrap_parameters(wrap_params: Dict) -> Dict:
                 elif surface_type == "WrapCylinder":
                     mesh = create_cylinder_polydata(wrap_params_single)
                 else:
-                    # Skip unknown surface types or log a warning
-                    print(
-                        f"Warning: Unknown wrap surface type '{surface_type}' for {wrap_name}. Skipping."
+                    logger.warning(
+                        f"Unknown wrap surface type '{surface_type}' for {wrap_name}. Skipping."
                     )
                     continue
 

@@ -41,6 +41,9 @@ def add_polar_coordinates_about_center(mesh: pv.PolyData, center=None, theta_off
     - r:     radial distance in zx-plane
     - y_rel: y-relative to center
 
+    Note: Mutates ``mesh`` in-place by adding 'theta', 'r', and 'y_rel' point
+    data arrays.
+
     Args:
         mesh: PyVista mesh to add coordinates to
         center: Center point for polar coordinates (default: mesh.center)

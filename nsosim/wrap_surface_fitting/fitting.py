@@ -74,25 +74,7 @@ class BaseShapeFitter(ABC):
         For points labeled as "outside": penalize if d < margin (not sufficiently outside)
         This ensures all points contribute to the loss until they satisfy the margin constraint.
         """
-        pass
-        # mask_in, mask_out = y, ~y
-
-        # # Handle empty masks gracefully
-
-        # # d is signed distance. (-) is inside, (+) is outside.
-        # # we compute losses separately for the inside and outside points.
-        # # for the inside points, they are negative. So, if the d (-) + the margin is > 0
-        # # then there should be a loss. Here, relu linearly increases.
-        # loss_in = (F.relu(d + margin)[mask_in] ** 2).mean() if mask_in.any() else torch.tensor(0.0, device=self.device)
-
-        # # Outside points: penalize if they're not sufficiently outside (d < margin)
-        # # for the outside points, they are positive. So, if the margin - d (+) is > 0
-        # # (i.e., d < margin), then there should be a loss.
-        # loss_out = (F.relu(margin - d)[mask_out]).mean() if mask_out.any() else torch.tensor(0.0, device=self.device)
-
-        # return loss_in + loss_out
-
-        # # return (d**2).mean()
+        raise NotImplementedError("Subclasses must implement _compute_loss")
 
     def _compute_distance_loss(self, sdf_fitted, sdf_ground_truth, sigma=1.0, use_weighting=False):
         """Correlation-based distance loss with optional surface proximity weighting.
@@ -715,14 +697,13 @@ class BaseShapeFitter(ABC):
 
         self._fitted_params = final_results
 
-        # Debug: Print final rotation parameters
+        # Debug: Log final rotation parameters
         if len(parameters) >= 4:
             axis_param = parameters[3].detach()
-            print(f"DEBUG: Final axis vector parameter: {axis_param.cpu().numpy()}")
-            print(f"DEBUG: Final rotation matrix:")
-            print(final_results[2].cpu().numpy())
-            print(
-                f"DEBUG: Is rotation matrix identity? {torch.allclose(final_results[2], torch.eye(3), atol=1e-4)}"
+            logger.debug(f"Final axis vector parameter: {axis_param.cpu().numpy()}")
+            logger.debug(f"Final rotation matrix:\n{final_results[2].cpu().numpy()}")
+            logger.debug(
+                f"Is rotation matrix identity? {torch.allclose(final_results[2], torch.eye(3), atol=1e-4)}"
             )
 
         return final_results
@@ -1287,8 +1268,6 @@ class EllipsoidFitter(BaseShapeFitter):
 
         return loss_in + loss_out
 
-        # return (d**2).mean()
-
     def _compute_sdf(self, points, parameters):
         center, log_axes, quat = parameters
 
@@ -1395,8 +1374,7 @@ class EllipsoidFitter(BaseShapeFitter):
             list: Learning rate scale factors for each parameter
         """
         return [
-            1e-3,
-            # 5e-7,   # center: more conservative for ellipsoid center
+            1e-3,  # center
             1e-3,  # log_axes: conservative for axes scaling
             1e-3,  # quat: moderate for quaternion rotation
         ]

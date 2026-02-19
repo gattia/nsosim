@@ -1,3 +1,7 @@
+# CI: lint + unit tests only.
+# opensim (JAM/COMAK fork) and real mesh data are NOT available in CI.
+# Integration tests that touch opensim or the full NSM→OSIM pipeline
+# cannot run here — they require the custom opensim build and local data.
 name: CI
 
 on:

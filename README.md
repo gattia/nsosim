@@ -1,9 +1,9 @@
 ```bash
-# create environment
+# create environment (requires Python >= 3.9)
 conda create -n nsosim python=3.9
 conda activate nsosim
 
-# install NSM 
+# install NSM (not on PyPI — install from source)
 mkdir dependencies
 cd dependencies
 git clone https://github.com/gattia/nsm.git
@@ -13,11 +13,20 @@ make requirements
 pip install .
 
 cd ../..
-pip install -r requirements.txt
 
+# install nsosim (dependencies declared in pyproject.toml)
 pip install -e .
 
+# or with wrap surface fitting support (includes torch):
+pip install -e ".[fitting]"
 ```
+
+### Manual Prerequisites
+
+The following dependencies are **not** pip-installable and must be installed separately:
+
+- **opensim** — requires the JAM/COMAK fork built from source. Standard conda `opensim` will not work.
+- **NSM** — install from source: `pip install git+https://github.com/gattia/nsm.git`
 
 ## Project Status
 

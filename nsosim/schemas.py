@@ -185,12 +185,17 @@ def _validate_single_wrap_surface(wrap_params, wrap_type, path):
                 raise ValidationError(f"{path}.{attr} is None")
             if not isinstance(val, (int, float, np.floating)):
                 raise ValidationError(f"{path}.{attr} must be numeric, got {type(val).__name__}")
+            if val <= 0:
+                raise ValidationError(f"{path}.{attr} must be positive, got {val}")
 
     elif wrap_type == "ellipsoid":
         if not hasattr(wrap_params, "dimensions"):
             raise ValidationError(f"{path} missing required attribute 'dimensions'")
         if wrap_params.dimensions is None:
             raise ValidationError(f"{path}.dimensions is None")
+        dims = np.asarray(wrap_params.dimensions)
+        if np.any(dims <= 0):
+            raise ValidationError(f"{path}.dimensions must all be positive, got {dims}")
 
 
 # ── surface_idx validation ──────────────────────────────────────────────────

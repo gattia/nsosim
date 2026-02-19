@@ -1,9 +1,12 @@
 """Geometric initialization for cylinder and ellipsoid fitters."""
 
+import logging
 import warnings
 
 import numpy as np
 import torch
+
+logger = logging.getLogger(__name__)
 
 
 def get_near_surface_points_from_mesh(mesh, surface_name):
@@ -93,11 +96,11 @@ def fit_cylinder_geometric(near_surface_points, num_slices=20):
     else:
         points = near_surface_points
 
-    print(f"[DEBUG] fit_cylinder_geometric input:")
-    print(f"  Points shape: {points.shape}")
+    logger.debug(f"fit_cylinder_geometric input:")
+    logger.debug(f"  Points shape: {points.shape}")
     z_min_val, z_max_val = points[:, 2].min().item(), points[:, 2].max().item()
-    print(f"  Z-extent: {z_min_val:.6f} to {z_max_val:.6f} (range: {(z_max_val - z_min_val):.6f})")
-    print(
+    logger.debug(f"  Z-extent: {z_min_val:.6f} to {z_max_val:.6f} (range: {(z_max_val - z_min_val):.6f})")
+    logger.debug(
         f"  XY-extent: X[{points[:, 0].min():.6f}, {points[:, 0].max():.6f}], Y[{points[:, 1].min():.6f}, {points[:, 1].max():.6f}]"
     )
 
@@ -143,15 +146,15 @@ def fit_cylinder_geometric(near_surface_points, num_slices=20):
         slice_centroids = []
         slice_z_coords = []
 
-        print(f"[DEBUG] Target {num_slices} slices. Z-range: {z_range.item():.6f}")
+        logger.debug(f"Target {num_slices} slices. Z-range: {z_range.item():.6f}")
         if (
             z_range > 1e-6 and num_slices >= 2
-        ):  # Only print calculated slice_thickness if it's meaningful for segmentation
-            print(
-                f"[DEBUG] Calculated slice thickness for segmenting z-range: {(z_range / num_slices).item():.6f}"
+        ):  # Only log calculated slice_thickness if it's meaningful for segmentation
+            logger.debug(
+                f"Calculated slice thickness for segmenting z-range: {(z_range / num_slices).item():.6f}"
             )
-        print(
-            f"[DEBUG] Number of z-centers generated for iteration: {len(z_centers)}. Effective slice_thickness for point selection in loop: {slice_thickness.item():.6f}"
+        logger.debug(
+            f"Number of z-centers generated for iteration: {len(z_centers)}. Effective slice_thickness for point selection in loop: {slice_thickness.item():.6f}"
         )
 
         for z_center in z_centers:
@@ -170,9 +173,9 @@ def fit_cylinder_geometric(near_surface_points, num_slices=20):
         slice_centroids = torch.stack(slice_centroids)
         slice_z_coords = torch.stack(slice_z_coords)
 
-        print(f"[DEBUG] Valid slices: {len(slice_centroids)}")
-        print(
-            f"[DEBUG] Slice centroid XY ranges: X[{slice_centroids[:, 0].min():.6f}, {slice_centroids[:, 0].max():.6f}], Y[{slice_centroids[:, 1].min():.6f}, {slice_centroids[:, 1].max():.6f}]"
+        logger.debug(f"Valid slices: {len(slice_centroids)}")
+        logger.debug(
+            f"Slice centroid XY ranges: X[{slice_centroids[:, 0].min():.6f}, {slice_centroids[:, 0].max():.6f}], Y[{slice_centroids[:, 1].min():.6f}, {slice_centroids[:, 1].max():.6f}]"
         )
 
         # Fit a line through the slice centroids to determine the actual axis direction
@@ -199,8 +202,8 @@ def fit_cylinder_geometric(near_surface_points, num_slices=20):
         if axis_3d[2] < 0:
             axis_3d = -axis_3d
 
-        print(
-            f"[DEBUG] Estimated axis from centroids: [{axis_3d[0]:.6f}, {axis_3d[1]:.6f}, {axis_3d[2]:.6f}]"
+        logger.debug(
+            f"Estimated axis from centroids: [{axis_3d[0]:.6f}, {axis_3d[1]:.6f}, {axis_3d[2]:.6f}]"
         )
 
         # The center is the centroid of all slice centroids
@@ -213,10 +216,10 @@ def fit_cylinder_geometric(near_surface_points, num_slices=20):
         perpendicular_dist = torch.norm(point_to_center - proj_on_axis * axis_3d, dim=1)
         radius = perpendicular_dist.mean()
 
-        print(f"[DEBUG] Radius computation:")
-        print(f"  Center 3D: [{center_3d[0]:.6f}, {center_3d[1]:.6f}, {center_3d[2]:.6f}]")
-        print(f"  Axis 3D: [{axis_3d[0]:.6f}, {axis_3d[1]:.6f}, {axis_3d[2]:.6f}]")
-        print(
+        logger.debug(f"Radius computation:")
+        logger.debug(f"  Center 3D: [{center_3d[0]:.6f}, {center_3d[1]:.6f}, {center_3d[2]:.6f}]")
+        logger.debug(f"  Axis 3D: [{axis_3d[0]:.6f}, {axis_3d[1]:.6f}, {axis_3d[2]:.6f}]")
+        logger.debug(
             f"  Perpendicular distance stats: min={perpendicular_dist.min():.6f}, max={perpendicular_dist.max():.6f}, mean={radius:.6f}"
         )
 
@@ -224,7 +227,7 @@ def fit_cylinder_geometric(near_surface_points, num_slices=20):
         proj_lengths = torch.sum(point_to_center * axis_3d, dim=1)
         half_length = proj_lengths.max() - proj_lengths.min()
 
-        print(f"[DEBUG] Half-length: {half_length:.6f} (half of axis extent)")
+        logger.debug(f"Half-length: {half_length:.6f} (half of axis extent)")
 
         # Compute rotation matrix to align with axis
         # We want to rotate the standard z-axis [0,0,1] to our axis direction
@@ -356,13 +359,13 @@ def fit_ellipsoid_algebraic(points):
             + J_c
         )
 
-        print(f"[DEBUG] fit_ellipsoid_algebraic internal:")
-        print(f"  Coeffs (A..J): {coeffs.tolist()}")
-        print(f"  Center: {center.tolist()}")
-        print(f"  J_prime (constant term in centered eq): {J_prime.item()}")
+        logger.debug(f"fit_ellipsoid_algebraic internal:")
+        logger.debug(f"  Coeffs (A..J): {coeffs.tolist()}")
+        logger.debug(f"  Center: {center.tolist()}")
+        logger.debug(f"  J_prime (constant term in centered eq): {J_prime.item()}")
 
         eigenvals, eigenvecs = torch.linalg.eigh(Q)
-        print(f"  Eigenvalues of Q: {eigenvals.tolist()}")
+        logger.debug(f"  Eigenvalues of Q: {eigenvals.tolist()}")
 
         # Scale factor for eigenvalues to get 1/axes^2
         # We need X'^T (Q / -J_prime) X' = 1
@@ -382,21 +385,21 @@ def fit_ellipsoid_algebraic(points):
         )  # Add epsilon for stability if abs is used
         # A more direct and potentially stabler way for positive definite Q and -J_prime > 0:
         # axes = torch.sqrt(torch.abs(-J_prime / eigenvals))
-        print(f"  Calculated Axes: {axes.tolist()}")
+        logger.debug(f"  Calculated Axes: {axes.tolist()}")
 
         rotation = eigenvecs
 
         # Ensure the rotation matrix corresponds to a right-handed coordinate system.
         # A negative determinant (i.e., close to -1) indicates a left-handed system (a reflection).
         if torch.linalg.det(rotation) < 0:
-            print(f"[DEBUG] Original rotation determinant: {torch.linalg.det(rotation).item()}")
+            logger.debug(f"Original rotation determinant: {torch.linalg.det(rotation).item()}")
             # Create a mutable copy before modification.
             rotation_corrected = rotation.clone()
             # Flip one of the axes (e.g., the last one) to change the handedness of the system.
             # This ensures the resulting matrix represents a proper rotation (right-handed).
             rotation_corrected[:, -1] = -rotation_corrected[:, -1]
             rotation = rotation_corrected
-            print(f"[DEBUG] Corrected rotation determinant: {torch.linalg.det(rotation).item()}")
+            logger.debug(f"Corrected rotation determinant: {torch.linalg.det(rotation).item()}")
 
         return {"center": center, "axes": axes, "rotation": rotation, "success": True}
 

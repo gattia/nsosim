@@ -15,7 +15,7 @@ build-backend = "setuptools.build_meta"
 name = "nsosim"
 description = "Library for pesonalized biomechanical models"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 keywords = ["python"]
 license = {text = "MIT"}
 authors = [
@@ -26,9 +26,20 @@ classifiers = [
     "Topic :: Scientific/Engineering",
     "Programming Language :: Python :: 3",
 ]
-dependencies = []
+# NOTE: opensim (JAM/COMAK fork) and NSM (github.com/gattia/nsm) must be
+# installed separately — they are not pip-installable from PyPI.
+dependencies = [
+    "numpy",
+    "scipy",
+    "pyvista",
+    "vtk",
+    "pymskt",
+    "nibabel",
+]
 dynamic = ["version"]
 
+[project.optional-dependencies]
+fitting = ["torch>=2.0"]
 
 [project.urls]
 #Homepage = "https://github.com/gattia/NSM/"

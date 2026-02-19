@@ -412,14 +412,12 @@ def prepare_fitting_data(
     # Auto-detect coordinate scale (mesh in meters vs mm)
     coord_range = np.ptp(mesh.point_coords, axis=0).max()
     if coord_range < 1.0:  # Likely in meters
-        scale_factor = 1000.0  # Convert to mm for threshold
-        print(
-            f"[INFO] Detected mesh coordinates in meters (range: {coord_range:.3f}m). Using threshold: {near_surface_threshold}m"
+        logger.info(
+            f"Detected mesh coordinates in meters (range: {coord_range:.3f}m). Using threshold: {near_surface_threshold}m"
         )
     else:  # Likely in mm
-        scale_factor = 1.0
-        print(
-            f"[INFO] Detected mesh coordinates in mm (range: {coord_range:.1f}mm). Using threshold: {near_surface_threshold}mm"
+        logger.info(
+            f"Detected mesh coordinates in mm (range: {coord_range:.1f}mm). Using threshold: {near_surface_threshold}mm"
         )
 
     # Use the threshold as-is (it should match the coordinate units)
