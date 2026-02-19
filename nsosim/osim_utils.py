@@ -438,9 +438,7 @@ def update_wrap_ellipsoid(
         xyz_body_rotation = np.asarray(xyz_body_rotation, dtype=float).round(ROUND_DIGITS)
     if dimensions is not None:
         if not isinstance(dimensions, (list, np.ndarray)):
-            raise TypeError(
-                f"dimensions must be a list or numpy array, got {type(dimensions)}"
-            )
+            raise TypeError(f"dimensions must be a list or numpy array, got {type(dimensions)}")
         dimensions = np.asarray(dimensions, dtype=float).round(ROUND_DIGITS)
 
         # if any value in dimensions is zero, then set it to 1e-7

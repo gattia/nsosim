@@ -99,7 +99,9 @@ def fit_cylinder_geometric(near_surface_points, num_slices=20):
     logger.debug(f"fit_cylinder_geometric input:")
     logger.debug(f"  Points shape: {points.shape}")
     z_min_val, z_max_val = points[:, 2].min().item(), points[:, 2].max().item()
-    logger.debug(f"  Z-extent: {z_min_val:.6f} to {z_max_val:.6f} (range: {(z_max_val - z_min_val):.6f})")
+    logger.debug(
+        f"  Z-extent: {z_min_val:.6f} to {z_max_val:.6f} (range: {(z_max_val - z_min_val):.6f})"
+    )
     logger.debug(
         f"  XY-extent: X[{points[:, 0].min():.6f}, {points[:, 0].max():.6f}], Y[{points[:, 1].min():.6f}, {points[:, 1].max():.6f}]"
     )
