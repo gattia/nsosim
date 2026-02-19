@@ -2,5 +2,6 @@ pyvista
 numpy
 vtk
 mskt
+nibabel
 #NSM
 scipy
