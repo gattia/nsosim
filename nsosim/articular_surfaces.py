@@ -405,6 +405,179 @@ def refine_meniscus_articular_surfaces(
 
 
 # ============================================================================
+# Scored meniscus surface extraction (Method 1 — alternative to ray-casting)
+# ============================================================================
+
+# Default parameters for scored extraction
+DEFAULT_SCORE_THRESHOLD = 0.3
+DEFAULT_SCORE_SMOOTH_ITERATIONS = 20
+
+
+def _smooth_scores_on_mesh(mesh, scores, n_iter=20):
+    """Average score values over mesh vertex neighbors without moving geometry.
+
+    PyVista's smooth() moves vertices AND interpolates point data, which is
+    undesirable — we want to smooth only the score field. This function builds
+    a vertex adjacency structure from mesh faces and iteratively averages
+    each vertex's score with its neighbors.
+
+    Args:
+        mesh: PyVista PolyData mesh (used for connectivity only)
+        scores: 1D array of per-vertex scores
+        n_iter: Number of smoothing iterations
+
+    Returns:
+        Smoothed scores (same shape as input)
+    """
+    from collections import defaultdict
+
+    # Build adjacency from faces
+    faces = mesh.faces
+    adj = defaultdict(set)
+    i = 0
+    while i < len(faces):
+        n_verts = faces[i]
+        face_verts = faces[i + 1 : i + 1 + n_verts]
+        for vi in range(n_verts):
+            for vj in range(vi + 1, n_verts):
+                adj[face_verts[vi]].add(face_verts[vj])
+                adj[face_verts[vj]].add(face_verts[vi])
+        i += 1 + n_verts
+
+    smoothed = scores.copy().astype(float)
+    for _ in range(n_iter):
+        new_scores = smoothed.copy()
+        for v in range(len(smoothed)):
+            neighbors = adj.get(v, set())
+            if neighbors:
+                neighbor_vals = smoothed[list(neighbors)]
+                new_scores[v] = (smoothed[v] + neighbor_vals.sum()) / (1 + len(neighbors))
+        smoothed = new_scores
+
+    return smoothed
+
+
+def score_meniscus_vertices(meniscus_mesh, bone_mesh):
+    """Score each meniscus vertex by how much its normal faces the bone.
+
+    For each vertex, computes dot(outward_normal, direction_to_closest_bone_point).
+    High score → normal points toward bone → flat articular face.
+    Low/negative score → normal perpendicular or away from bone → rim/edge.
+
+    This is a continuous alternative to binary ray-casting that is robust to
+    small vertex perturbations (small normal changes → small score changes,
+    not binary flips).
+
+    Args:
+        meniscus_mesh: PyVista PolyData of the meniscus (must have point normals)
+        bone_mesh: PyVista PolyData of the articulating bone
+
+    Returns:
+        scores: 1D array of per-vertex scores in [-1, 1]
+    """
+    from scipy.spatial import KDTree
+
+    normals = meniscus_mesh.point_normals
+    points = meniscus_mesh.points
+
+    bone_tree = KDTree(bone_mesh.points)
+    _, indices = bone_tree.query(points)
+    closest_bone_pts = bone_mesh.points[indices]
+
+    direction = closest_bone_pts - points
+    direction_norm = np.linalg.norm(direction, axis=1, keepdims=True)
+    direction_norm[direction_norm == 0] = 1  # avoid div by zero
+    direction = direction / direction_norm
+
+    scores = np.sum(normals * direction, axis=1)
+    return scores
+
+
+def extract_meniscus_articulating_surface_scored(
+    meniscus_mesh: pv.PolyData,
+    articulating_bone_mesh: pv.PolyData,
+    score_threshold: float = DEFAULT_SCORE_THRESHOLD,
+    smooth_score: bool = True,
+    smooth_iterations: int = DEFAULT_SCORE_SMOOTH_ITERATIONS,
+    n_largest: int = 1,
+    smooth_iter: int = 15,
+    boundary_smoothing: bool = False,
+) -> pv.PolyData:
+    """Extract meniscus articular surface using continuous normal-dot-product scoring.
+
+    Alternative to `extract_meniscus_articulating_surface` (ray-casting).
+    Uses a continuous scoring function instead of binary ray-casting:
+    1. Compute outward normals on the meniscus
+    2. For each vertex, score = dot(normal, direction_to_closest_bone_point)
+    3. Smooth scores on the mesh surface (neighbor averaging, no vertex movement)
+    4. Threshold: keep vertices with score > score_threshold
+    5. Standard cleanup: largest component, remove isolated cells, smooth
+
+    This method is robust to small vertex perturbations because the score
+    changes continuously (0.29 → 0.31) rather than flipping binary (hit → miss).
+
+    Args:
+        meniscus_mesh: The meniscus mesh (PolyData)
+        articulating_bone_mesh: The bone mesh to articulate with
+        score_threshold: Minimum score to include vertex (default: 0.3).
+            Higher values are more selective (only flat faces).
+            Range: typically 0.2–0.5.
+        smooth_score: Whether to smooth scores on the mesh surface (default: True)
+        smooth_iterations: Number of neighbor-averaging iterations for score smoothing
+        n_largest: Number of largest connected components to keep
+        smooth_iter: Number of Laplacian smoothing iterations for final surface
+        boundary_smoothing: Whether to fix boundaries during final smoothing
+
+    Returns:
+        Mesh: The extracted articular surface
+    """
+    # Ensure normals are computed
+    meniscus_mesh.compute_normals(
+        point_normals=True, auto_orient_normals=True, inplace=True
+    )
+
+    # 1. Compute scores
+    scores = score_meniscus_vertices(meniscus_mesh, articulating_bone_mesh)
+
+    # 2. Smooth scores on mesh surface (without moving geometry)
+    if smooth_score:
+        scores = _smooth_scores_on_mesh(meniscus_mesh, scores, n_iter=smooth_iterations)
+
+    # 3. Threshold
+    mask = scores > score_threshold
+    if not np.any(mask):
+        logger.warning(
+            f"No vertices above score threshold {score_threshold}. "
+            f"Score range: [{scores.min():.3f}, {scores.max():.3f}]. "
+            f"Trying with threshold=0.0."
+        )
+        mask = scores > 0.0
+
+    surface = meniscus_mesh.extract_points(mask, adjacent_cells=True)
+
+    # 4. Ensure PolyData
+    if not isinstance(surface, pv.PolyData):
+        surface = surface.extract_surface()
+
+    # 5. Largest component
+    surface = get_n_largest(surface, n=n_largest)
+    if not isinstance(surface, pv.PolyData):
+        surface = surface.extract_surface()
+
+    # 6. Remove isolated cells
+    surface = remove_isolated_cells(surface)
+    if not isinstance(surface, pv.PolyData):
+        raise TypeError(
+            f"Expected pv.PolyData after remove_isolated_cells, got {type(surface)}"
+        )
+
+    # 7. Final smooth
+    surface = surface.smooth(n_iter=smooth_iter, boundary_smoothing=boundary_smoothing)
+
+    return Mesh(surface)
+
+
+# ============================================================================
 # Main meniscus surface extraction functions
 # ============================================================================
 
@@ -516,6 +689,10 @@ def create_meniscus_articulating_surface(
     smooth_window=7,
     n_theta_grid=200,
     theta_offset=0.0,  # radians, rotate polar coords to avoid discontinuity
+    # Extraction method selection
+    extraction_method="ray_casting",  # "ray_casting" or "scored"
+    score_threshold=DEFAULT_SCORE_THRESHOLD,
+    score_smooth_iterations=DEFAULT_SCORE_SMOOTH_ITERATIONS,
 ):
     """
     Creates meniscus articulating surfaces from a meniscus mesh and two articulating bone meshes.
@@ -532,7 +709,8 @@ def create_meniscus_articulating_surface(
         meniscus_mesh: Full meniscus mesh (pymskt.mesh.Mesh)
         upper_articulating_bone_mesh: Upper bone mesh (femur) for defining superior surface
         lower_articulating_bone_mesh: Lower bone mesh (tibia) for defining inferior surface
-        ray_length: Ray casting length for surface extraction (mm)
+        ray_length: Ray casting length for surface extraction (mm). Only used when
+            extraction_method="ray_casting".
         n_largest: Number of largest connected components to keep
         smooth_iter: Smoothing iterations for extracted surfaces
         boundary_smoothing: Whether to fix boundaries during smoothing
@@ -550,11 +728,24 @@ def create_meniscus_articulating_surface(
         theta_offset: Rotation offset for polar coordinates in radians (default: 0.0).
                      Use to avoid polar discontinuity cutting through meniscus tissue.
                      Typically: np.pi/2 for medial meniscus, 0.0 for lateral meniscus.
+        extraction_method: Method for initial surface extraction (default: "scored").
+            "scored": Normal dot-product scoring — continuous, stable to vertex
+                      perturbations. Uses score_threshold and score_smooth_iterations.
+            "ray_casting": Legacy binary ray-casting via remove_intersecting_vertices.
+                          Uses ray_length parameter. Sensitive to mesh topology.
+        score_threshold: Minimum normal-dot-product score to include vertex (default: 0.3).
+            Only used when extraction_method="scored". Range: 0.2–0.5.
+        score_smooth_iterations: Number of neighbor-averaging iterations for score
+            smoothing (default: 20). Only used when extraction_method="scored".
 
     Returns:
         upper_meniscus_articulating_surface: Refined superior surface (pymskt.mesh.Mesh)
         lower_meniscus_articulating_surface: Refined inferior surface (pymskt.mesh.Mesh)
     """
+    if extraction_method not in ("scored", "ray_casting"):
+        raise ValueError(
+            f"extraction_method must be 'scored' or 'ray_casting', got '{extraction_method}'"
+        )
 
     # ============================================================================
     # STEP 1: Compute density metrics for resampling (in meters space)
@@ -612,25 +803,52 @@ def create_meniscus_articulating_surface(
     # ============================================================================
     # STEP 4: Extract initial articulating surfaces
     # ============================================================================
-    # extract upper articulating surface of the meniscus
-    upper_meniscus_articulating_surface = extract_meniscus_articulating_surface(
-        meniscus_mesh_,
-        upper_articulating_bone_mesh_,
-        ray_length=ray_length,
-        n_largest=n_largest,
-        smooth_iter=smooth_iter,
-        boundary_smoothing=boundary_smoothing,
-    )
+    if extraction_method == "scored":
+        logger.info("Extracting surfaces using scored method (normal dot-product)...")
+        # extract upper articulating surface of the meniscus
+        upper_meniscus_articulating_surface = extract_meniscus_articulating_surface_scored(
+            meniscus_mesh_,
+            upper_articulating_bone_mesh_,
+            score_threshold=score_threshold,
+            smooth_score=True,
+            smooth_iterations=score_smooth_iterations,
+            n_largest=n_largest,
+            smooth_iter=smooth_iter,
+            boundary_smoothing=boundary_smoothing,
+        )
 
-    # extract lower articulating surface of the meniscus
-    lower_meniscus_articulating_surface = extract_meniscus_articulating_surface(
-        meniscus_mesh_,
-        lower_articulating_bone_mesh_,
-        ray_length=ray_length,
-        n_largest=n_largest,
-        smooth_iter=smooth_iter,
-        boundary_smoothing=boundary_smoothing,
-    )
+        # extract lower articulating surface of the meniscus
+        lower_meniscus_articulating_surface = extract_meniscus_articulating_surface_scored(
+            meniscus_mesh_,
+            lower_articulating_bone_mesh_,
+            score_threshold=score_threshold,
+            smooth_score=True,
+            smooth_iterations=score_smooth_iterations,
+            n_largest=n_largest,
+            smooth_iter=smooth_iter,
+            boundary_smoothing=boundary_smoothing,
+        )
+    else:
+        logger.info("Extracting surfaces using ray-casting method...")
+        # extract upper articulating surface of the meniscus
+        upper_meniscus_articulating_surface = extract_meniscus_articulating_surface(
+            meniscus_mesh_,
+            upper_articulating_bone_mesh_,
+            ray_length=ray_length,
+            n_largest=n_largest,
+            smooth_iter=smooth_iter,
+            boundary_smoothing=boundary_smoothing,
+        )
+
+        # extract lower articulating surface of the meniscus
+        lower_meniscus_articulating_surface = extract_meniscus_articulating_surface(
+            meniscus_mesh_,
+            lower_articulating_bone_mesh_,
+            ray_length=ray_length,
+            n_largest=n_largest,
+            smooth_iter=smooth_iter,
+            boundary_smoothing=boundary_smoothing,
+        )
 
     # ============================================================================
     # STEP 5: Refine surfaces using radial envelope filtering

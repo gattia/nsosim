@@ -20,6 +20,7 @@ from nsosim.articular_surfaces import (
     compute_region_radial_percentiles,
     create_meniscus_articulating_surface,
     extract_meniscus_articulating_surface,
+    extract_meniscus_articulating_surface_scored,
     label_meniscus_regions_with_sdf,
     refine_meniscus_articular_surfaces,
 )
@@ -395,8 +396,8 @@ class TestTopologyPerturbationStability:
 
     @pytest.mark.slow
     @pytest.mark.xfail(
-        reason="Ray-casting extraction amplifies ACVD clustering noise; "
-        "scored extraction (Method 1) should fix this",
+        reason="ACVD resampling amplifies tiny vertex perturbations (~0.005mm) "
+        "into ~0.28mm ASSD; extraction method is not the bottleneck",
         strict=False,
     )
     def test_perturbed_remeshings_give_similar_extraction(self):
@@ -446,8 +447,8 @@ class TestTopologyPerturbationWithRefinement:
 
     @pytest.mark.slow
     @pytest.mark.xfail(
-        reason="Radial envelope cannot fully compensate for ray-casting instability; "
-        "scored extraction (Method 1) should fix this",
+        reason="ACVD resampling is the primary instability source; "
+        "radial envelope and extraction method cannot fully compensate",
         strict=False,
     )
     def test_perturbed_pipeline_refined(self):
@@ -664,7 +665,8 @@ class TestRealMeniscusExtractionStability:
 
     @pytest.mark.slow
     @pytest.mark.xfail(
-        reason="Ray-casting extraction amplifies ACVD clustering noise on real meshes",
+        reason="ACVD resampling amplifies vertex perturbations on real meshes; "
+        "root cause is non-deterministic NSM reconstruction, not extraction method",
         strict=False,
     )
     def test_perturbation_stability_upper(self, real_meshes):
@@ -707,7 +709,8 @@ class TestRealMeniscusExtractionStability:
 
     @pytest.mark.slow
     @pytest.mark.xfail(
-        reason="Ray-casting extraction amplifies ACVD clustering noise on real meshes",
+        reason="ACVD resampling amplifies vertex perturbations on real meshes; "
+        "root cause is non-deterministic NSM reconstruction, not extraction method",
         strict=False,
     )
     def test_perturbation_stability_lower(self, real_meshes):
