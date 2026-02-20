@@ -728,11 +728,11 @@ def create_meniscus_articulating_surface(
         theta_offset: Rotation offset for polar coordinates in radians (default: 0.0).
                      Use to avoid polar discontinuity cutting through meniscus tissue.
                      Typically: np.pi/2 for medial meniscus, 0.0 for lateral meniscus.
-        extraction_method: Method for initial surface extraction (default: "scored").
-            "scored": Normal dot-product scoring — continuous, stable to vertex
-                      perturbations. Uses score_threshold and score_smooth_iterations.
-            "ray_casting": Legacy binary ray-casting via remove_intersecting_vertices.
-                          Uses ray_length parameter. Sensitive to mesh topology.
+        extraction_method: Method for initial surface extraction (default: "ray_casting").
+            "ray_casting": Binary ray-casting via remove_intersecting_vertices.
+                          Uses ray_length parameter.
+            "scored": Normal dot-product scoring — continuous alternative.
+                      Uses score_threshold and score_smooth_iterations.
         score_threshold: Minimum normal-dot-product score to include vertex (default: 0.3).
             Only used when extraction_method="scored". Range: 0.2–0.5.
         score_smooth_iterations: Number of neighbor-averaging iterations for score
