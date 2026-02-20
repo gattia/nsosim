@@ -183,6 +183,12 @@ def _validate_single_wrap_surface(wrap_params, wrap_type, path):
             val = getattr(wrap_params, attr)
             if val is None:
                 raise ValidationError(f"{path}.{attr} is None")
+            if isinstance(val, np.ndarray):
+                if val.ndim != 0:
+                    raise ValidationError(
+                        f"{path}.{attr} must be scalar, got ndarray with shape {val.shape}"
+                    )
+                val = val.item()
             if not isinstance(val, (int, float, np.floating)):
                 raise ValidationError(f"{path}.{attr} must be numeric, got {type(val).__name__}")
             if val <= 0:

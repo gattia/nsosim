@@ -78,6 +78,7 @@ The typical workflow using the `nsosim` library involves the following conceptua
         *   Reconstructs personalized bone and cartilage meshes based on these latent vectors.
         *   Saves the fitted geometries, latent vectors, and transformation parameters.
     *   Alternatively, individual functions like `utils.fit_nsm` or `utils.recon_mesh` might be used for more granular control.
+    *   **Note:** `recon_mesh` infers extra output meshes (e.g., menisci, fibula) based on the count returned by the decoder, which depends on the model's `objects_per_decoder` setting. Different model variants for the same bone may produce different numbers of meshes (e.g., a tibia model may output 2 or 3 meshes depending on whether it includes a fibula). See `CLAUDE.md` Known Issues for details.
 
 3.  **Subject-Specific Mesh Reconstruction in OpenSim Coordinates (using `nsm_fitting.py`):**
     *   For each bone (femur, tibia, patella), reconstruct the bone and cartilage meshes in the OpenSim coordinate system using `nsm_fitting.nsm_recon_to_osim`. This step uses the previously obtained subject-specific NSM parameters.

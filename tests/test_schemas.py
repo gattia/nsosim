@@ -234,6 +234,22 @@ class TestValidateFittedWrapParameters:
         with pytest.raises(ValidationError, match="must be numeric"):
             validate_fitted_wrap_parameters(params)
 
+    def test_cylinder_radius_0d_ndarray_accepted(self):
+        """0-d numpy arrays (from tensor.numpy()) should be accepted as scalar."""
+        ws = _make_wrap_surface("cylinder")
+        ws.radius = np.array(0.005)  # 0-d ndarray, as produced by PyTorch fitters
+        ws.length = np.array(0.04)
+        params = {"femur": {"femur_r": {"cylinder": {"test": ws}}}}
+        validate_fitted_wrap_parameters(params)  # should not raise
+
+    def test_cylinder_radius_1d_ndarray_rejected(self):
+        """Non-scalar numpy arrays should be rejected."""
+        ws = _make_wrap_surface("cylinder")
+        ws.radius = np.array([0.005])  # 1-d, not scalar
+        params = {"femur": {"femur_r": {"cylinder": {"test": ws}}}}
+        with pytest.raises(ValidationError, match="must be scalar"):
+            validate_fitted_wrap_parameters(params)
+
 
 # ===========================================================================
 # validate_surface_idx

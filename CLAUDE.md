@@ -504,5 +504,8 @@ DICT_LIGAMENTS_UPDATE_STIFFNESS = {
 
 ## Known Issues
 
+### `recon_mesh()` Uses Count-Based Mesh Inference
+`recon_mesh()` in `utils.py` infers which extra meshes the NSM decoder returned based on the count (2=bone+cart, 3=bone+cart+fibula, 4=bone+cart+menisci). This works because each model variant has a fixed `objects_per_decoder` setting, but the mapping is implicit — it will break if a new model variant returns 3 meshes that aren't `[bone, cart, fibula]`. **Future fix:** add an explicit `mesh_names` list to model configs so the mapping is driven by configuration, not heuristic. See the TODO in `utils.py:recon_mesh()`.
+
 ### Meniscus Articular Surface Instability
 `create_meniscus_articulating_surface()` produces stochastic variation in the medial meniscus inferior surface (~40% point count variation, ASSD ~0.455mm across identical runs). Root causes: non-deterministic marching cubes in NSM reconstruction, non-deterministic mesh resampling, and ray-casting sensitivity to topology changes. See `MENISCUS_ARTICULAR_SURFACE_INSTABILITY.md` for full analysis and proposed fixes.

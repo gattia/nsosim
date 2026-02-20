@@ -336,37 +336,30 @@ def recon_mesh(
         "mesh_result": mesh_result,
     }
 
-    # Map additional meshes based on bone type from model_config.
-    # The NSM decoder returns surfaces in a fixed order per bone:
-    #   femur:   [bone, cart, med_meniscus, lat_meniscus]  (4 meshes)
-    #   tibia:   [bone, cart, fibula]                      (3 meshes)
-    #   patella: [bone, cart]                               (2 meshes)
-    bone_type = model_config.get("bone")
+    # Map additional meshes based on the count returned by the decoder.
+    # The count depends on the model's objects_per_decoder setting:
+    #   2 meshes: [bone, cart]                               (patella, or tibia without fibula)
+    #   3 meshes: [bone, cart, fibula]                       (tibia with fibula)
+    #   4 meshes: [bone, cart, med_meniscus, lat_meniscus]   (femur)
+    # TODO: Replace count-based inference with an explicit mesh name mapping
+    # from model_config (e.g. a "mesh_names" list). The current heuristic
+    # works but is fragile — it will break if a new model variant returns
+    # 3 meshes that aren't [bone, cart, fibula].
     n_meshes = len(mesh_result["mesh"])
+    bone_type = model_config.get("bone", "unknown")
 
-    _EXPECTED_EXTRA_MESHES = {
-        "femur": {"count": 4, "names": ["med_men_mesh", "lat_men_mesh"]},
-        "tibia": {"count": 3, "names": ["fibula_mesh"]},
-        "patella": {"count": 2, "names": []},
-    }
-
-    if bone_type in _EXPECTED_EXTRA_MESHES:
-        expected = _EXPECTED_EXTRA_MESHES[bone_type]
-        if n_meshes != expected["count"]:
-            raise ValueError(
-                f"Expected {expected['count']} meshes for bone type '{bone_type}', "
-                f"got {n_meshes}. Check that the correct mesh paths were provided."
-            )
-        for i, name in enumerate(expected["names"]):
-            output_dict[name] = mesh_result["mesh"][2 + i]
+    if n_meshes == 2:
+        pass  # bone + cart only, nothing extra to map
+    elif n_meshes == 3:
+        output_dict["fibula_mesh"] = mesh_result["mesh"][2]
+    elif n_meshes == 4:
+        output_dict["med_men_mesh"] = mesh_result["mesh"][2]
+        output_dict["lat_men_mesh"] = mesh_result["mesh"][3]
     else:
-        # Unknown bone type: fall back to count-based heuristic for
-        # forward compatibility with new bone types.
-        if n_meshes == 3:
-            output_dict["fibula_mesh"] = mesh_result["mesh"][2]
-        elif n_meshes == 4:
-            output_dict["med_men_mesh"] = mesh_result["mesh"][2]
-            output_dict["lat_men_mesh"] = mesh_result["mesh"][3]
+        raise ValueError(
+            f"NSM decoder returned {n_meshes} meshes for bone type '{bone_type}', "
+            f"expected 2, 3, or 4. Check the model config."
+        )
 
     return output_dict
 
