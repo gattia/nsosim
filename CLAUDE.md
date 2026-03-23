@@ -126,6 +126,7 @@ class TestCylinderFitterRotated:
 | `nsm_fitting.py` | NSM fitting pipeline: align meshes → fit NSM → convert to OpenSim coords |
 | `articular_surfaces.py` | Extract/refine cartilage contact surfaces, meniscus processing, prefemoral fatpad, patella optimization |
 | `comak_osim_update.py` | Update OpenSim XML with subject-specific meshes, attachments, wrap surfaces |
+| `meniscal_ligaments.py` | Post-interpolation projection of meniscal ligament tibia attachments onto tibia surface |
 | `osim_utils.py` | Low-level OpenSim XML manipulation via Python API |
 | `utils.py` | NSM model loading, mesh I/O, anatomical coordinate system (ACS) alignment utilities |
 
@@ -222,6 +223,19 @@ prefemoral_fat_pad = create_prefemoral_fatpad_noboolean(
     top_mm=6,
     max_distance_to_patella_mm=25,
     units='m',
+)
+```
+
+### Stage 4b: Meniscal Ligament Tibia Attachment Projection (Optional)
+An alternative to using NSM-interpolated tibia attachments for meniscal ligaments. Instead of relying on `interp_ref_to_subject_to_osim()` for the tibia-side points, this projects from the meniscus attachment straight down onto the tibia surface via ray-casting, producing near-vertical ligaments.
+```python
+from nsosim.meniscal_ligaments import project_meniscal_attachments_to_tibia
+
+projection_results = project_meniscal_attachments_to_tibia(
+    dict_lig_mus_attach=dict_lig_musc_attach_params,
+    tibia_mesh=tib_mesh_osim,
+    # ray_direction defaults to [0, -1, 0] (-Y = distal)
+    # max_ray_length defaults to 0.015 (15mm)
 )
 ```
 
