@@ -14,15 +14,15 @@ from nsosim.schemas import validate_fitted_wrap_parameters
 
 DICT_CONTACT_MESHFILES_UPDATE = {
     "femur_cartilage": {
-        "mesh_file": "femur_articular_surface_osim.stl",
+        "mesh_file": "femur_articular_surface_osim.obj",
         "mesh_back_file": "femur_nsm_recon_osim.stl",
     },
     "tibia_cartilage": {
-        "mesh_file": "tibia_articular_surface_osim.stl",
+        "mesh_file": "tibia_articular_surface_osim.obj",
         "mesh_back_file": "tibia_nsm_recon_osim.stl",
     },
     "patella_cartilage": {
-        "mesh_file": "patella_articular_surface_osim.stl",
+        "mesh_file": "patella_articular_surface_osim.obj",
         "mesh_back_file": "patella_nsm_recon_osim.stl",
     },
     "meniscus_medial_superior": {
