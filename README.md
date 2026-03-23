@@ -28,6 +28,35 @@ The following dependencies are **not** pip-installable and must be installed sep
 - **opensim** — requires the JAM/COMAK fork built from source. Standard conda `opensim` will not work.
 - **NSM** — install from source: `pip install git+https://github.com/gattia/nsm.git`
 
+### Reproducible Environment
+
+The validated development environment is **Python 3.9** with the following key pinned versions:
+
+| Package | Version | Notes |
+|---------|---------|-------|
+| Python | 3.9.19 | conda-forge |
+| numpy | 2.0.2 | opensim built against this version |
+| opensim | 4.5 | JAM/COMAK fork, built from source at `/dataNAS/people/aagatti/programming/opensim-jam/` |
+| torch | 2.3.1 | CUDA-enabled, for wrap surface fitting |
+| pyvista | 0.45.3 | |
+| scipy | 1.13.1 | |
+| NSM | `b7cfd49` | from `github.com/gattia/nsm` |
+| pymskt | `88b947e` | from `github.com/gattia/pymskt` (editable install) |
+
+To recreate the exact environment, use the lock files checked into the repo:
+
+```bash
+# Option 1: pip (Python packages only)
+pip install -r requirements-lock.txt
+
+# Option 2: conda (includes system-level deps like CUDA, compilers)
+conda create --name comak --file conda-env-lock.txt
+```
+
+**Important**: opensim must still be installed manually from the JAM/COMAK fork — it is not captured in the lock files. See the opensim-jam build instructions separately.
+
+**Future direction**: Upgrade to Python 3.10+ once opensim can be rebuilt against a newer numpy. The current environment is pinned to 3.9 because opensim was compiled against numpy 2.0.2 on Python 3.9, and rebuilding it is non-trivial.
+
 ## Project Status
 
 This project is currently in **Alpha** stage. It is under active development, and APIs might change.

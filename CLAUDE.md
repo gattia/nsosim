@@ -22,8 +22,7 @@ make lint          # Check formatting (isort + black)
 make autoformat    # Auto-format code
 
 # Tests
-pytest             # Test suite is minimal — being built out (see .claude/plans/repo-hardening.md)
-                   # `make test` is currently commented out in the Makefile
+pytest             # ~150 tests covering math, SDF, fitters, schemas, articular surfaces
 
 # Build
 make build         # Build wheel to wheelhouse/
@@ -462,13 +461,21 @@ add_contact_force_to_model(osim_model, contact_force)
 femur_prefemoral_fat_pad.stl        # fat pad contact surface
 ```
 
-## External Dependencies
+## Environment & Dependencies
 
-- **NSM** (Neural Shape Model): Custom library at `github.com/gattia/nsm` - must be installed first
-- **OpenSim**: Python bindings for biomechanical simulation
-- **PyTorch 2.0**: Used in wrap surface fitting optimization
-- **pymskt**: Medical Shape and Kinematics Toolkit
-- **PyVista**: 3D mesh visualization and manipulation
+**Python 3.9** — pinned because opensim (JAM/COMAK fork) was built from source against numpy 2.0.2 on Python 3.9. Changing Python or numpy version requires a full opensim rebuild.
+
+Lock files for reproducibility:
+- `requirements-lock.txt` — full pip freeze of the validated `comak` conda environment
+- `conda-env-lock.txt` — conda package list including system-level deps
+
+### Key External Dependencies
+
+- **opensim 4.5** (JAM/COMAK fork): Built from source, not pip-installable. Pinned to numpy 2.0.2.
+- **NSM** (`github.com/gattia/nsm`): Neural Shape Model library, installed from source
+- **pymskt** (`github.com/gattia/pymskt`): Medical Shape and Kinematics Toolkit, installed from source
+- **PyTorch 2.3.1**: Used in wrap surface fitting optimization (optional dep via `pip install -e ".[fitting]"`)
+- **PyVista 0.45.3**: 3D mesh visualization and manipulation
 
 ## Configuration Objects
 
