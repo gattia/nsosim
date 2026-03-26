@@ -1,7 +1,7 @@
 # Plan: Synthetic Joint Decoding — Transform Utilities + Decode-from-Latent API
 
 **Created:** 2026-03-25
-**Status:** Ready to implement
+**Status:** Phase A complete, Phase B next
 **Context:** The comak_gait_simulation project needs to generate synthetic knee joints from arbitrary latent vectors and joint poses (for Paper 1, Analysis #8). The core decode + transform logic belongs in nsosim as reusable library functionality.
 **Parent plan:** `comak_gait_simulation/.claude/plans/SYNTHETIC_JOINT_SIMULATION.md` — describes the full end-to-end pipeline; this plan covers only the nsosim-side work.
 
@@ -22,9 +22,9 @@ These are general-purpose capabilities needed by any downstream project that wan
 
 ---
 
-## Understanding of the Transform Chain (TO BE VERIFIED)
+## Understanding of the Transform Chain (VERIFIED)
 
-**IMPORTANT: The transform chain described below was reverse-engineered by reading the code. Before implementing, verify this understanding is correct by running the validation tests described in Phase C. If any step is wrong, update this document and the CLAUDE.md documentation accordingly.**
+**Verified 2026-03-26 in Phase A.** All paths confirmed with 54 tests in `tests/test_transform_chain.py`. See Phase A completion notes for key findings and corrections made during verification.
 
 ### Coordinate spaces
 
@@ -151,67 +151,30 @@ Adapt this code into `nsosim/transforms.py`.
 
 ## Implementation Plan
 
-### Phase A: Verify Transform Chain + Document Current State
+### Phase A: Verify Transform Chain + Document Current State — DONE
 
-**Before writing any new code**, verify the transform chain described above and document it in `nsosim/CLAUDE.md`.
+**Completed 2026-03-26.** Commit `5c10f25`. All deliverables:
+- `tests/test_transform_chain.py` — 54 tests, all passing
+- `CLAUDE.md` — full "Coordinate Systems & Units" section with test cross-references
+- Test fixtures in GitHub Releases (tag `test-fixtures-v1`) with auto-download
 
-**A1: Read and trace the code**
-- Read `nsm_fitting.py` end-to-end: `align_bone_osim_fit_nsm`, `convert_nsm_recon_to_OSIM`, `convert_nsm_recon_to_OSIM_`, `undo_transform`, `apply_transform`, `nsm_recon_to_osim`, `interp_ref_to_subject_to_osim`
-- Read `utils.py`: `fit_nsm`, `recon_mesh` — trace what `reconstruct_mesh` (NSM library) returns and what `scale_mesh_` does internally
-- Read `NSM/sdf/reconstruct/main.py` and `NSM/sdf/mesh/main.py` (`create_mesh`, `scale_mesh_`) in the NSM library (GenerativeAnatomy) to confirm decoder output space and what registration params do
-- Confirm: does `create_mesh` without params return mesh in [-1,1] canonical space? Does `create_mesh` WITH params (offset, scale, icp_transform) return mesh in the aligned input space?
+**Key findings during Phase A:**
 
-**A2: Empirical verification**
+1. **Transform chain confirmed correct.** Both paths (production: mm→OSIM, synthetic: canonical→OSIM) verified with exact point-to-point comparison against reference meshes.
 
-All verification data is available — no GPU or simulation needed, just loading meshes and comparing.
+2. **Reference vs subject `mean_orig` distinction.** The reference OSIM meshes (from `1_Fit_NSM_models_to_ref_surfaces`) were generated using each bone's **own** `mean_orig`, because each bone was processed independently. In the production subject pipeline, all bones use `fem_ref_center` (the femur's `mean_orig`) because tibia/patella had `femur_transform` applied. Both are correct — the test suite covers both conventions.
 
-**Reference data** (per bone, at `COMAK_SIMULATION_REQUIREMENTS/nsm_meshes/{bone}/`):
-- `ref_{bone}_alignment.json` — reference transform (`transform_matrix`, `mean_orig`, `orig_scale`, `scale=1`, `center=[0,0,0]`)
-- `latent_{bone}.npy` — reference latent vector
-- `nsm_recon_ref_{bone}_nsm_space.vtk` — reference mesh in NSM canonical space (decoder output)
-- `nsm_recon_ref_{bone}.vtk` — reference mesh in mm (aligned space, after `reconstruct_mesh` undid ICP)
-- `nsm_recon_ref_{bone}_osim_space.vtk` — reference mesh in OSIM meters (the final output)
-- `smith2019-R-{bone}-bone_processed.vtk` — the original reference bone mesh
+3. **Alignment JSON key names differ.** Reference JSONs use `transform_matrix` and include `mean_orig`. Subject JSONs use `linear_transform` and do NOT include `mean_orig`. Verified in `TestAlignmentJsonKeyNames`.
 
-`COMAK_SIMULATION_REQUIREMENTS` is at: `/dataNAS/people/aagatti/projects/comak_gait_simulation/COMAK_SIMULATION_REQUIREMENTS`
+4. **Scale factor values corrected.** The plan originally said "diagonal ≈ 0.0132" but the diagonal is not the scale — it only approximates scale when rotation is near-identity. The actual scale is the column norm of the 3x3 submatrix: femur ~0.013, tibia ~0.019, patella ~0.031 (was incorrectly described as "varies similarly to tibia").
 
-**Production subject data** (e.g., subject 9003316_RIGHT at `comak_gait_simulation_results/OARSI_menisci_pfp_v1/9003316_00m_RIGHT/geometries_nsm_similarity/{bone}/`):
-- `{bone}_alignment.json` — subject's `linear_transform`, `scale=1`, `center=[0,0,0]`
-- `{bone}_latent.npy` — subject's fitted latent vector
-- `*_nsm_recon_mm.vtk` — mesh in mm (aligned space, output of `reconstruct_mesh`)
-- `{bone}_nsm_recon_osim.stl` — mesh in OSIM meters (final output)
-- `{bone}_cartilage_nsm_recon_osim.vtk` — cartilage in OSIM meters
+5. **NSM library confirmed.** `create_mesh` without registration params returns mesh in NSM canonical space (~[-1,1]). `scale_mesh_` reverses centering/scaling/ICP in that order. `reconstruct_mesh` calls `scale_mesh_` internally so its output is in aligned input space.
 
-Results base path: `/dataNAS/people/aagatti/projects/comak_gait_simulation_results`
-
-**Verification steps:**
-
-1. Load reference and subject alignment JSONs. Confirm `scale=1, center=[0,0,0]` for all.
-
-2. **Test the aligned-space → OSIM path** (existing production path):
-   Load `nsm_recon_ref_femur.vtk` (mm, aligned space) → apply `convert_nsm_recon_to_OSIM_(pts, fem_ref_center)` → compare against `nsm_recon_ref_femur_osim_space.vtk`. Should be identical.
-
-3. **Test the canonical → OSIM path** (the synthetic path):
-   Load `nsm_recon_ref_femur_nsm_space.vtk` (canonical) → apply `convert_nsm_recon_to_OSIM(pts, ref_transform_matrix, 1, [0,0,0], fem_ref_center)` → compare against `nsm_recon_ref_femur_osim_space.vtk`. Should be identical (same mesh, just different transform path).
-
-4. **Test with a subject** (same canonical → OSIM path):
-   Load subject 9003316's `femur_latent.npy` + `femur_alignment.json` (`linear_transform`). Decode latent with `create_mesh` (no params) → apply `convert_nsm_recon_to_OSIM(pts, linear_transform, 1, [0,0,0], fem_ref_center)` → compare against `femur_nsm_recon_osim.stl`. Expected: same surface geometry, possible marching cubes differences (different grid sampling in `create_mesh` vs the original `reconstruct_mesh` call).
-
-5. **Repeat steps 3-4 for tibia and patella** to confirm the chain works for all bones (tibia is the most important — its transform encodes joint configuration).
-
-**A3: Document in `nsosim/CLAUDE.md`**
-
-Add a comprehensive "Coordinate Spaces & Transform Chain" section covering:
-1. The 3 coordinate spaces (NSM canonical, femur-aligned, OSIM) with units and orientation
-2. What each `linear_transform`/`transform_matrix` represents per bone
-3. Why `fem_ref_center` is used for ALL bones (not just femur)
-4. The function reference table: which function operates on which space, when to use each
-5. The distinction between `convert_nsm_recon_to_OSIM_` (underscore) vs `convert_nsm_recon_to_OSIM` (no underscore)
-6. How `reconstruct_mesh` returns meshes already in aligned space (ICP undone internally) vs `create_mesh` which returns canonical space
-
-This documentation captures the **current state** of the library. It will be updated again at the end (Phase E) to include the new decode functions and T_rel concepts.
-
-**If verification fails:** Stop. Debug the transform chain, correct this document, and re-verify before proceeding.
+**Test fixture architecture:**
+- Alignment JSONs in git (tiny, tests always run)
+- Mesh VTKs in GitHub Releases (`test-fixtures-v1`, 30MB tarball)
+- Auto-downloaded on first `pytest` run via `download_fixtures.sh`
+- `@requires_mesh_fixtures` decorator — mesh tests skip gracefully if download fails
 
 ### Phase B: `nsosim/transforms.py` — New Module
 
