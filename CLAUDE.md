@@ -24,6 +24,9 @@ make autoformat    # Auto-format code
 # Tests
 pytest             # ~150 tests covering math, SDF, fitters, schemas, articular surfaces
 
+# Test fixtures (large mesh files, not in git — auto-downloaded on first pytest run)
+tests/fixtures/transforms/download_fixtures.sh   # Manual download if needed
+
 # Build
 make build         # Build wheel to wheelhouse/
 make clean         # Remove build artifacts
@@ -117,18 +120,31 @@ class TestCylinderFitterRotated:
 
 **SDF tests**: Surface points should have SDF ≈ 0 with tight tolerance (1e-4). Interior points negative, exterior positive. Test with translated and rotated geometry, not just origin-centered axis-aligned shapes.
 
+**Large test fixtures**: Mesh files (VTK) are stored in GitHub Releases (`gattia/nsosim`, tag `test-fixtures-v1`), not in git. Tests auto-download them on first run via `tests/fixtures/transforms/download_fixtures.sh`. Tests that need mesh fixtures use `@requires_mesh_fixtures` and skip gracefully if download fails. Alignment JSONs are kept in git (tiny) so JSON-only tests always run.
+
 ## Architecture
 
 ### Core Modules
 
 | Module | Purpose |
 |--------|---------|
-| `nsm_fitting.py` | NSM fitting pipeline: align meshes → fit NSM → convert to OpenSim coords |
+| `nsm_fitting.py` | NSM fitting pipeline: align meshes → fit NSM → convert to OpenSim coords. Also contains coordinate transform functions (`convert_nsm_recon_to_OSIM`, `undo_transform`, etc.) |
+| `transforms.py` | Similarity transform utilities: decomposition, relative transforms (T_rel), mean rotation, deviation analysis/recomposition |
+| `decode.py` | Decode arbitrary latent vectors to OSIM-space meshes (synthetic joints, shape mode visualization) |
 | `articular_surfaces.py` | Extract/refine cartilage contact surfaces, meniscus processing, prefemoral fatpad, patella optimization |
 | `comak_osim_update.py` | Update OpenSim XML with subject-specific meshes, attachments, wrap surfaces |
 | `meniscal_ligaments.py` | Post-interpolation projection of meniscal ligament tibia attachments onto tibia surface |
 | `osim_utils.py` | Low-level OpenSim XML manipulation via Python API |
 | `utils.py` | NSM model loading, mesh I/O, anatomical coordinate system (ACS) alignment utilities |
+
+### Module Organization Principles
+
+`nsm_fitting.py` contains both the fitting pipeline (mesh→latent) and the coordinate transform functions. These could be separate modules, but the transforms are tightly coupled to the fitting workflow and splitting now would break imports across downstream projects. New functionality should go in new modules rather than growing `nsm_fitting.py` further:
+
+- **Fitting (mesh→latent):** `nsm_fitting.py` — existing, don't append to it
+- **Decoding (latent→mesh):** `decode.py` — conceptually the inverse of fitting, imports transform functions from `nsm_fitting.py`
+- **Transform analysis:** `transforms.py` — pure math (similarity decomposition, T_rel, deviations), no NSM/model dependencies
+- **Coordinate conversions** (`convert_nsm_recon_to_OSIM`, `undo_transform`, etc.): stay in `nsm_fitting.py` for now — a future refactor could extract these into a `coordinates.py` module
 
 
 ### Wrap Surface Fitting Submodule (`wrap_surface_fitting/`)
@@ -150,15 +166,65 @@ PyTorch-based optimization to adapt OpenSim wrap surfaces to new bone geometries
 
 ## Coordinate Systems & Units
 
-Two coordinate systems and unit conventions:
-- **NSM space**: Millimeters (mm), coordinate system used by Neural Shape Models during fitting
-- **OpenSim space**: Meters (m), target coordinate system for OpenSim models
+### Three Coordinate Spaces
 
-Key conversion functions:
-- `convert_OSIM_to_nsm()` / `convert_nsm_recon_to_OSIM()` - transform between spaces
-- `nsm_recon_to_osim()` - reconstruct mesh in OpenSim coordinates (returns dict with 'bone', 'cart', 'med_men', 'lat_men' keys)
+1. **NSM canonical space** (~[-1, 1] unit cube): The decoder's output space. Each bone has its own canonical space (femur canonical ≠ tibia canonical). This is what `create_mesh(model, latent)` returns when called without registration params.
 
-**Important**: `fem_ref_center` (femoral reference center) from the alignment file is used for ALL bones to maintain consistent spatial relationships.
+2. **Femur-aligned space** (mm, NSM-oriented): All bones share this space after the femur registration is applied. Orientation is rotated from OSIM by `OSIM_TO_NSM_TRANSFORM`. Centered around the reference femur's centroid (subtracted during preprocessing). In the production pipeline, tibia/patella have `femur_transform` applied instead of their own registration, placing them in this shared space.
+
+3. **OSIM space** (meters, OpenSim orientation): The final output space for OpenSim models. Obtained from femur-aligned space by: `+fem_ref_center`, `/1000`, `@ OSIM_TO_NSM_TRANSFORM.T`.
+
+### Transform Chain
+
+**Production pipeline** (subject mesh → OSIM):
+```
+Subject mesh (mm, arbitrary orientation)
+  → femur registration (or femur_transform for tibia/patella) → femur-aligned mm
+  → reconstruct_mesh() → internally: center, scale, ICP, optimize, decode, scale_mesh_()
+  → returns mesh in femur-aligned mm (ICP already undone internally)
+  → nsm_recon_to_osim() → convert_nsm_recon_to_OSIM_(pts, fem_ref_center) → OSIM
+```
+
+**Synthetic decode pipeline** (arbitrary latent → OSIM):
+```
+create_mesh(model, latent) → NSM canonical space
+  → convert_nsm_recon_to_OSIM(pts, linear_transform, 1, [0,0,0], fem_ref_center)
+    chains: undo_transform() → femur-aligned mm → convert_nsm_recon_to_OSIM_() → OSIM
+```
+
+Both pipelines are verified in `tests/test_transform_chain.py` using reference meshes at all 3 coordinate spaces (exact point-to-point comparison) and subject data (roundtrip through canonical space matches direct conversion).
+
+### Conversion Function Reference
+
+| Function | Input space | Output space | When to use | Verified by |
+|----------|-------------|--------------|-------------|-------------|
+| `convert_nsm_recon_to_OSIM_` (underscore) | Femur-aligned mm | OSIM meters | After `reconstruct_mesh` (ICP already undone) | `TestRefAlignedMmToOsim` |
+| `convert_nsm_recon_to_OSIM` (no underscore) | NSM canonical | OSIM meters | After `create_mesh` (undoes ICP via `undo_transform` first) | `TestRefCanonicalToOsim` |
+| `convert_OSIM_to_nsm_` (underscore) | OSIM meters | Femur-aligned mm | Inverse of underscore version | `TestRefRoundtrip` |
+| `convert_OSIM_to_nsm` (no underscore) | OSIM meters | NSM canonical | Full inverse (OSIM → canonical) | `TestRefRoundtrip` |
+
+All functions tested in `tests/test_transform_chain.py` with both reference and subject data.
+
+### Per-bone `linear_transform` (alignment JSONs)
+
+Each bone's alignment JSON stores a 4x4 similarity `linear_transform` that maps femur-aligned space → that bone's NSM canonical space. Both `scale` and `center` fields are always `1` and `[0,0,0]` — the similarity ICP embeds centering + scaling + rotation into the 4x4 matrix. The 3x3 submatrix encodes `scale * R` where `scale = norm(T[:3, 0])` (uniform across columns) and `R` is a proper rotation.
+
+Typical scale factors (column norms of the 3x3 submatrix — maps mm to [-1,1] canonical range):
+- Femur: ~0.013 (nearly constant across subjects — femur is the registration anchor)
+- Tibia: ~0.019 (varies across subjects — encodes joint configuration relative to femur)
+- Patella: ~0.031 (varies — patella is smaller so needs larger scaling to fill [-1,1])
+
+Scale=1, center=[0,0,0], 4x4 structure, and uniform scaling verified in `TestAlignmentJsonStructure` in `tests/test_transform_chain.py`.
+
+**Note:** Subject alignment JSONs use `linear_transform` as the key. Reference alignment JSONs use `transform_matrix` and also include `mean_orig`. Verified in `TestAlignmentJsonKeyNames`.
+
+### `fem_ref_center`
+
+`fem_ref_center` = `mean_orig` from `ref_femur_alignment.json`. It is the centroid of the reference femur mesh in NSM-oriented mm space before centering. Value: `[-1.22, -10.94, 8.20]`. Verified in `TestFemRefCenter`.
+
+In the **production subject pipeline**, it is used for ALL bones because all bones are in the femur-aligned space (tibia/patella had `femur_transform` applied). Adding it back un-centers them correctly, preserving their spatial relationships (e.g., tibia ~50mm distal to femur condyles). Verified in `TestSubjectFemRefCenterConvention`.
+
+**Reference reconstructions** (from `1_Fit_NSM_models_to_ref_surfaces`) are different: each bone was processed independently using its own `mean_orig`. The reference alignment JSONs store per-bone `mean_orig` values.
 
 ## Complete Pipeline Workflow
 

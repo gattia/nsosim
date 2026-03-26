@@ -1,0 +1,11 @@
+# Large mesh/data files — download via ./download_fixtures.sh or auto-pulled by pytest
+*.vtk
+*.npy
+
+# Subject subdirectory mesh/data files
+subject_9003316/*.vtk
+subject_9003316/*.npy
+
+# Keep alignment JSONs in git (tiny, needed for lightweight tests that run without downloads)
+!ref_*_alignment.json
+!subject_9003316/*_alignment.json
