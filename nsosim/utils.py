@@ -17,6 +17,64 @@ logger = logging.getLogger(__name__)
 
 BONE_CLIPPING_FACTOR = 0.95
 
+# Fallback mapping for model configs that don't have mesh_names.
+# Keyed by (bone_type, objects_per_decoder).
+_DEFAULT_MESH_NAMES = {
+    ("femur", 2): ["bone", "cart"],
+    ("femur", 4): ["bone", "cart", "med_men", "lat_men"],
+    ("tibia", 2): ["bone", "cart"],
+    ("tibia", 3): ["bone", "cart", "fibula"],
+    ("patella", 2): ["bone", "cart"],
+}
+
+
+def get_mesh_names(model_config):
+    """Return ordered mesh names for this model's decoder outputs.
+
+    Reads ``mesh_names`` from the config if present. Otherwise infers
+    from ``(bone, objects_per_decoder)`` using a legacy heuristic and
+    logs a warning.
+
+    Args:
+        model_config (dict): Model configuration dictionary. Should contain
+            ``objects_per_decoder`` (int) and ideally ``mesh_names`` (list of str).
+
+    Returns:
+        list[str]: Ordered mesh names, e.g. ``["bone", "cart", "med_men", "lat_men"]``.
+
+    Raises:
+        ValueError: If ``mesh_names`` length doesn't match ``objects_per_decoder``,
+            or if no default mapping exists for the ``(bone, objects_per_decoder)`` pair.
+    """
+    n_objects = model_config.get("objects_per_decoder", 1)
+
+    if "mesh_names" in model_config and model_config["mesh_names"] is not None:
+        mesh_names = model_config["mesh_names"]
+        if len(mesh_names) != n_objects:
+            raise ValueError(
+                f"mesh_names has {len(mesh_names)} entries but "
+                f"objects_per_decoder is {n_objects}. These must match."
+            )
+        return list(mesh_names)
+
+    bone = model_config.get("bone", "unknown")
+    key = (bone, n_objects)
+
+    if key not in _DEFAULT_MESH_NAMES:
+        raise ValueError(
+            f"No default mesh_names for (bone={bone!r}, objects_per_decoder={n_objects}). "
+            f"Add a 'mesh_names' list to your model config JSON."
+        )
+
+    logger.warning(
+        "Model config missing 'mesh_names' — inferring from (bone=%r, objects=%d). "
+        "Add 'mesh_names': %s to your config to silence this warning.",
+        bone,
+        n_objects,
+        _DEFAULT_MESH_NAMES[key],
+    )
+    return list(_DEFAULT_MESH_NAMES[key])
+
 
 def load_model(config, path_model_state, model_type="triplanar"):
     """
@@ -329,37 +387,17 @@ def recon_mesh(
     # get latent
     latent = mesh_result["latent"].detach().cpu().numpy().tolist()
 
-    output_dict = {
-        "latent": latent,
-        "bone_mesh": mesh_result["mesh"][0],
-        "cart_mesh": mesh_result["mesh"][1],
-        "mesh_result": mesh_result,
-    }
-
-    # Map additional meshes based on the count returned by the decoder.
-    # The count depends on the model's objects_per_decoder setting:
-    #   2 meshes: [bone, cart]                               (patella, or tibia without fibula)
-    #   3 meshes: [bone, cart, fibula]                       (tibia with fibula)
-    #   4 meshes: [bone, cart, med_meniscus, lat_meniscus]   (femur)
-    # TODO: Replace count-based inference with an explicit mesh name mapping
-    # from model_config (e.g. a "mesh_names" list). The current heuristic
-    # works but is fragile — it will break if a new model variant returns
-    # 3 meshes that aren't [bone, cart, fibula].
+    mesh_names = get_mesh_names(model_config)
     n_meshes = len(mesh_result["mesh"])
-    bone_type = model_config.get("bone", "unknown")
-
-    if n_meshes == 2:
-        pass  # bone + cart only, nothing extra to map
-    elif n_meshes == 3:
-        output_dict["fibula_mesh"] = mesh_result["mesh"][2]
-    elif n_meshes == 4:
-        output_dict["med_men_mesh"] = mesh_result["mesh"][2]
-        output_dict["lat_men_mesh"] = mesh_result["mesh"][3]
-    else:
+    if n_meshes != len(mesh_names):
         raise ValueError(
-            f"NSM decoder returned {n_meshes} meshes for bone type '{bone_type}', "
-            f"expected 2, 3, or 4. Check the model config."
+            f"NSM decoder returned {n_meshes} meshes but mesh_names has "
+            f"{len(mesh_names)} entries ({mesh_names}). Check the model config."
         )
+
+    output_dict = {"latent": latent, "mesh_result": mesh_result}
+    for name, mesh in zip(mesh_names, mesh_result["mesh"]):
+        output_dict[f"{name}_mesh"] = mesh
 
     return output_dict
 
