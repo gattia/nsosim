@@ -175,6 +175,11 @@ All steps implemented:
 - Item 5 (NSM coupling): NSM now accepts `mesh_names` as a passthrough config field. It validates length but doesn't interpret the names — semantics stay in nsosim.
 - Item 6 (testing): All cases covered in `test_mesh_names.py`.
 
+### Additional issues resolved during this work
+- **CLAUDE.md Known Issues updated** — rewrote the `recon_mesh()` count-based inference entry to reference this plan and `get_mesh_names()`.
+- **NSM CLAUDE.md created** — added documentation for `objects_per_decoder` and `mesh_names` config parameters to the NSM repo's `CLAUDE.md` (didn't exist before for the training config section).
+- **Legacy config workaround** — models 75/77 had incorrect `bone: "femur"` but now have explicit `mesh_names`, making the `bone` field irrelevant for mesh naming.
+
 ### Still open
 - Item 3 (first entry = "bone"): Not enforced. Documenting convention is sufficient for now.
 - Item 4 (output format): Kept flat dict for backwards compat. Revisit if needed.
