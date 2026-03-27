@@ -1,7 +1,7 @@
 # Plan: Explicit Mesh Name Mapping for NSM Decoder Outputs
 
 **Created:** 2026-03-26
-**Status:** Proposed
+**Status:** Complete (2026-03-27)
 **Priority:** Medium — not blocking current work, but should be done before adding new model variants
 
 ---
@@ -158,11 +158,23 @@ The refactored version produces `{name}_mesh` from `mesh_names` — so `mesh_nam
 
 ---
 
-## Implementation Order
+## Completion Notes (2026-03-27)
 
-This is a small, self-contained refactor. Can be done:
-- **Before Phase C** — cleanest, since `decode_latent_to_osim()` uses `get_mesh_names()` from the start
-- **After Phase C** — also fine, just requires a follow-up refactor of `decode_latent_to_osim()`
-- **Independently** — doesn't depend on the synthetic joint decode work at all
+All steps implemented:
 
-Estimated scope: ~30 lines of new code (`get_mesh_names` + `_DEFAULT_MESH_NAMES`), ~20 lines removed from `recon_mesh`, ~5 lines changed in `nsm_fitting.py`. Plus tests.
+1. **`get_mesh_names()` + `_DEFAULT_MESH_NAMES`** added to `nsosim/utils.py`. Commit `29a32c2`.
+2. **`recon_mesh()` refactored** — replaced 25-line count-based branching with 7-line `get_mesh_names()` loop. Same output dict keys, no downstream breakage. Commit `29a32c2`.
+3. **`decode_latent_to_osim()`** — not yet written (Phase C of synthetic-joint-decode plan), will use `get_mesh_names()` from the start.
+4. **Model config JSONs updated** — all 7 production configs now have `mesh_names` field. No more fallback warnings for existing models.
+5. **NSM library updated** — `mesh_names` accepted as optional config parameter in both `train_deep_sdf.py` and `train_deep_sdf_multi_head.py`, with validation and warning. Commit `709b818` on `adaptive_marching_cubes` branch.
+6. **Tests** — 14 tests in `tests/test_mesh_names.py`, all passing. Full suite (272 tests) passes with no regressions.
+
+### Resolved considerations
+- Item 1 (legacy configs): Legacy models 75/77 have `bone: "femur"` which is wrong, but `mesh_names: ["bone", "cart"]` is now explicit so the `bone` field no longer matters for mesh naming.
+- Item 2 (validation): Yes, `get_mesh_names()` validates `len(mesh_names) == objects_per_decoder`.
+- Item 5 (NSM coupling): NSM now accepts `mesh_names` as a passthrough config field. It validates length but doesn't interpret the names — semantics stay in nsosim.
+- Item 6 (testing): All cases covered in `test_mesh_names.py`.
+
+### Still open
+- Item 3 (first entry = "bone"): Not enforced. Documenting convention is sufficient for now.
+- Item 4 (output format): Kept flat dict for backwards compat. Revisit if needed.

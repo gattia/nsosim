@@ -223,9 +223,7 @@ Decode functions go in a **new** `nsosim/decode.py` module rather than appending
 - `convert_nsm_recon_to_OSIM(pts, icp_transform, scale, center, fem_ref_center)` — existing, works with `scale=1, center=[0,0,0]` and `icp_transform=linear_transform` for synthetic decode path. Already verified in Phase A tests.
 - `pymskt.mesh.Mesh.resample_surface(subdivisions=1, clusters=N)` — method on the mesh object, used in `_nsm_recon_to_osim_single_surface`.
 
-**Mesh name mapping issue:** The `objects` parameter to `create_mesh` must match `model_config["objects_per_decoder"]`, and the returned list needs to be mapped to names (bone, cart, med_men, etc.). This is the same count-based heuristic from `recon_mesh()` in `utils.py`. See `.claude/plans/mesh-name-mapping.md` for the fix plan.
-
-**For Phase C implementation:** Use `model_config` (or at minimum `objects_per_decoder`) as a parameter to `decode_latent_to_osim()` so we know how many objects to decode and how to name them. If `mesh-name-mapping` is implemented first, use `get_mesh_names()`. Otherwise, duplicate the heuristic temporarily (with a TODO) and refactor when `get_mesh_names()` lands.
+**Mesh name mapping:** `get_mesh_names(model_config)` from `utils.py` is now available (commit `29a32c2`). It reads `mesh_names` from model config if present, falls back to `(bone, objects_per_decoder)` lookup. All 7 production model configs have been updated with explicit `mesh_names`. Use `get_mesh_names()` in `decode_latent_to_osim()` to map decoder outputs to named meshes — same pattern as the refactored `recon_mesh()`.
 
 **GPU requirement:** `create_mesh` runs the decoder on CUDA. The function should document this. Tests that call `create_mesh` need `@pytest.mark.skipif(not torch.cuda.is_available(), ...)` or similar.
 
