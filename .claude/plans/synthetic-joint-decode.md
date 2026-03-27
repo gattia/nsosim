@@ -1,7 +1,7 @@
 # Plan: Synthetic Joint Decoding — Transform Utilities + Decode-from-Latent API
 
 **Created:** 2026-03-25
-**Status:** Phase B complete (not yet committed), Phase C next
+**Status:** Phases A, B, and mesh-name-mapping complete. Phase C next.
 **Context:** The comak_gait_simulation project needs to generate synthetic knee joints from arbitrary latent vectors and joint poses (for Paper 1, Analysis #8). The core decode + transform logic belongs in nsosim as reusable library functionality.
 **Parent plan:** `comak_gait_simulation/.claude/plans/SYNTHETIC_JOINT_SIMULATION.md` — describes the full end-to-end pipeline; this plan covers only the nsosim-side work.
 
@@ -178,7 +178,7 @@ Adapt this code into `nsosim/transforms.py`.
 
 ### Phase B: `nsosim/transforms.py` — New Module — DONE
 
-**Completed 2026-03-26.** Not yet committed (pending autoformat). All deliverables:
+**Completed 2026-03-26.** Commit `516eceb` (code), `e86ae68` (autoformat). All deliverables:
 - `nsosim/transforms.py` — 6 functions, adapted from ACL project reference code
 - `tests/test_transforms.py` — 16 tests, all passing
 - `nsosim/__init__.py` — updated imports and `__all__`
@@ -208,9 +208,18 @@ Adapt this code into `nsosim/transforms.py`.
 
 **Adapted from:** `pratham_ACL_wcb/scripts/Tibia_rotations/compute_relative_tibia_transforms.py` (helpers: `decompose_similarity`, `mean_rotation`, deviation computation loop) and `recompose_tibia_transform.py` (`deviations_to_transform`). The script-level `main()` logic (loading files, printing summaries, saving JSON) was not carried over — only the pure math functions.
 
-**What's needed before committing:**
-1. Commit code changes
-2. Run `make autoformat` and commit separately (per repo convention)
+### Interstitial: Mesh Name Mapping Refactor — DONE
+
+**Completed 2026-03-27.** Commit `29a32c2`. Before starting Phase C, we identified that both `recon_mesh()` and the planned `decode_latent_to_osim()` would need to map positional decoder outputs to named meshes (bone, cart, med_men, etc.). The existing code used a fragile count-based heuristic duplicated wherever meshes were decoded.
+
+**What was done:**
+- Added `get_mesh_names(model_config)` to `nsosim/utils.py` — reads `mesh_names` from config if present, falls back to `(bone, objects_per_decoder)` lookup with warning
+- Refactored `recon_mesh()` to use `get_mesh_names()` instead of count-based branching
+- Added `mesh_names` as an optional config parameter in the NSM library's training code (commit `709b818` in NSM repo, `adaptive_marching_cubes` branch)
+- Updated all 7 production model config JSONs with explicit `mesh_names`
+- 14 tests in `tests/test_mesh_names.py`, full suite (272 tests) passes
+
+**Full details:** `.claude/plans/mesh-name-mapping.md`
 
 ### Phase C: Decode Functions in `nsosim/decode.py` (NEW MODULE)
 
