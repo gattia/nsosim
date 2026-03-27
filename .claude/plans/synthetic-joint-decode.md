@@ -1,7 +1,7 @@
 # Plan: Synthetic Joint Decoding — Transform Utilities + Decode-from-Latent API
 
 **Created:** 2026-03-25
-**Status:** Phase A complete, Phase B next
+**Status:** Phase B complete, Phase C next
 **Context:** The comak_gait_simulation project needs to generate synthetic knee joints from arbitrary latent vectors and joint poses (for Paper 1, Analysis #8). The core decode + transform logic belongs in nsosim as reusable library functionality.
 **Parent plan:** `comak_gait_simulation/.claude/plans/SYNTHETIC_JOINT_SIMULATION.md` — describes the full end-to-end pipeline; this plan covers only the nsosim-side work.
 
@@ -176,64 +176,41 @@ Adapt this code into `nsosim/transforms.py`.
 - Auto-downloaded on first `pytest` run via `download_fixtures.sh`
 - `@requires_mesh_fixtures` decorator — mesh tests skip gracefully if download fails
 
-### Phase B: `nsosim/transforms.py` — New Module
+### Phase B: `nsosim/transforms.py` — New Module — DONE
 
-Create a new module for similarity transform utilities. Adapt from the proven ACL project code.
+**Completed 2026-03-26.** Not yet committed (pending autoformat). All deliverables:
+- `nsosim/transforms.py` — 6 functions, adapted from ACL project reference code
+- `tests/test_transforms.py` — 16 tests, all passing
+- `nsosim/__init__.py` — updated imports and `__all__`
 
-**Functions:**
+**Functions implemented:**
+- `decompose_similarity(T)` → `(scale, R, t)` — handles det < 0 (improper rotation) case
+- `mean_rotation(rotations)` → `R_mean` — SVD projection with `diag([1, 1, d])` reflection correction
+- `compute_T_rel(T_fem, T_other)` → `T_rel` — `T_fem @ inv(T_other)`
+- `recover_bone_transform(T_rel, T_fem)` → `T_bone` — `inv(T_rel) @ T_fem`
+- `compute_transform_deviations(transforms, mean_fem_scale)` → dict of means + per-subject deviations
+- `deviations_to_transform(euler_deg, trans_mm, scale_ratio, R_mean, t_mean, s_mean, mean_fem_scale)` → 4x4
 
-```python
-def decompose_similarity(T: np.ndarray) -> tuple[float, np.ndarray, np.ndarray]:
-    """Decompose 4x4 similarity transform into (scale, R, t).
-    T[:3,:3] = scale * R where R is proper rotation (det=+1).
-    """
+**Tests (16 total across 5 classes):**
+- `TestDecomposeSimilarity` (5): identity, pure scale, 10 random roundtrips, proper rotation check, subject_9003316 fixture
+- `TestMeanRotation` (4): identical rotations, identity, proper rotation output, symmetric ±θ pair
+- `TestTRelRoundtrip` (3): synthetic roundtrip, subject_9003316 fixture (tibia + patella), identity-femur edge case
+- `TestComputeTransformDeviations` (2): single transform → zero deviations, 50-sample center-at-zero property
+- `TestDeviationsRoundtrip` (2): zero deviations = mean transform, full decompose→recompose roundtrip (20 transforms, atol=1e-10)
 
-def mean_rotation(rotations: np.ndarray) -> np.ndarray:
-    """Mean rotation via element-wise average + SVD projection.
-    Args: rotations (N, 3, 3). Returns: (3, 3) proper rotation.
-    """
+**Design decisions during implementation:**
 
-def compute_T_rel(T_fem: np.ndarray, T_other: np.ndarray) -> np.ndarray:
-    """Compute relative transform: T_fem @ inv(T_other).
-    Maps canonical other-bone → canonical femur space.
-    """
+1. **Dropped `TestACLKnownValues` class.** Originally planned to cross-validate against hardcoded numbers from the 52-subject ACL analysis. Decided against it: the roundtrip tests prove mathematical correctness, and hardcoded numbers from another project are brittle and opaque. Subject_9003316 fixtures (already in repo) provide sufficient "real data" coverage.
 
-def recover_bone_transform(T_rel: np.ndarray, T_fem: np.ndarray) -> np.ndarray:
-    """Recover per-bone transform from relative: inv(T_rel) @ T_fem.
-    Returns the bone's linear_transform (canonical bone → femur-aligned).
-    """
+2. **Tightened tolerances on `test_deviations_center_at_zero`.** Initially had `atol=0.5` for all three checks. Translation mean and scale ratio mean are exact by construction (linear operations), so tightened to `1e-10`. Euler angle mean is not exactly zero due to Euler nonlinearity — measured ~0.08° worst case with 50 samples at ±5° std. Set `atol=0.15` with an explanatory comment. The real precision test is the roundtrip at `1e-10`.
 
-def compute_transform_deviations(
-    transforms: np.ndarray,     # (N, 4, 4) array of similarity transforms
-    mean_fem_scale: float,       # for mm conversion
-) -> dict:
-    """Decompose transforms, compute mean, return per-subject deviations.
-    Returns dict with: R_mean, t_mean, s_mean, euler_angles_deg (N,3),
-    translations_mm (N,3), scale_ratios (N,).
-    """
+3. **No type annotations.** Matches the style of the rest of the codebase (ACL reference code and existing nsosim modules don't use them).
 
-def deviations_to_transform(
-    euler_angles_deg: np.ndarray,   # (3,) rotation deviation
-    translation_mm: np.ndarray,     # (3,) translation deviation
-    scale_ratio: float,             # scale deviation
-    R_mean: np.ndarray,             # (3,3) mean rotation
-    t_mean: np.ndarray,             # (3,) mean translation (canonical units)
-    s_mean: float,                  # mean scale
-    mean_fem_scale: float,          # for mm ↔ canonical conversion
-) -> np.ndarray:
-    """Recompose deviation values into a full 4x4 similarity transform.
-    Pass [0,0,0], [0,0,0], 1.0 to get the mean transform.
-    Proven roundtrip on 52 subjects (ACL project).
-    """
-```
+**Adapted from:** `pratham_ACL_wcb/scripts/Tibia_rotations/compute_relative_tibia_transforms.py` (helpers: `decompose_similarity`, `mean_rotation`, deviation computation loop) and `recompose_tibia_transform.py` (`deviations_to_transform`). The script-level `main()` logic (loading files, printing summaries, saving JSON) was not carried over — only the pure math functions.
 
-**Tests (`tests/test_transforms.py`):**
-- Roundtrip: `decompose_similarity(compose(s, R, t))` recovers (s, R, t)
-- `mean_rotation` of N identical rotations returns that rotation
-- `deviations_to_transform` with zero deviations returns mean transform
-- `deviations_to_transform` → `decompose_similarity` → `compute_transform_deviations` roundtrip
-- `compute_T_rel` + `recover_bone_transform` roundtrip: `recover(compute(T_fem, T_tib), T_fem) == T_tib`
-- Known values from ACL project (52-subject summary statistics)
+**What's needed before committing:**
+1. Commit code changes
+2. Run `make autoformat` and commit separately (per repo convention)
 
 ### Phase C: Decode Functions in `nsosim/decode.py` (NEW MODULE)
 
