@@ -532,9 +532,7 @@ def extract_meniscus_articulating_surface_scored(
         Mesh: The extracted articular surface
     """
     # Ensure normals are computed
-    meniscus_mesh.compute_normals(
-        point_normals=True, auto_orient_normals=True, inplace=True
-    )
+    meniscus_mesh.compute_normals(point_normals=True, auto_orient_normals=True, inplace=True)
 
     # 1. Compute scores
     scores = score_meniscus_vertices(meniscus_mesh, articulating_bone_mesh)
@@ -567,9 +565,7 @@ def extract_meniscus_articulating_surface_scored(
     # 6. Remove isolated cells
     surface = remove_isolated_cells(surface)
     if not isinstance(surface, pv.PolyData):
-        raise TypeError(
-            f"Expected pv.PolyData after remove_isolated_cells, got {type(surface)}"
-        )
+        raise TypeError(f"Expected pv.PolyData after remove_isolated_cells, got {type(surface)}")
 
     # 7. Final smooth
     surface = surface.smooth(n_iter=smooth_iter, boundary_smoothing=boundary_smoothing)

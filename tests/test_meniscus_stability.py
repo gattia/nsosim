@@ -161,9 +161,9 @@ class TestLabelMeniscusRegionsWithSDF:
         top_mask = ring["region"] == 0
         top_labels = labels[top_mask]
         # Top face points should be near the upper surface (label 2 or 3)
-        assert np.all((top_labels == 2) | (top_labels == 3)), (
-            f"Expected top face labels to be 2 or 3, got unique: {np.unique(top_labels)}"
-        )
+        assert np.all(
+            (top_labels == 2) | (top_labels == 3)
+        ), f"Expected top face labels to be 2 or 3, got unique: {np.unique(top_labels)}"
 
     def test_bottom_face_labeled_lower(self, half_ring_with_surfaces):
         """Vertices on bottom face should be labeled 1 (near lower surface) or 3 (both)."""
@@ -173,9 +173,9 @@ class TestLabelMeniscusRegionsWithSDF:
         )
         bottom_mask = ring["region"] == 1
         bottom_labels = labels[bottom_mask]
-        assert np.all((bottom_labels == 1) | (bottom_labels == 3)), (
-            f"Expected bottom face labels to be 1 or 3, got unique: {np.unique(bottom_labels)}"
-        )
+        assert np.all(
+            (bottom_labels == 1) | (bottom_labels == 3)
+        ), f"Expected bottom face labels to be 1 or 3, got unique: {np.unique(bottom_labels)}"
 
     def test_rim_vertices_mostly_unlabeled(self, half_ring_with_surfaces):
         """Most rim vertices should be label 0 (neither surface) with tight threshold.
@@ -194,9 +194,9 @@ class TestLabelMeniscusRegionsWithSDF:
         rim_mask = (ring["region"] == 2) | (ring["region"] == 3)
         rim_labels = labels[rim_mask]
         pct_unlabeled = np.mean(rim_labels == 0)
-        assert pct_unlabeled > 0.4, (
-            f"Expected >40% of rim vertices to be unlabeled, got {pct_unlabeled:.1%}"
-        )
+        assert (
+            pct_unlabeled > 0.4
+        ), f"Expected >40% of rim vertices to be unlabeled, got {pct_unlabeled:.1%}"
 
 
 class TestComputeRegionRadialPercentiles:
@@ -224,9 +224,7 @@ class TestComputeRegionRadialPercentiles:
         pts0 = np.column_stack([r0 * np.sin(theta0), np.zeros(n // 2), r0 * np.cos(theta0)])
 
         pts = np.vstack([pts1, pts2, pts0])
-        regions = np.concatenate(
-            [np.ones(n) * 1, np.ones(n) * 2, np.zeros(n // 2)]
-        ).astype(float)
+        regions = np.concatenate([np.ones(n) * 1, np.ones(n) * 2, np.zeros(n // 2)]).astype(float)
 
         mesh = pv.PolyData(pts)
         mesh["theta"] = np.concatenate([theta1, theta2, theta0])
@@ -437,9 +435,7 @@ class TestTopologyPerturbationStability:
         n1 = surf1.n_points
         n2 = surf2.n_points
         ratio = max(n1, n2) / max(min(n1, n2), 1)
-        assert ratio < 1.15, (
-            f"Point count ratio = {ratio:.2f} ({n1} vs {n2}), expected < 1.15"
-        )
+        assert ratio < 1.15, f"Point count ratio = {ratio:.2f} ({n1} vs {n2}), expected < 1.15"
 
 
 class TestTopologyPerturbationWithRefinement:
@@ -507,14 +503,10 @@ class TestTopologyPerturbationWithRefinement:
         lower2_mm.point_coords *= 1000
 
         assd_upper = _compute_assd(upper1_mm, upper2_mm)
-        assert assd_upper < 0.1, (
-            f"Upper surface ASSD = {assd_upper:.4f}mm, expected < 0.1mm"
-        )
+        assert assd_upper < 0.1, f"Upper surface ASSD = {assd_upper:.4f}mm, expected < 0.1mm"
 
         assd_lower = _compute_assd(lower1_mm, lower2_mm)
-        assert assd_lower < 0.1, (
-            f"Lower surface ASSD = {assd_lower:.4f}mm, expected < 0.1mm"
-        )
+        assert assd_lower < 0.1, f"Lower surface ASSD = {assd_lower:.4f}mm, expected < 0.1mm"
 
 
 class TestNoRimVerticesInExtraction:
@@ -557,9 +549,7 @@ class TestNoRimVerticesInExtraction:
         # At least 50% of top-face vertices should be included
         n_top = np.sum(extracted_regions == 0)
         top_frac = n_top / max(n_total, 1)
-        assert top_frac > 0.50, (
-            f"Only {top_frac:.1%} of extracted points are top-face vertices"
-        )
+        assert top_frac > 0.50, f"Only {top_frac:.1%} of extracted points are top-face vertices"
 
     @pytest.mark.slow
     def test_no_rim_in_lower_extraction(self):
@@ -593,9 +583,9 @@ class TestNoRimVerticesInExtraction:
 
         n_bottom = np.sum(extracted_regions == 1)
         bottom_frac = n_bottom / max(n_total, 1)
-        assert bottom_frac > 0.50, (
-            f"Only {bottom_frac:.1%} of extracted points are bottom-face vertices"
-        )
+        assert (
+            bottom_frac > 0.50
+        ), f"Only {bottom_frac:.1%} of extracted points are bottom-face vertices"
 
 
 class TestDeterminismSameInputs:
@@ -618,12 +608,14 @@ class TestDeterminismSameInputs:
             ring.copy(), upper_plane.copy(), ray_length=10.0, n_largest=1, smooth_iter=5
         )
 
-        assert surf1.n_points == surf2.n_points, (
-            f"Determinism: {surf1.n_points} vs {surf2.n_points} points"
-        )
+        assert (
+            surf1.n_points == surf2.n_points
+        ), f"Determinism: {surf1.n_points} vs {surf2.n_points} points"
         np.testing.assert_allclose(
-            surf1.points, surf2.points, atol=1e-10,
-            err_msg="Identical inputs produced different outputs"
+            surf1.points,
+            surf2.points,
+            atol=1e-10,
+            err_msg="Identical inputs produced different outputs",
         )
 
 
@@ -697,15 +689,11 @@ class TestRealMeniscusExtractionStability:
         )
 
         assd = _compute_assd(surf1, surf2)
-        assert assd < 0.1, (
-            f"Real upper surface ASSD = {assd:.4f}mm, expected < 0.1mm"
-        )
+        assert assd < 0.1, f"Real upper surface ASSD = {assd:.4f}mm, expected < 0.1mm"
 
         n1, n2 = surf1.n_points, surf2.n_points
         ratio = max(n1, n2) / max(min(n1, n2), 1)
-        assert ratio < 1.15, (
-            f"Real upper surface point count ratio = {ratio:.2f} ({n1} vs {n2})"
-        )
+        assert ratio < 1.15, f"Real upper surface point count ratio = {ratio:.2f} ({n1} vs {n2})"
 
     @pytest.mark.slow
     @pytest.mark.xfail(
@@ -739,15 +727,11 @@ class TestRealMeniscusExtractionStability:
         )
 
         assd = _compute_assd(surf1, surf2)
-        assert assd < 0.1, (
-            f"Real lower surface ASSD = {assd:.4f}mm, expected < 0.1mm"
-        )
+        assert assd < 0.1, f"Real lower surface ASSD = {assd:.4f}mm, expected < 0.1mm"
 
         n1, n2 = surf1.n_points, surf2.n_points
         ratio = max(n1, n2) / max(min(n1, n2), 1)
-        assert ratio < 1.15, (
-            f"Real lower surface point count ratio = {ratio:.2f} ({n1} vs {n2})"
-        )
+        assert ratio < 1.15, f"Real lower surface point count ratio = {ratio:.2f} ({n1} vs {n2})"
 
 
 @skip_no_fixtures
@@ -778,9 +762,7 @@ class TestRealMeniscusNoRimPoints:
         surf_pv = surf.mesh if hasattr(surf, "mesh") else surf
         if not isinstance(surf_pv, pv.PolyData):
             surf_pv = pv.wrap(surf_pv)
-        surf_pv.compute_normals(
-            point_normals=True, auto_orient_normals=True, inplace=True
-        )
+        surf_pv.compute_normals(point_normals=True, auto_orient_normals=True, inplace=True)
 
         from scipy.spatial import KDTree
 
@@ -799,6 +781,6 @@ class TestRealMeniscusNoRimPoints:
         # Use |dot| since auto_orient_normals on open surfaces may flip orientation.
         # Rim vertices have normals perpendicular to bone direction -> |dot| ≈ 0.
         pct_facing_bone = np.mean(np.abs(dots) > 0.2)
-        assert pct_facing_bone > 0.80, (
-            f"Only {pct_facing_bone:.1%} of normals aligned with bone (|dot| > 0.2), expected > 80%"
-        )
+        assert (
+            pct_facing_bone > 0.80
+        ), f"Only {pct_facing_bone:.1%} of normals aligned with bone (|dot| > 0.2), expected > 80%"

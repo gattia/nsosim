@@ -89,7 +89,9 @@ def load_subject(subject_dir):
         key = f"{side}_meniscus_center_binary"
         if key in tib_labeled.point_data:
             labels = np.array(tib_labeled.point_data[key])
-            data[f"{side}_center"] = tib_pts[labels == 1].mean(axis=0) if np.any(labels == 1) else None
+            data[f"{side}_center"] = (
+                tib_pts[labels == 1].mean(axis=0) if np.any(labels == 1) else None
+            )
         else:
             data[f"{side}_center"] = None
 
@@ -133,8 +135,16 @@ def compute_surface_metrics(mesh_a, mesh_b):
     }
 
 
-def run_full_pipeline(meniscus_m, femur_m, tibia_m, meniscus_center, theta_offset,
-                      extraction_method, score_threshold=0.5, score_smooth_iterations=0):
+def run_full_pipeline(
+    meniscus_m,
+    femur_m,
+    tibia_m,
+    meniscus_center,
+    theta_offset,
+    extraction_method,
+    score_threshold=0.5,
+    score_smooth_iterations=0,
+):
     """Run the full pipeline with specified extraction method."""
     from pymskt.mesh import Mesh
 
@@ -191,8 +201,12 @@ def main():
             # --- Ray-casting (reference) ---
             try:
                 ray_upper, ray_lower = run_full_pipeline(
-                    meniscus_m, data["femur"], data["tibia"],
-                    center, theta_offset, extraction_method="ray_casting",
+                    meniscus_m,
+                    data["femur"],
+                    data["tibia"],
+                    center,
+                    theta_offset,
+                    extraction_method="ray_casting",
                 )
             except Exception as e:
                 print(f"  {men_name}: ray-casting FAILED: {e}")
@@ -204,8 +218,11 @@ def main():
             for threshold in SCORE_THRESHOLDS:
                 try:
                     scored_upper, scored_lower = run_full_pipeline(
-                        meniscus_m, data["femur"], data["tibia"],
-                        center, theta_offset,
+                        meniscus_m,
+                        data["femur"],
+                        data["tibia"],
+                        center,
+                        theta_offset,
                         extraction_method="scored",
                         score_threshold=threshold,
                         score_smooth_iterations=0,  # no smoothing (calibration showed it hurts)
@@ -244,7 +261,9 @@ def main():
     print(f"Subjects: {len(subject_dirs)}")
     print(f"Thresholds: {SCORE_THRESHOLDS}")
     print()
-    print("Both methods: ACVD resample → EXTRACT → get_n_largest → remove_isolated → smooth(10) → radial trim(p95)")
+    print(
+        "Both methods: ACVD resample → EXTRACT → get_n_largest → remove_isolated → smooth(10) → radial trim(p95)"
+    )
     print("Only the EXTRACT step differs (ray-casting vs score threshold).")
     print("Score smoothing = 0 (disabled).")
     print()

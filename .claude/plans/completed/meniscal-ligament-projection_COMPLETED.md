@@ -129,3 +129,31 @@ update_osim_model(
     ...
 )
 ```
+
+---
+
+## Completion Summary
+
+**Completed:** 2026-03-25
+**Commit:** `5055669` — "Add meniscal ligament tibia attachment projection"
+
+### What Was Delivered
+
+1. **`nsosim/meniscal_ligaments.py`** — single public function `project_meniscal_attachments_to_tibia()` plus two internal helpers (`_is_meniscal_tibia_ligament`, `_identify_tibia_meniscus_points`)
+2. **`tests/test_meniscal_ligaments.py`** — 16 tests across 3 test classes
+3. **`nsosim/__init__.py`** — module exported
+4. **`CLAUDE.md`** — architecture table updated, Stage 4b documented
+5. **Pipeline integration** — done separately in the external pipeline repo
+
+### Deviations from Plan
+
+- **Ray direction normalization + validation**: The plan didn't mention it, but the implementation normalizes the `ray_direction` vector and raises `ValueError` on zero-length input. Prevents subtle bugs from non-unit direction vectors.
+- **`test_custom_ray_direction` split into two tests**: The plan had a single custom direction test. During review, we split it into `test_custom_ray_direction_miss` (horizontal ray on flat plane) and `test_custom_ray_direction_hit` (ray hitting a vertical wall) to confirm the direction is actually used for intersection, not just that it misses.
+- **Extra tests beyond plan**: Plan called for 4 test scenarios. Implementation has 16 tests covering: helper functions directly, multiple ligaments, distance reporting, zero direction error, both hit and miss with custom direction.
+
+### Gotchas / Notes
+
+- **In-place mutation**: `project_meniscal_attachments_to_tibia()` modifies `dict_lig_mus_attach` in-place (writes new numpy arrays to `xyz_key`). If you need the original values, copy before calling.
+- **`find_closest_point` returns an index**: The nearest-neighbor fallback uses `tibia_mesh.find_closest_point()` which returns a point index, not coordinates. The implementation correctly indexes into `tibia_mesh.points[idx]` to get the actual position.
+- **Extrusion warning uses Y-axis only**: The "meniscus below tibia" warning compares raw Y values. This is correct for OpenSim space where Y=superior, but would need adjustment if someone used a different coordinate convention.
+- **Frame names are hardcoded**: `_TIBIA_FRAMES` and `_MENISCUS_FRAMES` match the Smith2019 COMAK model naming (`tibia_proximal_r`, `meniscus_medial_r`, `meniscus_lateral_r`). A different OpenSim model with different frame names would need these updated.

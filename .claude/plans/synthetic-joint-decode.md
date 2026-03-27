@@ -1,7 +1,7 @@
 # Plan: Synthetic Joint Decoding — Transform Utilities + Decode-from-Latent API
 
 **Created:** 2026-03-25
-**Status:** Phase B complete, Phase C next
+**Status:** Phase B complete (not yet committed), Phase C next
 **Context:** The comak_gait_simulation project needs to generate synthetic knee joints from arbitrary latent vectors and joint poses (for Paper 1, Analysis #8). The core decode + transform logic belongs in nsosim as reusable library functionality.
 **Parent plan:** `comak_gait_simulation/.claude/plans/SYNTHETIC_JOINT_SIMULATION.md` — describes the full end-to-end pipeline; this plan covers only the nsosim-side work.
 
@@ -216,27 +216,39 @@ Adapt this code into `nsosim/transforms.py`.
 
 Decode functions go in a **new** `nsosim/decode.py` module rather than appending to `nsm_fitting.py`. Rationale: decoding (latent→mesh) is conceptually the inverse of fitting (mesh→latent). Keeping them separate avoids growing `nsm_fitting.py` (already 954 lines) and gives the new functionality a clean home. `decode.py` imports coordinate transform functions from `nsm_fitting.py`.
 
+#### Pre-implementation notes (2026-03-26 review)
+
+**Dependencies verified:**
+- `NSM.mesh.create_mesh(decoder, latent_vector, objects=N, ...)` → returns `pymskt.mesh.Mesh` (single) or `list[Mesh]` (multiple). Called without registration params (`icp_transform`, `scale`, `offset`), it returns meshes in **NSM canonical space** (~[-1, 1]) with `scale_to_original_mesh=True` being a no-op (no original mesh to scale to).
+- `convert_nsm_recon_to_OSIM(pts, icp_transform, scale, center, fem_ref_center)` — existing, works with `scale=1, center=[0,0,0]` and `icp_transform=linear_transform` for synthetic decode path. Already verified in Phase A tests.
+- `pymskt.mesh.Mesh.resample_surface(subdivisions=1, clusters=N)` — method on the mesh object, used in `_nsm_recon_to_osim_single_surface`.
+
+**Mesh name mapping issue:** The `objects` parameter to `create_mesh` must match `model_config["objects_per_decoder"]`, and the returned list needs to be mapped to names (bone, cart, med_men, etc.). This is the same count-based heuristic from `recon_mesh()` in `utils.py`. See `.claude/plans/mesh-name-mapping.md` for the fix plan.
+
+**For Phase C implementation:** Use `model_config` (or at minimum `objects_per_decoder`) as a parameter to `decode_latent_to_osim()` so we know how many objects to decode and how to name them. If `mesh-name-mapping` is implemented first, use `get_mesh_names()`. Otherwise, duplicate the heuristic temporarily (with a TODO) and refactor when `get_mesh_names()` lands.
+
+**GPU requirement:** `create_mesh` runs the decoder on CUDA. The function should document this. Tests that call `create_mesh` need `@pytest.mark.skipif(not torch.cuda.is_available(), ...)` or similar.
+
 **C1: `decode_latent_to_osim()`** — single bone
 
 ```python
 def decode_latent_to_osim(
-    latent_vector: np.ndarray,
-    model: torch.nn.Module,
-    linear_transform: np.ndarray,   # 4x4: bone's linear_transform (or recovered from T_rel)
-    fem_ref_center: np.ndarray,     # femur's mean_orig from ref alignment JSON
-    n_pts_per_axis: int = 256,
-    bone_clusters: int = 20_000,
-    cart_clusters: int = None,
-    men_clusters: int = None,
-) -> dict:
+    latent_vector,           # np.ndarray
+    model,                   # torch.nn.Module (on GPU)
+    linear_transform,        # np.ndarray, 4x4: bone's linear_transform
+    fem_ref_center,          # np.ndarray, femur's mean_orig
+    model_config,            # dict — needs objects_per_decoder (and mesh_names if available)
+    n_pts_per_axis=256,
+    clusters=None,           # dict e.g. {'bone': 20000, 'cart': None} or None for no resampling
+):
     """Decode arbitrary latent vector to OSIM-space meshes.
 
     Steps:
-    1. create_mesh(model, latent_tensor, objects=N) → canonical bone space
-    2. convert_nsm_recon_to_OSIM(pts, linear_transform, 1, [0,0,0], fem_ref_center) → OSIM
-    3. Optional resampling (resample_surface with clusters)
+    1. create_mesh(model, latent_tensor, objects=N) → list of Mesh in canonical space
+    2. For each mesh: convert_nsm_recon_to_OSIM(pts, linear_transform, 1, [0,0,0], fem_ref_center)
+    3. Optional resampling per mesh type
 
-    Returns dict: {'bone': Mesh, 'cart': Mesh, optionally 'med_men': Mesh, 'lat_men': Mesh}
+    Returns dict: {'bone': Mesh, 'cart': Mesh, ...} — keys from mesh_names
     """
 ```
 
@@ -244,30 +256,26 @@ def decode_latent_to_osim(
 
 ```python
 def decode_joint_from_descriptors(
-    femur_latent: np.ndarray,       # (1024,)
-    tibia_latent: np.ndarray,       # (512,)
-    patella_latent: np.ndarray,     # (512,)
-    T_fem: np.ndarray,              # 4x4 femur linear_transform (required — caller chooses value: reference, population mean, or subject-specific)
-    T_rel_tib: np.ndarray,          # 4x4 relative tibia transform
-    T_rel_pat: np.ndarray,          # 4x4 relative patella transform
-    models: dict,                   # {'femur': model, 'tibia': model, 'patella': model}
-    fem_ref_center: np.ndarray,     # femur's mean_orig from ref alignment JSON
-    bone_clusters: dict = None,     # e.g., {'femur': 20000, 'tibia': 20000, 'patella': 10000}
-    cart_clusters: dict = None,
-    men_clusters: dict = None,
-) -> dict:
+    femur_latent,            # np.ndarray (1024,)
+    tibia_latent,            # np.ndarray (512,)
+    patella_latent,          # np.ndarray (512,)
+    T_fem,                   # np.ndarray, 4x4 femur linear_transform
+    T_rel_tib,               # np.ndarray, 4x4 relative tibia transform
+    T_rel_pat,               # np.ndarray, 4x4 relative patella transform
+    models,                  # dict {'femur': model, 'tibia': model, 'patella': model}
+    model_configs,           # dict {'femur': config, 'tibia': config, 'patella': config}
+    fem_ref_center,          # np.ndarray, femur's mean_orig
+    n_pts_per_axis=256,
+    clusters=None,           # dict of dicts, e.g. {'femur': {'bone': 20000}, ...} or None
+):
     """Decode full joint from latent vectors and pose transforms.
-
-    This function does not need population statistics — it takes pre-computed
-    transforms directly. If the caller wants to go from deviation values to
-    T_rel, they call deviations_to_transform() from transforms.py first.
 
     T_fem is always required. The caller decides what value to provide
     (reference T_fem, population mean, or a specific subject's).
 
     1. Recover per-bone transforms: T_tib = recover_bone_transform(T_rel_tib, T_fem)
     2. decode_latent_to_osim() for each bone with its transform
-    3. Returns {'femur': {bone, cart, med_men, lat_men}, 'tibia': {bone, cart}, 'patella': {bone, cart}}
+    3. Returns {'femur': {'bone': Mesh, 'cart': Mesh, ...}, 'tibia': {...}, 'patella': {...}}
     """
 ```
 
@@ -275,6 +283,7 @@ def decode_joint_from_descriptors(
 - Decode reference femur latent with reference transform → compare against stored `nsm_recon_ref_femur_osim_space.vtk` (if exists, or generate and save as reference)
 - Decode reference tibia latent with reference transform → compare against stored reference
 - Smoke test: decode zero latent for each bone → mesh exists, has reasonable point count, is within expected spatial bounds
+- All decode tests require GPU — mark with appropriate skip decorator
 
 ### Phase D: Validation (Verify New Decode Functions)
 

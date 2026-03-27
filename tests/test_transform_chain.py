@@ -340,12 +340,12 @@ class TestSubjectFemRefCenterConvention:
         pts_osim = convert_nsm_recon_to_OSIM_(pts_mm, fem_ref_center)
         # Knee bones should fit within a ~0.3m cube
         extent = pts_osim.max(axis=0) - pts_osim.min(axis=0)
-        assert np.all(extent < 0.3), (
-            f"{subject_bone_data['bone']} extent {extent} — too large for a knee bone"
-        )
-        assert np.all(extent > 0.01), (
-            f"{subject_bone_data['bone']} extent {extent} — too small, units may be wrong"
-        )
+        assert np.all(
+            extent < 0.3
+        ), f"{subject_bone_data['bone']} extent {extent} — too large for a knee bone"
+        assert np.all(
+            extent > 0.01
+        ), f"{subject_bone_data['bone']} extent {extent} — too small, units may be wrong"
 
 
 @requires_mesh_fixtures
@@ -373,15 +373,15 @@ class TestSubjectBonePositions:
 
     def test_femur_near_origin(self, femur_osim_center):
         """Femur center should be within ~50mm of origin in all axes."""
-        assert np.all(np.abs(femur_osim_center) < 0.05), (
-            f"Femur center {femur_osim_center} — expected near origin"
-        )
+        assert np.all(
+            np.abs(femur_osim_center) < 0.05
+        ), f"Femur center {femur_osim_center} — expected near origin"
 
     def test_tibia_distal_to_femur(self, tibia_osim_center):
         """Tibia center Y should be negative (distal to femur condyles at ~0)."""
-        assert tibia_osim_center[1] < -0.02, (
-            f"Tibia center Y={tibia_osim_center[1]:.4f}m — expected < -0.02m (distal to femur)"
-        )
+        assert (
+            tibia_osim_center[1] < -0.02
+        ), f"Tibia center Y={tibia_osim_center[1]:.4f}m — expected < -0.02m (distal to femur)"
 
 
 # ==========================================================================
@@ -458,9 +458,7 @@ class TestFemRefCenter:
     """Verify fem_ref_center matches the documented value."""
 
     def test_value(self, fem_ref_center):
-        np.testing.assert_allclose(
-            fem_ref_center, [-1.2176, -10.938, 8.1977], atol=0.001
-        )
+        np.testing.assert_allclose(fem_ref_center, [-1.2176, -10.938, 8.1977], atol=0.001)
 
     def test_differs_from_tibia(self, fem_ref_center):
         """fem_ref_center (femur's mean_orig) differs from tibia's mean_orig."""

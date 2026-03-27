@@ -177,9 +177,7 @@ def scored_extraction_minimal(meniscus_mm, bone_mm, threshold):
     Returns (surface, n_components_before_filter, raw_n_points_before_filter).
     """
     # Compute normals and scores
-    meniscus_mm.compute_normals(
-        point_normals=True, auto_orient_normals=True, inplace=True
-    )
+    meniscus_mm.compute_normals(point_normals=True, auto_orient_normals=True, inplace=True)
     scores = score_meniscus_vertices(meniscus_mm, bone_mm)
 
     # Threshold
@@ -325,16 +323,25 @@ def main():
 
                     if scored_surf is None or scored_surf.n_points == 0:
                         nan_entry = {
-                            "subject": data["name"], "meniscus": men_name,
+                            "subject": data["name"],
+                            "meniscus": men_name,
                             "n_components": n_comp,
                             "scored_n_pts": 0,
                             "ray_n_pts": ray_ref.n_points if ray_ref is not None else 0,
                         }
-                        for k in ("assd_mm", "area_ratio", "area_scored_mm2", "area_ray_mm2",
-                                  "scored_to_ray_mean_mm", "scored_to_ray_max_mm",
-                                  "scored_to_ray_p95_mm", "ray_to_scored_mean_mm",
-                                  "ray_to_scored_max_mm", "ray_to_scored_p95_mm",
-                                  "hausdorff_mm"):
+                        for k in (
+                            "assd_mm",
+                            "area_ratio",
+                            "area_scored_mm2",
+                            "area_ray_mm2",
+                            "scored_to_ray_mean_mm",
+                            "scored_to_ray_max_mm",
+                            "scored_to_ray_p95_mm",
+                            "ray_to_scored_mean_mm",
+                            "ray_to_scored_max_mm",
+                            "ray_to_scored_p95_mm",
+                            "hausdorff_mm",
+                        ):
                             nan_entry[k] = float("nan")
                         all_results[threshold][surf_type].append(nan_entry)
                         continue
@@ -398,9 +405,11 @@ def main():
             f"{'R→S mean':>8} | {'R→S p95':>7} | {'R→S max':>7} | "
             f"{'Area ratio':>10} | {'1-comp%':>7} | {'N':>3}"
         )
-        print(f"  {'':>6} | {'(mm)':>6} | {'(mm)':>8} | {'(mm)':>7} | {'(mm)':>7} | "
-              f"{'(mm)':>8} | {'(mm)':>7} | {'(mm)':>7} | "
-              f"{'scor/ray':>10} | {'':>7} | {'':>3}")
+        print(
+            f"  {'':>6} | {'(mm)':>6} | {'(mm)':>8} | {'(mm)':>7} | {'(mm)':>7} | "
+            f"{'(mm)':>8} | {'(mm)':>7} | {'(mm)':>7} | "
+            f"{'scor/ray':>10} | {'':>7} | {'':>3}"
+        )
         print(f"  {'-' * 110}")
 
         for threshold in THRESHOLDS:
@@ -453,7 +462,9 @@ def main():
         for surf_type in ("upper", "lower"):
             entries = all_results[threshold][surf_type]
             for men_type in ("medial", "lateral"):
-                subset = [e for e in entries if e["meniscus"] == men_type and not np.isnan(e["assd_mm"])]
+                subset = [
+                    e for e in entries if e["meniscus"] == men_type and not np.isnan(e["assd_mm"])
+                ]
                 if not subset:
                     continue
 

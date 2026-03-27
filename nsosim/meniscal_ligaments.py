@@ -100,9 +100,7 @@ def project_meniscal_attachments_to_tibia(
         tibia_idx, meniscus_idx = _identify_tibia_meniscus_points(points)
 
         if tibia_idx is None or meniscus_idx is None:
-            logger.warning(
-                f"Could not identify tibia/meniscus points for '{lig_name}', skipping"
-            )
+            logger.warning(f"Could not identify tibia/meniscus points for '{lig_name}', skipping")
             continue
 
         meniscus_point = np.asarray(points[meniscus_idx][xyz_key], dtype=float)
@@ -117,9 +115,7 @@ def project_meniscal_attachments_to_tibia(
             new_tibia_point = np.array(intersection_points[0])
             method = "ray"
             distance = np.linalg.norm(new_tibia_point - meniscus_point)
-            logger.debug(
-                f"{lig_name}: ray hit at distance {distance * 1000:.2f}mm"
-            )
+            logger.debug(f"{lig_name}: ray hit at distance {distance * 1000:.2f}mm")
         else:
             # Fallback: nearest point on tibia surface
             closest_idx = tibia_mesh.find_closest_point(meniscus_point)
@@ -143,7 +139,5 @@ def project_meniscal_attachments_to_tibia(
 
         results[lig_name] = {"method": method, "distance": distance}
 
-    logger.info(
-        f"Projected {len(results)} meniscal ligament attachments to tibia surface"
-    )
+    logger.info(f"Projected {len(results)} meniscal ligament attachments to tibia surface")
     return results

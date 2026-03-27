@@ -135,9 +135,7 @@ def get_ray_mask(meniscus_mesh_mm, bone_mesh_mm):
 
 def get_scores(meniscus_mesh_mm, bone_mesh_mm):
     """Compute raw per-vertex scores. Returns 1D array of scores in [-1, 1]."""
-    meniscus_mesh_mm.compute_normals(
-        point_normals=True, auto_orient_normals=True, inplace=True
-    )
+    meniscus_mesh_mm.compute_normals(point_normals=True, auto_orient_normals=True, inplace=True)
     return score_meniscus_vertices(meniscus_mesh_mm, bone_mesh_mm)
 
 
@@ -177,8 +175,12 @@ def analyze_one_surface(meniscus_mm, bone_mm, surface_name):
             "removed_mean": float(np.mean(scores_removed)) if len(scores_removed) > 0 else 0,
             "removed_std": float(np.std(scores_removed)) if len(scores_removed) > 0 else 0,
             "removed_median": float(np.median(scores_removed)) if len(scores_removed) > 0 else 0,
-            "removed_p75": float(np.percentile(scores_removed, 75)) if len(scores_removed) > 0 else 0,
-            "removed_p95": float(np.percentile(scores_removed, 95)) if len(scores_removed) > 0 else 0,
+            "removed_p75": (
+                float(np.percentile(scores_removed, 75)) if len(scores_removed) > 0 else 0
+            ),
+            "removed_p95": (
+                float(np.percentile(scores_removed, 95)) if len(scores_removed) > 0 else 0
+            ),
         },
         "thresholds": {},  # keyed by (threshold, smooth_iters)
     }
@@ -304,16 +306,22 @@ def main():
     print(f"  Ray-kept vertices:    {len(kept)}")
     print(f"  Ray-removed vertices: {len(removed)}")
     print()
-    print(f"  {'':>20} {'Mean':>7} {'Std':>7} {'P5':>7} {'P25':>7} {'Median':>7} {'P75':>7} {'P95':>7}")
-    print(f"  {'Ray-kept':>20} {kept.mean():>7.3f} {kept.std():>7.3f} "
-          f"{np.percentile(kept, 5):>7.3f} {np.percentile(kept, 25):>7.3f} "
-          f"{np.percentile(kept, 50):>7.3f} {np.percentile(kept, 75):>7.3f} "
-          f"{np.percentile(kept, 95):>7.3f}")
+    print(
+        f"  {'':>20} {'Mean':>7} {'Std':>7} {'P5':>7} {'P25':>7} {'Median':>7} {'P75':>7} {'P95':>7}"
+    )
+    print(
+        f"  {'Ray-kept':>20} {kept.mean():>7.3f} {kept.std():>7.3f} "
+        f"{np.percentile(kept, 5):>7.3f} {np.percentile(kept, 25):>7.3f} "
+        f"{np.percentile(kept, 50):>7.3f} {np.percentile(kept, 75):>7.3f} "
+        f"{np.percentile(kept, 95):>7.3f}"
+    )
     if len(removed) > 0:
-        print(f"  {'Ray-removed':>20} {removed.mean():>7.3f} {removed.std():>7.3f} "
-              f"{np.percentile(removed, 5):>7.3f} {np.percentile(removed, 25):>7.3f} "
-              f"{np.percentile(removed, 50):>7.3f} {np.percentile(removed, 75):>7.3f} "
-              f"{np.percentile(removed, 95):>7.3f}")
+        print(
+            f"  {'Ray-removed':>20} {removed.mean():>7.3f} {removed.std():>7.3f} "
+            f"{np.percentile(removed, 5):>7.3f} {np.percentile(removed, 25):>7.3f} "
+            f"{np.percentile(removed, 50):>7.3f} {np.percentile(removed, 75):>7.3f} "
+            f"{np.percentile(removed, 95):>7.3f}"
+        )
 
     # ========================================================================
     # Report: Threshold Sweep (best smooth_iters for each threshold)
@@ -347,8 +355,10 @@ def main():
         [(k, np.mean(v["iou"])) for k, v in all_metrics.items() if len(v["iou"]) > 0],
         key=lambda x: -x[1],
     )
-    print(f"  {'Rank':>4} | {'Thresh':>6} | {'Smooth':>6} | {'IoU':>6} | {'Dice':>6} | "
-          f"{'Prec':>6} | {'Recall':>6} | {'Min IoU':>7}")
+    print(
+        f"  {'Rank':>4} | {'Thresh':>6} | {'Smooth':>6} | {'IoU':>6} | {'Dice':>6} | "
+        f"{'Prec':>6} | {'Recall':>6} | {'Min IoU':>7}"
+    )
     print(f"  {'-'*65}")
     for rank, (key, mean_iou) in enumerate(ranked[:10], 1):
         t, s = key

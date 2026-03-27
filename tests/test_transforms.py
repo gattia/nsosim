@@ -113,7 +113,10 @@ class TestMeanRotation:
         """Output always has det = +1 and is orthogonal."""
         rng = np.random.default_rng(123)
         rotations = np.array(
-            [Rotation.from_euler("XYZ", rng.uniform(-20, 20, 3), degrees=True).as_matrix() for _ in range(30)]
+            [
+                Rotation.from_euler("XYZ", rng.uniform(-20, 20, 3), degrees=True).as_matrix()
+                for _ in range(30)
+            ]
         )
         R_mean = mean_rotation(rotations)
         assert np.linalg.det(R_mean) == pytest.approx(1.0, abs=1e-10)
@@ -151,7 +154,9 @@ class TestTRelRoundtrip:
         for T_other, name in [(T_tib, "tibia"), (T_pat, "patella")]:
             T_rel = compute_T_rel(T_fem, T_other)
             T_recovered = recover_bone_transform(T_rel, T_fem)
-            np.testing.assert_allclose(T_recovered, T_other, atol=1e-10, err_msg=f"Failed for {name}")
+            np.testing.assert_allclose(
+                T_recovered, T_other, atol=1e-10, err_msg=f"Failed for {name}"
+            )
 
     def test_T_rel_with_identity_femur(self):
         """When T_fem = I, T_rel = inv(T_other)."""
@@ -179,8 +184,14 @@ class TestComputeTransformDeviations:
         """Mean of deviations should be ~0 for angles and translations."""
         rng = np.random.default_rng(99)
         transforms = np.array(
-            [_make_similarity(0.71 + rng.normal(0, 0.01), rng.normal(0, 5, 3), rng.normal([-0.05, -0.02, -0.68], 0.01))
-             for _ in range(50)]
+            [
+                _make_similarity(
+                    0.71 + rng.normal(0, 0.01),
+                    rng.normal(0, 5, 3),
+                    rng.normal([-0.05, -0.02, -0.68], 0.01),
+                )
+                for _ in range(50)
+            ]
         )
         result = compute_transform_deviations(transforms, mean_fem_scale=0.013)
 
@@ -223,11 +234,14 @@ class TestDeviationsRoundtrip:
         rng = np.random.default_rng(77)
         N = 20
         transforms = np.array(
-            [_make_similarity(
-                0.71 + rng.normal(0, 0.01),
-                rng.normal(0, 5, 3),
-                np.array([-0.05, -0.02, -0.68]) + rng.normal(0, 0.01, 3),
-            ) for _ in range(N)]
+            [
+                _make_similarity(
+                    0.71 + rng.normal(0, 0.01),
+                    rng.normal(0, 5, 3),
+                    np.array([-0.05, -0.02, -0.68]) + rng.normal(0, 0.01, 3),
+                )
+                for _ in range(N)
+            ]
         )
         mean_fem_scale = 0.013
 
@@ -243,6 +257,6 @@ class TestDeviationsRoundtrip:
                 s_mean=result["s_mean"],
                 mean_fem_scale=mean_fem_scale,
             )
-            np.testing.assert_allclose(T_recomposed, transforms[i], atol=1e-10, err_msg=f"Failed for subject {i}")
-
-
+            np.testing.assert_allclose(
+                T_recomposed, transforms[i], atol=1e-10, err_msg=f"Failed for subject {i}"
+            )

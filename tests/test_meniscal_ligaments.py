@@ -1,15 +1,14 @@
 """Tests for meniscal ligament tibia attachment projection."""
 
 import numpy as np
-import pyvista as pv
 import pytest
+import pyvista as pv
 
 from nsosim.meniscal_ligaments import (
-    _is_meniscal_tibia_ligament,
     _identify_tibia_meniscus_points,
+    _is_meniscal_tibia_ligament,
     project_meniscal_attachments_to_tibia,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helper to build a flat tibia mesh (plane at Y=0, spanning XZ)
@@ -29,8 +28,13 @@ def _make_flat_tibia(y=0.0, extent=0.1):
     return plane
 
 
-def _make_ligament_entry(name, tibia_xyz, meniscus_xyz, tibia_frame="tibia_proximal_r",
-                         meniscus_frame="meniscus_medial_r"):
+def _make_ligament_entry(
+    name,
+    tibia_xyz,
+    meniscus_xyz,
+    tibia_frame="tibia_proximal_r",
+    meniscus_frame="meniscus_medial_r",
+):
     """Build a minimal ligament dict entry for testing."""
     return {
         "name": name,
@@ -144,7 +148,9 @@ class TestProjectMeniscalAttachments:
 
         attach = {
             "meniscus_lateral_COR1": _make_ligament_entry(
-                "meniscus_lateral_COR1", tibia_xyz_orig, meniscus_xyz,
+                "meniscus_lateral_COR1",
+                tibia_xyz_orig,
+                meniscus_xyz,
                 meniscus_frame="meniscus_lateral_r",
             ),
         }
@@ -222,9 +228,7 @@ class TestProjectMeniscalAttachments:
         assert "meniscus_medial_COR1" in results
 
         # MCL point is unchanged
-        np.testing.assert_array_equal(
-            attach["MCLd1"]["points"][0]["xyz_mesh_updated"], orig_xyz
-        )
+        np.testing.assert_array_equal(attach["MCLd1"]["points"][0]["xyz_mesh_updated"], orig_xyz)
 
     def test_multiple_ligaments(self, flat_tibia):
         """All meniscal ligaments in a dict are processed."""
@@ -264,9 +268,7 @@ class TestProjectMeniscalAttachments:
             ),
         }
 
-        results = project_meniscal_attachments_to_tibia(
-            attach, flat_tibia, ray_direction=[1, 0, 0]
-        )
+        results = project_meniscal_attachments_to_tibia(attach, flat_tibia, ray_direction=[1, 0, 0])
 
         # Horizontal ray on a horizontal plane — should miss
         assert results["meniscus_medial_COR1"]["method"] == "nearest"
@@ -293,9 +295,7 @@ class TestProjectMeniscalAttachments:
             ),
         }
 
-        results = project_meniscal_attachments_to_tibia(
-            attach, wall, ray_direction=[1, 0, 0]
-        )
+        results = project_meniscal_attachments_to_tibia(attach, wall, ray_direction=[1, 0, 0])
 
         assert results["meniscus_medial_COR1"]["method"] == "ray"
         new_tibia = attach["meniscus_medial_COR1"]["points"][0]["xyz_mesh_updated"]
@@ -326,6 +326,4 @@ class TestProjectMeniscalAttachments:
             ),
         }
         with pytest.raises(ValueError, match="non-zero"):
-            project_meniscal_attachments_to_tibia(
-                attach, flat_tibia, ray_direction=[0, 0, 0]
-            )
+            project_meniscal_attachments_to_tibia(attach, flat_tibia, ray_direction=[0, 0, 0])
