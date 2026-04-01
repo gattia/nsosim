@@ -225,16 +225,30 @@ Adapt this code into `nsosim/transforms.py`.
 
 Decode functions go in a **new** `nsosim/decode.py` module rather than appending to `nsm_fitting.py`. Rationale: decoding (latent→mesh) is conceptually the inverse of fitting (mesh→latent). Keeping them separate avoids growing `nsm_fitting.py` (already 954 lines) and gives the new functionality a clean home. `decode.py` imports coordinate transform functions from `nsm_fitting.py`.
 
-#### Pre-implementation notes (2026-03-26 review)
+#### Pre-implementation notes (2026-03-26 review, updated 2026-03-27)
 
 **Dependencies verified:**
-- `NSM.mesh.create_mesh(decoder, latent_vector, objects=N, ...)` → returns `pymskt.mesh.Mesh` (single) or `list[Mesh]` (multiple). Called without registration params (`icp_transform`, `scale`, `offset`), it returns meshes in **NSM canonical space** (~[-1, 1]) with `scale_to_original_mesh=True` being a no-op (no original mesh to scale to).
-- `convert_nsm_recon_to_OSIM(pts, icp_transform, scale, center, fem_ref_center)` — existing, works with `scale=1, center=[0,0,0]` and `icp_transform=linear_transform` for synthetic decode path. Already verified in Phase A tests.
+- `NSM.mesh.create_mesh(decoder, latent_vector, n_pts_per_axis=256, ..., objects=1, ...)` — full signature confirmed. Returns `pymskt.mesh.Mesh` (single) or `list[Mesh]` (multiple). Called without registration params (`icp_transform`, `scale`, `offset`), it returns meshes in **NSM canonical space** (~[-1, 1]).
+- `latent_vector` must be a **`torch.float` tensor on CUDA** — the function should handle numpy→torch conversion internally: `torch.tensor(latent_vector, dtype=torch.float).cuda()`.
+- `objects` comes from `model_config['objects_per_decoder']`.
+- `convert_nsm_recon_to_OSIM(pts, icp_transform, scale, center, fem_ref_center)` — existing, works with `scale=1, center=[0,0,0]` and `icp_transform=linear_transform` for synthetic decode path. Already verified in Phase A tests. Does NOT mutate the input array (undo_transform returns new array; underscore version mutates that intermediate).
 - `pymskt.mesh.Mesh.resample_surface(subdivisions=1, clusters=N)` — method on the mesh object, used in `_nsm_recon_to_osim_single_surface`.
 
 **Mesh name mapping:** `get_mesh_names(model_config)` from `utils.py` is now available (commit `29a32c2`). It reads `mesh_names` from model config if present, falls back to `(bone, objects_per_decoder)` lookup. All 7 production model configs have been updated with explicit `mesh_names`. Use `get_mesh_names()` in `decode_latent_to_osim()` to map decoder outputs to named meshes — same pattern as the refactored `recon_mesh()`.
 
-**GPU requirement:** `create_mesh` runs the decoder on CUDA. The function should document this. Tests that call `create_mesh` need `@pytest.mark.skipif(not torch.cuda.is_available(), ...)` or similar.
+**Canonical→OSIM conversion:** Cannot reuse `_nsm_recon_to_osim_single_surface()` (uses underscore version for femur-aligned input). For synthetic path, use `convert_nsm_recon_to_OSIM` (no underscore) which chains `undo_transform` (canonical→femur-aligned) then `convert_nsm_recon_to_OSIM_` (femur-aligned→OSIM). Pattern per mesh:
+```python
+mesh_osim = mesh.copy()
+mesh_osim.point_coords = convert_nsm_recon_to_OSIM(
+    mesh.point_coords.copy(), linear_transform, 1, [0, 0, 0], fem_ref_center
+)
+```
+
+**Return key convention:** Use bare names (`'bone'`, `'cart'`, etc.) — consistent with `nsm_recon_to_osim()` (line 917). Note: `recon_mesh()` uses `'{name}_mesh'` suffix, but that's a different function with different semantics.
+
+**GPU requirement:** `create_mesh` runs the decoder on CUDA. The function should document this. Tests require GPU + model weights on disk.
+
+**Model callers responsibility:** Callers load models via `load_model()` from `utils.py` before calling decode functions. The decode functions take already-loaded models, not paths.
 
 **C1: `decode_latent_to_osim()`** — single bone
 
@@ -287,10 +301,35 @@ def decode_joint_from_descriptors(
 ```
 
 **Tests (`tests/test_decode.py`):**
-- Decode reference femur latent with reference transform → compare against stored `nsm_recon_ref_femur_osim_space.vtk` (if exists, or generate and save as reference)
+
+**Fixture strategy:** Model weights (`.pth`, 263–299 MB each) are copied to `tests/fixtures/models/{femur,tibia,patella}/` with `model.pth` + `model_params_config.json` per bone. The `.pth` files are gitignored; config JSONs are tracked. Skip decorator:
+```python
+MODELS_DIR = Path(__file__).parent / "fixtures" / "models"
+requires_nsm_models = pytest.mark.skipif(
+    not (MODELS_DIR / "femur" / "model.pth").exists(),
+    reason="NSM model weights not available in tests/fixtures/models/"
+)
+requires_gpu = pytest.mark.skipif(
+    not torch.cuda.is_available(),
+    reason="CUDA not available"
+)
+```
+
+**Model source:** Copied from `COMAK_SIMULATION_REQUIREMENTS/nsm_models/`:
+| Bone | Source model | `objects_per_decoder` | `.pth` size |
+|------|-------------|----------------------|-------------|
+| Femur | `568_nsm_femur_bone_cart_men_v0.0.1` | 4 (bone, cart, med_men, lat_men) | 299 MB |
+| Tibia | `75_nsm_tibia_cartilage_v0.0.1` | 2 (bone, cart) | 263 MB |
+| Patella | `77_nsm_patella_cartilage_v0.0.1` | 2 (bone, cart) | 263 MB |
+
+**Test structure:** Use `scope="module"` fixtures for expensive decode calls. Multiple test methods assert on the pre-computed result.
+
+**Tests:**
+- Decode reference femur latent with reference transform → compare against stored `nsm_recon_ref_femur_osim_space.vtk` (same surface, allow marching cubes stochasticity)
 - Decode reference tibia latent with reference transform → compare against stored reference
 - Smoke test: decode zero latent for each bone → mesh exists, has reasonable point count, is within expected spatial bounds
-- All decode tests require GPU — mark with appropriate skip decorator
+- `decode_joint_from_descriptors()`: decode reference joint using all 3 models + reference transforms → verify all bones present and spatially plausible (tibia distal to femur, patella anterior)
+- All decode tests require GPU + model weights — mark with `@requires_gpu` and `@requires_nsm_models`
 
 ### Phase D: Validation (Verify New Decode Functions)
 
@@ -340,7 +379,11 @@ Phase A already documented the existing transform chain. This phase adds the new
 
 Fixture mesh files (~57MB uncompressed, 30MB tarball) are stored in GitHub Releases (`gattia/nsosim`, tag `test-fixtures-v1`), not in git. Alignment JSONs are kept in git (tiny). Tests auto-download meshes on first `pytest` run via `tests/fixtures/transforms/download_fixtures.sh`. Tests that need meshes use `@requires_mesh_fixtures` and skip gracefully if download fails.
 
-**Two fixture sets:**
+**NSM model weights** (`tests/fixtures/models/{femur,tibia,patella}/`): `.pth` files (263–299 MB each) are gitignored and must be copied manually for now. Config JSONs are tracked in git. Tests that need models use `@requires_nsm_models` and skip gracefully.
+
+**Future consolidation (TODO):** All large test fixtures (mesh VTKs from GitHub Releases, model `.pth` files, latent `.npy` files) should be consolidated into a single downloadable location (Google Drive, HuggingFace dataset, or similar) with a unified download script. Currently split across GitHub Releases (meshes) and manual copy (models). See `.claude/plans/` for a future plan on this.
+
+**Three fixture sets:**
 
 1. **Reference fixtures** (from `COMAK_SIMULATION_REQUIREMENTS/nsm_meshes/`):
    Each bone processed independently by `1_Fit_NSM_models_to_ref_surfaces`. OSIM meshes use each bone's own `mean_orig`. Per bone (femur, tibia, patella):
@@ -355,9 +398,12 @@ Fixture mesh files (~57MB uncompressed, 30MB tarball) are stored in GitHub Relea
    - `subject_9003316/{bone}_alignment.json` — `linear_transform`, `scale=1`, `center=[0,0,0]` (in git)
    - `subject_9003316/{bone}_nsm_recon_mm.vtk` — aligned mm space
 
-Reference fixtures allow exact point-to-point comparison (same points, different transform paths). Subject fixtures test the production `fem_ref_center`-for-all-bones convention via roundtrip.
+3. **Model fixtures** (copied from `COMAK_SIMULATION_REQUIREMENTS/nsm_models/`):
+   Per bone (femur, tibia, patella):
+   - `models/{bone}/model.pth` — decoder weights (gitignored, 263–299 MB)
+   - `models/{bone}/model_params_config.json` — model config with `mesh_names` (in git)
 
-Decode function tests (Phase C/D) that require the NSM model + GPU are separate from these pure transform tests.
+Reference fixtures allow exact point-to-point comparison (same points, different transform paths). Subject fixtures test the production `fem_ref_center`-for-all-bones convention via roundtrip. Model fixtures enable decode integration tests (require GPU).
 
 ## Design Decisions
 

@@ -1,0 +1,7 @@
+# Large model weight files — not stored in git
+# TODO: consolidate all large fixtures (models, meshes, latents) into a single
+# downloadable location (Google Drive, HuggingFace, etc.) for portable CI/testing.
+*.pth
+
+# Keep config JSONs in git (small, needed for lightweight tests)
+!*/model_params_config.json

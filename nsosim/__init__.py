@@ -3,6 +3,7 @@ import logging
 from . import (
     articular_surfaces,
     comak_osim_update,
+    decode,
     meniscal_ligaments,
     nsm_fitting,
     osim_utils,
@@ -17,6 +18,7 @@ __all__ = [
     "configure_logging",
     "articular_surfaces",
     "comak_osim_update",
+    "decode",
     "meniscal_ligaments",
     "nsm_fitting",
     "transforms",
