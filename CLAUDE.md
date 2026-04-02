@@ -228,6 +228,54 @@ In the **production subject pipeline**, it is used for ALL bones because all bon
 
 **Reference reconstructions** (from `1_Fit_NSM_models_to_ref_surfaces`) are different: each bone was processed independently using its own `mean_orig`. The reference alignment JSONs store per-bone `mean_orig` values.
 
+### Relative Transforms (T_rel)
+
+Relative transforms capture how tibia/patella sit relative to the femur in canonical space — encoding joint configuration (flexion, varus/valgus, relative bone size) independently of the femur's own alignment.
+
+**Computing T_rel** from per-bone alignment transforms:
+```
+T_rel_tib = T_fem @ inv(T_tib)    # canonical tibia → canonical femur
+T_rel_pat = T_fem @ inv(T_pat)    # canonical patella → canonical femur
+```
+
+**Recovering per-bone transforms** from T_rel (for synthetic decode):
+```
+T_tib = inv(T_rel_tib) @ T_fem
+T_pat = inv(T_rel_pat) @ T_fem
+```
+
+This is the path used by `decode_joint_from_descriptors()`: given a femur transform and relative transforms, it recovers per-bone transforms then decodes each bone independently. Verified in `TestSubjectDecodeVsProduction` (Phase D).
+
+**Decomposition into interpretable components** (for regression / analysis):
+- Scale: `norm(T_rel[:3, 0])` — uniform scaling embedded in 3x3 submatrix
+- Rotation: `T_rel[:3, :3] / scale` → proper rotation matrix (det = +1)
+- Translation: `T_rel[:3, 3]` — in canonical femur units; convert to mm via `/ mean_fem_scale`
+
+**Population statistics** (for synthetic generation):
+```python
+deviations = compute_transform_deviations(list_of_T_rel, mean_fem_scale)
+# Returns: R_mean, t_mean, s_mean, and per-subject deviations as:
+#   euler_deg (XYZ Euler angles relative to R_mean)
+#   trans_mm (translation offset from t_mean, in mm)
+#   scale_ratio (s_i / s_mean)
+```
+
+Mean rotation uses element-wise mean of rotation matrices + SVD projection to the nearest proper rotation (`mean_rotation()`).
+
+**Recomposition** (from deviations back to a full 4x4 transform):
+```python
+T_rel = deviations_to_transform(
+    euler_deg, trans_mm, scale_ratio,
+    R_mean, t_mean, s_mean, mean_fem_scale
+)
+# Internally: R = R_mean @ Rotation.from_euler("XYZ", euler_deg).as_matrix()
+#             t = t_mean + trans_mm * mean_fem_scale
+#             s = s_mean * scale_ratio
+#             T[:3,:3] = s * R; T[:3,3] = t
+```
+
+Decompose→recompose roundtrip verified to `atol=1e-10` in `TestDeviationsRoundtrip`. All functions in `nsosim/transforms.py`, tested in `tests/test_transforms.py` (16 tests).
+
 ## Complete Pipeline Workflow
 
 The typical processing pipeline follows this sequence:

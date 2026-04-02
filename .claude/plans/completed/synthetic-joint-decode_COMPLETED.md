@@ -1,7 +1,7 @@
 # Plan: Synthetic Joint Decoding — Transform Utilities + Decode-from-Latent API
 
 **Created:** 2026-03-25
-**Status:** Phases A, B, mesh-name-mapping, C, and D complete. E remaining.
+**Status:** Complete (2026-04-02)
 **Context:** The comak_gait_simulation project needs to generate synthetic knee joints from arbitrary latent vectors and joint poses (for Paper 1, Analysis #8). The core decode + transform logic belongs in nsosim as reusable library functionality.
 **Parent plan:** `comak_gait_simulation/.claude/plans/SYNTHETIC_JOINT_SIMULATION.md` — describes the full end-to-end pipeline; this plan covers only the nsosim-side work.
 
@@ -389,15 +389,23 @@ Verify the decode functions produce correct results for a real production subjec
 
 **No new fixtures needed.** All subject data was already in `tests/fixtures/transforms/subject_9003316/` from Phase A. Production mm-space meshes are converted to OSIM on the fly via `convert_nsm_recon_to_OSIM_()`.
 
-### Phase E: Final Documentation Update
+### Phase E: Final Documentation Update — DONE
 
-**Update `nsosim/CLAUDE.md`** to add documentation for the new functionality:
-1. The T_rel concept: what it is, how to compute/decompose/recompose it
-2. The `transforms.py` module API and usage examples
-3. The `decode_latent_to_osim()` and `decode_joint_from_descriptors()` usage examples
-4. Update the "Complete Pipeline Workflow" section with a new "Synthetic Joint Decode" subsection
+**Completed 2026-04-02.** Added "Relative Transforms (T_rel)" subsection to `CLAUDE.md` under "Coordinate Systems & Units".
 
-Phase A already documented the existing transform chain. This phase adds the new capabilities on top.
+Items 2–4 were already completed during earlier phases:
+- Item 2 (`transforms.py` API): Added during Phase B, visible at line ~358 in CLAUDE.md
+- Item 3 (decode function examples): Added during Phase C, visible at line ~322
+- Item 4 (Synthetic Joint Decode subsection): Added during Phase C, visible at line ~322
+
+Item 1 (T_rel concept) was the remaining gap. Added a new subsection covering:
+- What T_rel represents (joint configuration independent of femur alignment)
+- Computing T_rel from per-bone transforms
+- Recovering per-bone transforms from T_rel (used by `decode_joint_from_descriptors`)
+- Decomposition into interpretable components (scale, rotation, translation)
+- Population statistics via `compute_transform_deviations()`
+- Recomposition via `deviations_to_transform()` with code examples
+- Cross-references to test verification
 
 > **Future consideration (2026-04-02):** When writing `comak_1_synthetic.py` (parent plan Phase C), the post-decode orchestration (articular surfaces → wrap surfaces → ligaments → meniscus → fat pad → model assembly) duplicates `comak_1_nsm_fitting.py` Stages 2–5. Consider extracting the shared orchestration into an nsosim function (e.g., `build_osim_model_from_meshes()`) so both pipelines share the same code. See note in `SYNTHETIC_JOINT_SIMULATION.md` Phase C.
 
@@ -468,3 +476,45 @@ T_fem is nearly constant across subjects (~0.0132 diagonal), but the caller alwa
 | Production subject data | Available | Needed for validation (Phase D) |
 | ACL project scripts | Available at `pratham_ACL_wcb/scripts/Tibia_rotations/` | Reference for Phase B |
 | scipy | Already a dependency | For `Rotation.from_euler` / `.as_euler` |
+
+---
+
+## Completion Notes
+
+**Date completed:** 2026-04-02
+
+**Summary:** Added two new modules to nsosim — `transforms.py` (similarity transform decomposition, relative transforms, deviation analysis/recomposition) and `decode.py` (decode arbitrary latent vectors to OSIM-space meshes). Together these enable synthetic joint generation from latent vectors and joint pose descriptors, which was the missing capability needed by `comak_gait_simulation` for Paper 1 Analysis #8.
+
+**Changes made:**
+
+| File | Change | Commit |
+|------|--------|--------|
+| `nsosim/transforms.py` | NEW — 6 functions for similarity transform math | `516eceb` |
+| `nsosim/decode.py` | NEW — `decode_latent_to_osim()`, `decode_joint_from_descriptors()` | `bd8bc41` |
+| `nsosim/utils.py` | Added `get_mesh_names()` for decoder output → mesh name mapping | `29a32c2` |
+| `nsosim/__init__.py` | Updated imports and `__all__` for new modules | `516eceb`, `bd8bc41` |
+| `nsosim/CLAUDE.md` | Coordinate Systems docs, Synthetic Joint Decode section, T_rel section | `5c10f25`, `bd8bc41`, current |
+| `tests/test_transform_chain.py` | NEW — 54 tests verifying both transform pipelines | `5c10f25` |
+| `tests/test_transforms.py` | NEW — 16 tests for transforms.py | `516eceb` |
+| `tests/test_mesh_names.py` | NEW — 14 tests for mesh name mapping | `29a32c2` |
+| `tests/test_decode.py` | NEW — 38 tests (27 Phase C + 11 Phase D) for decode functions | `bd8bc41`, `bc1f979` |
+| `tests/fixtures/transforms/` | Reference + subject alignment JSONs, mesh VTKs (in GitHub Releases) | `5c10f25` |
+| `tests/fixtures/models/` | Model configs in git, `.pth` weights gitignored | `bd8bc41` |
+
+**Tests:** 122 new tests total (54 + 16 + 14 + 27 + 11), all passing. No regressions to existing test suite.
+
+**Additional issues resolved:**
+- Mesh name mapping refactor (`get_mesh_names()`) — eliminated fragile count-based heuristic in `recon_mesh()` and prevented duplication in new decode code
+- Updated all 7 production model config JSONs with explicit `mesh_names` field
+- Added `mesh_names` config parameter upstream in NSM library (commit `709b818` in NSM repo)
+
+**Challenges / Design decisions:**
+- Reference vs subject transforms use different conventions (`mean_orig` per-bone vs shared `fem_ref_center`) — tests cover both paths explicitly
+- Point-to-surface ASSD (via `pcu_sdf`) needed instead of point-to-point KDTree for meaningful decode comparison (0.001–0.005mm vs 0.074–0.228mm)
+- Reference transforms don't encode real joint configuration, so spatial relationship tests (tibia distal, patella anterior) only work with subject data
+- `decode.py` placed in new module rather than appending to `nsm_fitting.py` (already 954 lines) — decode is conceptually the inverse of fitting
+
+**Things to note for future work:**
+- Post-decode orchestration (articular surfaces → wrap surfaces → ligaments → meniscus → fat pad → model assembly) is duplicated between production and synthetic pipelines. Consider extracting into a shared `build_osim_model_from_meshes()` function when writing `comak_1_synthetic.py`
+- NSM model weights (`tests/fixtures/models/*/model.pth`, 263–299 MB each) must be copied manually. Future: consolidate all large fixtures into a single downloadable location
+- Parent plan: `comak_gait_simulation/.claude/plans/SYNTHETIC_JOINT_SIMULATION.md` — this plan covers nsosim-side work only; the parent plan tracks the full end-to-end synthetic pipeline
