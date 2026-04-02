@@ -419,9 +419,7 @@ class TestSubjectDecodeVsProduction:
         for bone in BONES:
             vtk_path = SUBJECT_DIR / f"{bone}_nsm_recon_mm.vtk"
             mesh = Mesh(str(vtk_path))
-            pts_osim = convert_nsm_recon_to_OSIM_(
-                mesh.point_coords.copy(), fem_ref_center
-            )
+            pts_osim = convert_nsm_recon_to_OSIM_(mesh.point_coords.copy(), fem_ref_center)
             mesh.point_coords = pts_osim
             meshes[bone] = mesh
         return meshes
@@ -446,12 +444,10 @@ class TestSubjectDecodeVsProduction:
     def test_extent_close(self, bone_comparison):
         """Bounding box extents should match within 0.5%."""
         bone, decoded_mesh, prod_mesh = bone_comparison
-        decoded_extent = (
-            decoded_mesh.point_coords.max(axis=0) - decoded_mesh.point_coords.min(axis=0)
+        decoded_extent = decoded_mesh.point_coords.max(axis=0) - decoded_mesh.point_coords.min(
+            axis=0
         )
-        prod_extent = (
-            prod_mesh.point_coords.max(axis=0) - prod_mesh.point_coords.min(axis=0)
-        )
+        prod_extent = prod_mesh.point_coords.max(axis=0) - prod_mesh.point_coords.min(axis=0)
         np.testing.assert_allclose(
             decoded_extent,
             prod_extent,
@@ -466,25 +462,21 @@ class TestSubjectDecodeVsProduction:
         """
         bone, decoded_mesh, prod_mesh = bone_comparison
         assd = decoded_mesh.get_assd_mesh(prod_mesh)
-        assert assd < 0.00005, (
-            f"{bone}: ASSD={assd * 1000:.4f}mm between decode and production, expected <0.05mm"
-        )
+        assert (
+            assd < 0.00005
+        ), f"{bone}: ASSD={assd * 1000:.4f}mm between decode and production, expected <0.05mm"
 
     def test_tibia_distal_to_femur(self, decoded_subject_joint):
         """In OSIM coords, tibia centroid should be distal (lower Y) than femur."""
         fem_y = decoded_subject_joint["femur"]["bone"].point_coords[:, 1].mean()
         tib_y = decoded_subject_joint["tibia"]["bone"].point_coords[:, 1].mean()
-        assert tib_y < fem_y, (
-            f"Tibia centroid Y={tib_y:.4f} not distal to femur Y={fem_y:.4f}"
-        )
+        assert tib_y < fem_y, f"Tibia centroid Y={tib_y:.4f} not distal to femur Y={fem_y:.4f}"
 
     def test_patella_anterior_to_femur(self, decoded_subject_joint):
         """In OSIM coords, patella centroid should be anterior (positive X) relative to femur."""
         fem_x = decoded_subject_joint["femur"]["bone"].point_coords[:, 0].mean()
         pat_x = decoded_subject_joint["patella"]["bone"].point_coords[:, 0].mean()
-        assert pat_x > fem_x, (
-            f"Patella centroid X={pat_x:.4f} not anterior to femur X={fem_x:.4f}"
-        )
+        assert pat_x > fem_x, f"Patella centroid X={pat_x:.4f} not anterior to femur X={fem_x:.4f}"
 
 
 # ---------------------------------------------------------------------------
