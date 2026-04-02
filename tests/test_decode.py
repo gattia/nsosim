@@ -337,9 +337,9 @@ class TestDecodeJointFromDescriptors:
         for bone_name, meshes in decoded_joint.items():
             for mesh_name, mesh in meshes.items():
                 pts = mesh.point_coords
-                assert np.all(np.abs(pts) < 0.3), (
-                    f"{bone_name}/{mesh_name} outside plausible OSIM range"
-                )
+                assert np.all(
+                    np.abs(pts) < 0.3
+                ), f"{bone_name}/{mesh_name} outside plausible OSIM range"
 
 
 # ---------------------------------------------------------------------------
