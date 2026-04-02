@@ -1,7 +1,7 @@
 # Plan: Synthetic Joint Decoding — Transform Utilities + Decode-from-Latent API
 
 **Created:** 2026-03-25
-**Status:** Phases A, B, mesh-name-mapping, and C complete. D and E remaining.
+**Status:** Phases A, B, mesh-name-mapping, C, and D complete. E remaining.
 **Context:** The comak_gait_simulation project needs to generate synthetic knee joints from arbitrary latent vectors and joint poses (for Paper 1, Analysis #8). The core decode + transform logic belongs in nsosim as reusable library functionality.
 **Parent plan:** `comak_gait_simulation/.claude/plans/SYNTHETIC_JOINT_SIMULATION.md` — describes the full end-to-end pipeline; this plan covers only the nsosim-side work.
 
@@ -363,24 +363,31 @@ requires_gpu = pytest.mark.skipif(
 
 ### Phase D: Validation (Verify New Decode Functions)
 
-Verify the new decode functions produce correct results.
+Verify the decode functions produce correct results for a real production subject.
 
-**D1: Decode known subject → compare against production**
-1. Load a production subject's latent vectors and alignment JSONs (e.g., 9003316_RIGHT)
-2. Compute T_fem, T_rel_tib, T_rel_pat
+**Scope reduction (2026-04-02 review):** The original D2 (verify `convert_nsm_recon_to_OSIM` equivalence by decoding to canonical space and converting) is already covered by Phase A tests: `TestRefCanonicalToOsim` and `TestSubjectCanonicalToOsimRoundtrip` verify this exact path with point-to-point comparison for both reference and subject data. The original D1's reference-latent decode comparison is already covered by Phase C tests: `test_{bone}_bone_close_to_reference_osim` decodes reference latents through `decode_latent_to_osim()` and compares against stored OSIM meshes (ASSD <0.05mm). What remains untested is the **subject** path through `decode_joint_from_descriptors()` — i.e., using T_rel to recover per-bone transforms and comparing against production output.
+
+**D1: Decode known subject via `decode_joint_from_descriptors()` → compare against production**
+1. Load subject 9003316_RIGHT's latent vectors and alignment JSONs (already in `tests/fixtures/transforms/subject_9003316/`)
+2. Compute T_fem, T_rel_tib, T_rel_pat from the alignment JSONs
 3. Call `decode_joint_from_descriptors()`
-4. Compare each bone mesh against the production `*_nsm_recon_mm.vtk` files (after converting to same space)
+4. Compare each bone mesh against the production `*_nsm_recon_mm.vtk` files (after converting to OSIM space) using ASSD
 5. **Expected:** Shapes match (same decoder + same latent). Positions match (same transforms). Only difference: marching cubes stochasticity (different grid sampling → slightly different triangulation, but same surface).
 
-**D2: Verify `convert_nsm_recon_to_OSIM` equivalence**
-1. Take a production subject's `recon_dict` (with ICP, scale, center)
-2. Also take their `linear_transform` from alignment JSON
-3. Decode their latent with `create_mesh` (no registration params) → canonical space
-4. Convert via `convert_nsm_recon_to_OSIM(pts, linear_transform, 1, [0,0,0], fem_ref_center)`
-5. Compare against production OSIM mesh
-6. **Expected:** Close match (same surface, possible marching cubes differences)
+**If validation fails:** The T_rel recovery path or the `decode_joint_from_descriptors` orchestration is wrong. Debug by comparing per-bone transforms against the raw alignment JSON values, then trace through the decode chain.
 
-**If validation fails:** The transform understanding documented above is wrong. Debug by tracing exact values through the chain, fix the documentation, and update this plan.
+**Completed 2026-04-02.** All 11 tests pass. Added `TestSubjectDecodeVsProduction` to `tests/test_decode.py`:
+
+**Tests (11 total: 9 parametrized across 3 bones + 2 spatial relationship):**
+- `test_centroid_close[femur/tibia/patella]` (3): decoded vs production centroids within 0.1mm
+- `test_extent_close[femur/tibia/patella]` (3): bounding box extents within 0.5%
+- `test_assd_below_threshold[femur/tibia/patella]` (3): point-to-surface ASSD <0.05mm
+- `test_tibia_distal_to_femur` (1): tibia centroid Y < femur centroid Y in OSIM coords
+- `test_patella_anterior_to_femur` (1): patella centroid X > femur centroid X in OSIM coords
+
+**What this validates:** The full T_rel recovery path — subject alignment JSONs → `compute_T_rel()` → `decode_joint_from_descriptors()` (which calls `recover_bone_transform()` internally) → OSIM meshes — produces the same surfaces as the production pipeline (which went through `reconstruct_mesh()` → `nsm_recon_to_osim()`). The spatial relationship tests (tibia distal, patella anterior) confirm the production convention (`fem_ref_center` for all bones) preserves correct joint anatomy, which was not testable with reference data (Phase C finding #3).
+
+**No new fixtures needed.** All subject data was already in `tests/fixtures/transforms/subject_9003316/` from Phase A. Production mm-space meshes are converted to OSIM on the fly via `convert_nsm_recon_to_OSIM_()`.
 
 ### Phase E: Final Documentation Update
 
@@ -391,6 +398,8 @@ Verify the new decode functions produce correct results.
 4. Update the "Complete Pipeline Workflow" section with a new "Synthetic Joint Decode" subsection
 
 Phase A already documented the existing transform chain. This phase adds the new capabilities on top.
+
+> **Future consideration (2026-04-02):** When writing `comak_1_synthetic.py` (parent plan Phase C), the post-decode orchestration (articular surfaces → wrap surfaces → ligaments → meniscus → fat pad → model assembly) duplicates `comak_1_nsm_fitting.py` Stages 2–5. Consider extracting the shared orchestration into an nsosim function (e.g., `build_osim_model_from_meshes()`) so both pipelines share the same code. See note in `SYNTHETIC_JOINT_SIMULATION.md` Phase C.
 
 ---
 
@@ -403,7 +412,7 @@ Phase A already documented the existing transform chain. This phase adds the new
 | `nsosim/CLAUDE.md` | Major update: coordinate spaces, transform chain documentation, module organization |
 | `tests/fixtures/transforms/` | **NEW** — reference alignment JSONs + meshes at all 3 coordinate spaces |
 | `tests/test_transforms.py` | **NEW** — roundtrip tests, known-value tests |
-| `tests/test_decode.py` | **NEW** — decode reference latent, known-subject comparison |
+| `tests/test_decode.py` | **NEW** — decode reference latent, known-subject comparison, subject-vs-production validation |
 
 ## Test Fixtures
 

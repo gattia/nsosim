@@ -343,6 +343,151 @@ class TestDecodeJointFromDescriptors:
 
 
 # ---------------------------------------------------------------------------
+# Phase D: Subject decode via decode_joint_from_descriptors vs production
+# ---------------------------------------------------------------------------
+
+SUBJECT_DIR = TRANSFORMS_DIR / "subject_9003316"
+
+
+def _load_subject_alignment(bone):
+    path = SUBJECT_DIR / f"{bone}_alignment.json"
+    with open(path) as f:
+        return json.load(f)
+
+
+@requires_gpu
+@requires_nsm_models
+class TestSubjectDecodeVsProduction:
+    """Decode subject 9003316 via decode_joint_from_descriptors and compare
+    against production *_nsm_recon_mm.vtk meshes converted to OSIM space.
+
+    This validates the full T_rel recovery path: subject alignment JSONs →
+    compute_T_rel → decode_joint_from_descriptors → OSIM meshes, compared
+    against the independently-produced production meshes (which went through
+    the fitting pipeline: reconstruct_mesh → nsm_recon_to_osim).
+    """
+
+    @pytest.fixture(scope="class")
+    def subject_transforms(self):
+        transforms = {}
+        for bone in BONES:
+            align = _load_subject_alignment(bone)
+            transforms[bone] = np.array(align["linear_transform"])
+        return transforms
+
+    @pytest.fixture(scope="class")
+    def subject_latents(self):
+        latents = {}
+        for bone in BONES:
+            latents[bone] = np.load(SUBJECT_DIR / f"{bone}_latent.npy")
+        return latents
+
+    @pytest.fixture(scope="class")
+    def decoded_subject_joint(
+        self, loaded_models, subject_transforms, subject_latents, fem_ref_center
+    ):
+        from nsosim.decode import decode_joint_from_descriptors
+        from nsosim.transforms import compute_T_rel
+
+        models, configs = loaded_models
+
+        T_fem = subject_transforms["femur"]
+        T_rel_tib = compute_T_rel(T_fem, subject_transforms["tibia"])
+        T_rel_pat = compute_T_rel(T_fem, subject_transforms["patella"])
+
+        return decode_joint_from_descriptors(
+            femur_latent=subject_latents["femur"],
+            tibia_latent=subject_latents["tibia"],
+            patella_latent=subject_latents["patella"],
+            T_fem=T_fem,
+            T_rel_tib=T_rel_tib,
+            T_rel_pat=T_rel_pat,
+            models=models,
+            model_configs=configs,
+            fem_ref_center=fem_ref_center,
+            n_pts_per_axis=256,
+        )
+
+    @pytest.fixture(scope="class")
+    def production_osim_meshes(self, fem_ref_center):
+        """Load production mm-space meshes and convert to OSIM for comparison."""
+        from pymskt.mesh import Mesh
+
+        from nsosim.nsm_fitting import convert_nsm_recon_to_OSIM_
+
+        meshes = {}
+        for bone in BONES:
+            vtk_path = SUBJECT_DIR / f"{bone}_nsm_recon_mm.vtk"
+            mesh = Mesh(str(vtk_path))
+            pts_osim = convert_nsm_recon_to_OSIM_(
+                mesh.point_coords.copy(), fem_ref_center
+            )
+            mesh.point_coords = pts_osim
+            meshes[bone] = mesh
+        return meshes
+
+    @pytest.fixture(scope="class", params=BONES)
+    def bone_comparison(self, request, decoded_subject_joint, production_osim_meshes):
+        bone = request.param
+        return bone, decoded_subject_joint[bone]["bone"], production_osim_meshes[bone]
+
+    def test_centroid_close(self, bone_comparison):
+        """Decoded and production centroids should be within 0.1mm."""
+        bone, decoded_mesh, prod_mesh = bone_comparison
+        decoded_centroid = decoded_mesh.point_coords.mean(axis=0)
+        prod_centroid = prod_mesh.point_coords.mean(axis=0)
+        np.testing.assert_allclose(
+            decoded_centroid,
+            prod_centroid,
+            atol=0.0001,  # 0.1mm in meters
+            err_msg=f"{bone}: centroid mismatch between decode and production",
+        )
+
+    def test_extent_close(self, bone_comparison):
+        """Bounding box extents should match within 0.5%."""
+        bone, decoded_mesh, prod_mesh = bone_comparison
+        decoded_extent = (
+            decoded_mesh.point_coords.max(axis=0) - decoded_mesh.point_coords.min(axis=0)
+        )
+        prod_extent = (
+            prod_mesh.point_coords.max(axis=0) - prod_mesh.point_coords.min(axis=0)
+        )
+        np.testing.assert_allclose(
+            decoded_extent,
+            prod_extent,
+            rtol=0.005,
+            err_msg=f"{bone}: bounding box extent mismatch",
+        )
+
+    def test_assd_below_threshold(self, bone_comparison):
+        """Surface distance (ASSD) should be <0.05mm.
+
+        Same decoder + same latent, only difference is marching cubes stochasticity.
+        """
+        bone, decoded_mesh, prod_mesh = bone_comparison
+        assd = decoded_mesh.get_assd_mesh(prod_mesh)
+        assert assd < 0.00005, (
+            f"{bone}: ASSD={assd * 1000:.4f}mm between decode and production, expected <0.05mm"
+        )
+
+    def test_tibia_distal_to_femur(self, decoded_subject_joint):
+        """In OSIM coords, tibia centroid should be distal (lower Y) than femur."""
+        fem_y = decoded_subject_joint["femur"]["bone"].point_coords[:, 1].mean()
+        tib_y = decoded_subject_joint["tibia"]["bone"].point_coords[:, 1].mean()
+        assert tib_y < fem_y, (
+            f"Tibia centroid Y={tib_y:.4f} not distal to femur Y={fem_y:.4f}"
+        )
+
+    def test_patella_anterior_to_femur(self, decoded_subject_joint):
+        """In OSIM coords, patella centroid should be anterior (positive X) relative to femur."""
+        fem_x = decoded_subject_joint["femur"]["bone"].point_coords[:, 0].mean()
+        pat_x = decoded_subject_joint["patella"]["bone"].point_coords[:, 0].mean()
+        assert pat_x > fem_x, (
+            f"Patella centroid X={pat_x:.4f} not anterior to femur X={fem_x:.4f}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Smoke tests with zero latent
 # ---------------------------------------------------------------------------
 

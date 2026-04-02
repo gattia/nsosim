@@ -22,7 +22,7 @@ make lint          # Check formatting (isort + black)
 make autoformat    # Auto-format code
 
 # Tests
-pytest             # ~303 tests covering math, SDF, fitters, schemas, articular surfaces, transforms, decode
+pytest             # ~314 tests covering math, SDF, fitters, schemas, articular surfaces, transforms, decode
 
 # Test fixtures (large mesh files, not in git — auto-downloaded on first pytest run)
 tests/fixtures/transforms/download_fixtures.sh   # Manual download if needed
