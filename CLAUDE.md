@@ -22,7 +22,7 @@ make lint          # Check formatting (isort + black)
 make autoformat    # Auto-format code
 
 # Tests
-pytest             # ~150 tests covering math, SDF, fitters, schemas, articular surfaces
+pytest             # ~303 tests covering math, SDF, fitters, schemas, articular surfaces, transforms, decode
 
 # Test fixtures (large mesh files, not in git — auto-downloaded on first pytest run)
 tests/fixtures/transforms/download_fixtures.sh   # Manual download if needed
@@ -121,6 +121,8 @@ class TestCylinderFitterRotated:
 **SDF tests**: Surface points should have SDF ≈ 0 with tight tolerance (1e-4). Interior points negative, exterior positive. Test with translated and rotated geometry, not just origin-centered axis-aligned shapes.
 
 **Large test fixtures**: Mesh files (VTK) are stored in GitHub Releases (`gattia/nsosim`, tag `test-fixtures-v1`), not in git. Tests auto-download them on first run via `tests/fixtures/transforms/download_fixtures.sh`. Tests that need mesh fixtures use `@requires_mesh_fixtures` and skip gracefully if download fails. Alignment JSONs are kept in git (tiny) so JSON-only tests always run.
+
+**NSM model fixtures** (`tests/fixtures/models/{femur,tibia,patella}/`): Model configs (`model_params_config.json`, trimmed) are in git. Model weights (`model.pth`, 263–299 MB) are gitignored and must be present locally for decode tests. Models: 568/femur, 650/tibia, 648/patella — must match those used to generate reference fixture latents. Tests use `@requires_gpu` and `@requires_nsm_models` decorators.
 
 ## Architecture
 
@@ -316,6 +318,56 @@ update_osim_model(
     lig_musc_xyz_key='xyz_mesh_updated',
 )
 ```
+
+### Synthetic Joint Decode (Latent → OSIM)
+
+For generating meshes from arbitrary latent vectors (synthetic joints, shape mode visualization, latent interpolation) without fitting to a target mesh:
+
+```python
+from nsosim.decode import decode_latent_to_osim, decode_joint_from_descriptors
+from nsosim.transforms import compute_T_rel, recover_bone_transform
+from nsosim.utils import load_model
+
+# Single bone decode
+result = decode_latent_to_osim(
+    latent_vector=latent,          # np.ndarray, e.g. (1024,) for femur
+    model=model,                   # loaded via load_model(), on GPU
+    linear_transform=T_bone,       # 4x4 from alignment JSON
+    fem_ref_center=fem_ref_center, # from ref_femur_alignment.json['mean_orig']
+    model_config=config,           # must have objects_per_decoder and mesh_names
+    n_pts_per_axis=256,
+    clusters={'bone': 20000},      # optional resampling
+)
+# result = {'bone': Mesh, 'cart': Mesh, ...}
+
+# Full joint decode from relative transforms
+joint = decode_joint_from_descriptors(
+    femur_latent=fem_latent,
+    tibia_latent=tib_latent,
+    patella_latent=pat_latent,
+    T_fem=T_fem,                   # femur's linear_transform
+    T_rel_tib=T_rel_tib,           # from compute_T_rel(T_fem, T_tib)
+    T_rel_pat=T_rel_pat,           # from compute_T_rel(T_fem, T_pat)
+    models={'femur': fem_model, 'tibia': tib_model, 'patella': pat_model},
+    model_configs={'femur': fem_config, 'tibia': tib_config, 'patella': pat_config},
+    fem_ref_center=fem_ref_center,
+)
+# joint = {'femur': {'bone': Mesh, ...}, 'tibia': {...}, 'patella': {...}}
+```
+
+**Transform utilities** (`nsosim.transforms`):
+```python
+from nsosim.transforms import (
+    decompose_similarity,          # T → (scale, R, t)
+    mean_rotation,                 # list of R matrices → mean R (SVD-projected)
+    compute_T_rel,                 # T_fem, T_other → T_rel = T_fem @ inv(T_other)
+    recover_bone_transform,        # T_rel, T_fem → T_bone = inv(T_rel) @ T_fem
+    compute_transform_deviations,  # list of T_rel → means + per-subject deviations
+    deviations_to_transform,       # euler_deg, trans_mm, scale_ratio + means → T
+)
+```
+
+**Key difference from production pipeline:** The production pipeline uses `reconstruct_mesh()` which fits a latent to a target mesh and undoes ICP internally — its output is in femur-aligned mm space, converted via `convert_nsm_recon_to_OSIM_` (underscore). The synthetic decode path uses `create_mesh()` which returns NSM canonical space, converted via `convert_nsm_recon_to_OSIM` (no underscore, chains `undo_transform` + underscore version).
 
 ## Reference Surface Preparation (One-Time Setup)
 
@@ -591,8 +643,8 @@ DICT_LIGAMENTS_UPDATE_STIFFNESS = {
 
 ## Known Issues
 
-### `recon_mesh()` Uses Count-Based Mesh Inference
-`recon_mesh()` in `utils.py` infers which extra meshes the NSM decoder returned based on the count (2=bone+cart, 3=bone+cart+fibula, 4=bone+cart+menisci). This works because each `(bone_type, objects_per_decoder)` combination happens to be unique across all current models, but the mapping is implicit — it will break if a new model variant returns a count that doesn't match the assumed meaning (e.g., a tibia model with 3 meshes that aren't `[bone, cart, fibula]`). Any new code that decodes NSM outputs (e.g., `decode.py`) would need to duplicate this heuristic. **Fix plan:** `.claude/plans/mesh-name-mapping.md` — add `mesh_names` list to model configs with auto-population fallback from a `get_mesh_names()` helper, centralizing the mapping in one place. See also the TODO in `utils.py:recon_mesh()`.
+### `recon_mesh()` Mesh Name Mapping (RESOLVED)
+`recon_mesh()` previously used a count-based heuristic to infer mesh names from decoder output count. This was resolved by adding `get_mesh_names(model_config)` to `utils.py` (commit `29a32c2`), which reads `mesh_names` from the model config if present, with a fallback to the legacy `(bone, objects_per_decoder)` lookup. All 7 production model configs now have explicit `mesh_names`. Both `recon_mesh()` and `decode_latent_to_osim()` use `get_mesh_names()`. See `.claude/plans/completed/mesh-name-mapping.md`.
 
 ### Meniscus Articular Surface Instability
 `create_meniscus_articulating_surface()` produces stochastic variation in the medial meniscus inferior surface (~40% point count variation, ASSD ~0.455mm across identical runs). Root causes: non-deterministic marching cubes in NSM reconstruction, non-deterministic mesh resampling, and ray-casting sensitivity to topology changes. See `MENISCUS_ARTICULAR_SURFACE_INSTABILITY.md` for full analysis and proposed fixes.
