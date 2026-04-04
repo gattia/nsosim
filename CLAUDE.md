@@ -133,6 +133,7 @@ class TestCylinderFitterRotated:
 | `nsm_fitting.py` | NSM fitting pipeline: align meshes → fit NSM → convert to OpenSim coords. Also contains coordinate transform functions (`convert_nsm_recon_to_OSIM`, `undo_transform`, etc.) |
 | `transforms.py` | Similarity transform utilities: decomposition, relative transforms (T_rel), mean rotation, deviation analysis/recomposition |
 | `decode.py` | Decode arbitrary latent vectors to OSIM-space meshes (synthetic joints, shape mode visualization) |
+| `model_building.py` | Model-building orchestration: OSIM-space meshes → subject-specific OpenSim model. Step functions (ligament interpolation, wrap fitting, patella centering) + `build_joint_model()` orchestrator. Used by both fitting and synthetic pipelines. |
 | `articular_surfaces.py` | Extract/refine cartilage contact surfaces, meniscus processing, prefemoral fatpad, patella optimization |
 | `comak_osim_update.py` | Update OpenSim XML with subject-specific meshes, attachments, wrap surfaces |
 | `meniscal_ligaments.py` | Post-interpolation projection of meniscal ligament tibia attachments onto tibia surface |
@@ -145,6 +146,7 @@ class TestCylinderFitterRotated:
 
 - **Fitting (mesh→latent):** `nsm_fitting.py` — existing, don't append to it
 - **Decoding (latent→mesh):** `decode.py` — conceptually the inverse of fitting, imports transform functions from `nsm_fitting.py`
+- **Model building (meshes→OpenSim):** `model_building.py` — orchestrates articular surface extraction, ligament interpolation, wrap surface fitting, meniscus surfaces, fat pad, and OpenSim model assembly. Extracted from `comak_1_nsm_fitting.py` so both fitting and synthetic pipelines share the same code.
 - **Transform analysis:** `transforms.py` — pure math (similarity decomposition, T_rel, deviations), no NSM/model dependencies
 - **Coordinate conversions** (`convert_nsm_recon_to_OSIM`, `undo_transform`, etc.): stay in `nsm_fitting.py` for now — a future refactor could extract these into a `coordinates.py` module
 
@@ -563,6 +565,12 @@ The patella is centered by subtracting its mean position before saving to OpenSi
 mean_patella = np.mean(pat_mesh_osim.point_coords, axis=0)
 pat_mesh_centered.point_coords -= mean_patella
 ```
+
+**`_original_position` file convention:** The production pipeline saves patella meshes in two forms:
+- `patella_nsm_recon_osim.stl` — **centered** (mean subtracted), used by OpenSim
+- `patella_nsm_recon_osim_original_position.vtk` — **non-centered**, in OSIM space as output by `nsm_recon_to_osim()`
+
+"Original position" means "OSIM space before centering", NOT the MRI/subject space. The same applies to `patella_cartilage_nsm_recon_osim_original_position.vtk` and `patella_articular_surface_osim_original_position.vtk`. When re-running model building from saved meshes (e.g., `build_joint_model`), use the `_original_position` VTKs as input — the orchestrator does its own centering. Femur and tibia do not have this distinction because they are not centered.
 
 ### Articular Surface Functions
 Key functions in `articular_surfaces.py`:
