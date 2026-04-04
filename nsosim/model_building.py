@@ -834,6 +834,7 @@ def build_joint_model(
         "femur",
         **{
             "femur_nsm_recon_osim.stl": fem_mesh_osim,
+            "femur_nsm_recon_osim.vtk": fem_mesh_osim,
             "femur_cartilage_nsm_recon_osim.vtk": fem_cart_mesh_osim,
             "femur_articular_surface_osim.vtk": fem_articular,
             "femur_articular_surface_osim.stl": fem_articular,
@@ -889,6 +890,7 @@ def build_joint_model(
         "tibia",
         **{
             "tibia_nsm_recon_osim.stl": tib_mesh_osim,
+            "tibia_nsm_recon_osim.vtk": tib_mesh_osim,
             "tibia_cartilage_nsm_recon_osim.vtk": tib_cart_mesh_osim,
             "tibia_articular_surface_osim.vtk": tib_articular,
             "tibia_articular_surface_osim.stl": tib_articular,
@@ -1023,6 +1025,7 @@ def build_joint_model(
         **{
             "patella_offset.json": None,  # handled separately below
             "patella_nsm_recon_osim.stl": pat_mesh_centered,
+            "patella_nsm_recon_osim.vtk": pat_mesh_centered,
             "patella_articular_surface_osim.vtk": pat_articular_centered,
             "patella_articular_surface_osim.stl": pat_articular_centered,
             "patella_articular_surface_osim.obj": pat_articular_centered,
@@ -1093,8 +1096,9 @@ def build_joint_model(
         final_smooth_iter=cfg("fatpad_final_smooth_iter", 100),
     )
 
-    fatpad_path = os.path.join(folder_save_bones, "femur", "femur_prefemoral_fat_pad.stl")
-    fatpad_mesh.save(fatpad_path)
+    fatpad_dir = os.path.join(folder_save_bones, "femur")
+    fatpad_mesh.save(os.path.join(fatpad_dir, "femur_prefemoral_fat_pad.stl"))
+    fatpad_mesh.save(os.path.join(fatpad_dir, "femur_prefemoral_fat_pad.vtk"))
 
     # -----------------------------------------------------------------------
     # OPENSIM MODEL ASSEMBLY
