@@ -32,17 +32,13 @@ SCALED_RAJAGOPAL = os.path.join(
     REPO_ROOT,
     "tests/fixtures/osim_models/rajagopal/RajagopalLaiUhlrich2023_scaled_to_smith2019.osim",
 )
-SMITH2019_MODEL = os.path.join(
-    REPO_ROOT, "tests/fixtures/osim_models/full_body_healthy_knee.osim"
-)
+SMITH2019_MODEL = os.path.join(REPO_ROOT, "tests/fixtures/osim_models/full_body_healthy_knee.osim")
 OUTPUT_MODEL = os.path.join(
     REPO_ROOT,
     "tests/fixtures/osim_models/rajagopal/RajagopalLaiUhlrich2023_comak_knee.osim",
 )
 SMITH2019_GEOMETRY = os.path.join(REPO_ROOT, "tests/fixtures/osim_models/Geometry")
-RAJAGOPAL_GEOMETRY = os.path.join(
-    REPO_ROOT, "tests/fixtures/osim_models/rajagopal/Geometry"
-)
+RAJAGOPAL_GEOMETRY = os.path.join(REPO_ROOT, "tests/fixtures/osim_models/rajagopal/Geometry")
 
 # Components to remove from Rajagopal before adding COMAK knee
 RAJAGOPAL_KNEE_JOINTS = ["walker_knee_r", "patellofemoral_r"]
@@ -125,11 +121,13 @@ def extract_rajagopal_spanning_muscles(model):
                 pp = osim.PathPoint.safeDownCast(pt)
                 if pp is not None:
                     loc = [pp.get_location().get(k) for k in range(3)]
-                    proximal_points.append({
-                        "name": pt.getName(),
-                        "body": body,
-                        "location": loc,
-                    })
+                    proximal_points.append(
+                        {
+                            "name": pt.getName(),
+                            "body": body,
+                            "location": loc,
+                        }
+                    )
 
         # Extract wrap objects
         ws = gp.getWrapSet()
@@ -183,9 +181,7 @@ def build_hybrid_spanning_muscles(rajagopal_muscles, comak_config):
     # Build lookup of COMAK spanning muscle patella points
     comak_patella_points = {}
     for cm in comak_config.spanning_muscles:
-        patella_pts = [
-            pp for pp in cm.path_points if pp["body"] == "patella_r"
-        ]
+        patella_pts = [pp for pp in cm.path_points if pp["body"] == "patella_r"]
         comak_patella_points[cm.name] = patella_pts
 
     hybrid_muscles = []

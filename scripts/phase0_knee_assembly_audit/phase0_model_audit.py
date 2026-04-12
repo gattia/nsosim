@@ -124,8 +124,12 @@ def run_0b(model):
         cj = osim.CustomJoint.safeDownCast(joint)
         st = cj.getSpatialTransform()
         components = [
-            "rotation1", "rotation2", "rotation3",
-            "translation1", "translation2", "translation3",
+            "rotation1",
+            "rotation2",
+            "rotation3",
+            "translation1",
+            "translation2",
+            "translation3",
         ]
         for comp in components:
             axis = getattr(st, f"get_{comp}")()
@@ -161,9 +165,7 @@ def run_0c(model):
                 pt = pp.get(j)
                 total_points += 1
                 if pt.getConcreteClassName() != "PathPoint":
-                    non_standard.append(
-                        f"{f.getName()} point {j}: {pt.getConcreteClassName()}"
-                    )
+                    non_standard.append(f"{f.getName()} point {j}: {pt.getConcreteClassName()}")
 
     lines.append(f"Total path points across 91 ligaments: {total_points}")
     if non_standard:
@@ -195,9 +197,7 @@ def run_0c(model):
                         f"@ [{loc[0]:.6f}, {loc[1]:.6f}, {loc[2]:.6f}]"
                     )
                 else:
-                    lines.append(
-                        f"    {apt.getName()} ({class_name}) on {parent}"
-                    )
+                    lines.append(f"    {apt.getName()} ({class_name}) on {parent}")
             pwset = gp.getWrapSet()
             lines.append(f"    Wrap objects: {pwset.getSize()}")
             for j in range(pwset.getSize()):
@@ -222,12 +222,8 @@ def run_0d(model):
                 t = wo.get_translation()
                 r = wo.get_xyz_body_rotation()
                 lines.append(f"  {wo.getName()} -> {wo.getConcreteClassName()}")
-                lines.append(
-                    f"    translation: [{t[0]:.6f}, {t[1]:.6f}, {t[2]:.6f}]"
-                )
-                lines.append(
-                    f"    rotation: [{r[0]:.6f}, {r[1]:.6f}, {r[2]:.6f}]"
-                )
+                lines.append(f"    translation: [{t[0]:.6f}, {t[1]:.6f}, {t[2]:.6f}]")
+                lines.append(f"    rotation: [{r[0]:.6f}, {r[1]:.6f}, {r[2]:.6f}]")
                 if wo.getConcreteClassName() == "WrapCylinder":
                     cyl = osim.WrapCylinder.safeDownCast(wo)
                     lines.append(
@@ -238,9 +234,7 @@ def run_0d(model):
                 elif wo.getConcreteClassName() == "WrapEllipsoid":
                     ell = osim.WrapEllipsoid.safeDownCast(wo)
                     d = ell.get_dimensions()
-                    lines.append(
-                        f"    dimensions=[{d[0]:.6f}, {d[1]:.6f}, {d[2]:.6f}]"
-                    )
+                    lines.append(f"    dimensions=[{d[0]:.6f}, {d[1]:.6f}, {d[2]:.6f}]")
         except Exception as e:
             lines.append(f"{body_name}: error getting wrap set: {e}")
 
@@ -306,16 +300,13 @@ def run_0f(model):
     tib_len = np.linalg.norm(ankle_pos - knee_pos)
 
     lines.append(
-        f"Hip center (ground):   "
-        f"[{hip_pos[0]:.6f}, {hip_pos[1]:.6f}, {hip_pos[2]:.6f}]"
+        f"Hip center (ground):   " f"[{hip_pos[0]:.6f}, {hip_pos[1]:.6f}, {hip_pos[2]:.6f}]"
     )
     lines.append(
-        f"Knee center (ground):  "
-        f"[{knee_pos[0]:.6f}, {knee_pos[1]:.6f}, {knee_pos[2]:.6f}]"
+        f"Knee center (ground):  " f"[{knee_pos[0]:.6f}, {knee_pos[1]:.6f}, {knee_pos[2]:.6f}]"
     )
     lines.append(
-        f"Ankle center (ground): "
-        f"[{ankle_pos[0]:.6f}, {ankle_pos[1]:.6f}, {ankle_pos[2]:.6f}]"
+        f"Ankle center (ground): " f"[{ankle_pos[0]:.6f}, {ankle_pos[1]:.6f}, {ankle_pos[2]:.6f}]"
     )
     lines.append(f"Femur length (hip->knee):    {fem_len:.6f} m")
     lines.append(f"Tibia length (knee->ankle):  {tib_len:.6f} m")
@@ -328,12 +319,8 @@ def run_0f(model):
         pf = j.getParentFrame()
         cf = j.getChildFrame()
         lines.append(f"{jname}:")
-        lines.append(
-            f"  parent frame: {pf.getName()} ({pf.getConcreteClassName()})"
-        )
-        lines.append(
-            f"  child frame: {cf.getName()} ({cf.getConcreteClassName()})"
-        )
+        lines.append(f"  parent frame: {pf.getName()} ({pf.getConcreteClassName()})")
+        lines.append(f"  child frame: {cf.getName()} ({cf.getConcreteClassName()})")
         for label, frame in [("parent", pf), ("child", cf)]:
             if "Offset" in frame.getConcreteClassName():
                 off = osim.PhysicalOffsetFrame.safeDownCast(frame)

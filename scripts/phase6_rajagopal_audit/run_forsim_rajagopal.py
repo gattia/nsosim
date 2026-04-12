@@ -32,9 +32,7 @@ RAJAGOPAL_COMAK = os.path.join(
     REPO_ROOT,
     "tests/fixtures/osim_models/rajagopal/RajagopalLaiUhlrich2023_comak_knee.osim",
 )
-SMITH2019_MODEL = os.path.join(
-    REPO_ROOT, "tests/fixtures/osim_models/full_body_healthy_knee.osim"
-)
+SMITH2019_MODEL = os.path.join(REPO_ROOT, "tests/fixtures/osim_models/full_body_healthy_knee.osim")
 RESULTS_DIR = os.path.join(SCRIPT_DIR, "forsim_results")
 
 # COMAK secondary coordinates
@@ -232,9 +230,7 @@ def table_to_dict(table):
     labels = table.getColumnLabels()
     result["time"] = np.array([table.getIndependentColumn()[i] for i in range(n_rows)])
     for j in range(len(labels)):
-        result[labels[j]] = np.array(
-            [table.getDependentColumnAtIndex(j)[i] for i in range(n_rows)]
-        )
+        result[labels[j]] = np.array([table.getDependentColumnAtIndex(j)[i] for i in range(n_rows)])
     return result
 
 

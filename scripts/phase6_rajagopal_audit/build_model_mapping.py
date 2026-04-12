@@ -19,7 +19,6 @@ import json
 
 import numpy as np
 
-
 # Bodies that are COMAK-specific (exist in Smith2019 but not in generic models)
 COMAK_BODIES = {
     "femur_distal_r",
@@ -43,7 +42,7 @@ SEGMENT_OVERRIDES = {
 # Leaf bodies (no child joints) and bodies where segment data is missing/zero.
 SCALE_INHERIT = {
     # Left side inherits from right (symmetric scaling)
-    "femur_l": "femur_r",     # Smith2019 left knee has zero offsets (no weld joints)
+    "femur_l": "femur_r",  # Smith2019 left knee has zero offsets (no weld joints)
     "tibia_l": "tibia_r",
     "talus_l": "talus_r",
     "calcn_l": "calcn_r",
@@ -51,12 +50,11 @@ SCALE_INHERIT = {
     "ulna_l": "ulna_r",
     "radius_l": "radius_r",
     # Leaf bodies inherit from parent
-
-    "patella_r": "femur_r",   # patella scales with femur
+    "patella_r": "femur_r",  # patella scales with femur
     "patella_l": "femur_l",
-    "toes_r": "calcn_r",      # toes scale with foot
+    "toes_r": "calcn_r",  # toes scale with foot
     "toes_l": "calcn_l",
-    "hand_r": "radius_r",     # hand scales with forearm
+    "hand_r": "radius_r",  # hand scales with forearm
     "hand_l": "radius_l",
 }
 
@@ -315,9 +313,11 @@ def compute_scale_factors(target_audit, base_audit, body_mapping):
             override_target_key, override_base_key = SEGMENT_OVERRIDES[target_name]
             if override_target_key in target_segments and override_base_key in base_segments:
                 matched_pairs.append(
-                    (target_segments[override_target_key],
-                     base_segments[override_base_key],
-                     f"{override_target_key} ↔ {override_base_key} (manual override)")
+                    (
+                        target_segments[override_target_key],
+                        base_segments[override_base_key],
+                        f"{override_target_key} ↔ {override_base_key} (manual override)",
+                    )
                 )
 
         # If no override, find matching segment pairs by child body name
@@ -468,12 +468,8 @@ def build_mapping(target_path, base_path):
             "target": target["summary"],
             "base": base["summary"],
             "bodies_common": sum(1 for b in body_mapping if b["match_type"] == "exact"),
-            "bodies_target_only": sum(
-                1 for b in body_mapping if b["match_type"] == "target_only"
-            ),
-            "bodies_base_only": sum(
-                1 for b in body_mapping if b["match_type"] == "base_only"
-            ),
+            "bodies_target_only": sum(1 for b in body_mapping if b["match_type"] == "target_only"),
+            "bodies_base_only": sum(1 for b in body_mapping if b["match_type"] == "base_only"),
             "joints_common": sum(1 for j in joint_mapping if j["match_type"] == "exact"),
             "joints_type_mismatches": sum(
                 1
@@ -481,12 +477,8 @@ def build_mapping(target_path, base_path):
                 if j["match_type"] == "exact" and not j.get("type_match", True)
             ),
             "coords_common": sum(1 for c in coord_mapping if c["match_type"] == "exact"),
-            "coords_target_only": sum(
-                1 for c in coord_mapping if c["match_type"] == "target_only"
-            ),
-            "coords_base_only": sum(
-                1 for c in coord_mapping if c["match_type"] == "base_only"
-            ),
+            "coords_target_only": sum(1 for c in coord_mapping if c["match_type"] == "target_only"),
+            "coords_base_only": sum(1 for c in coord_mapping if c["match_type"] == "base_only"),
         },
         "body_mapping": body_mapping,
         "joint_mapping": joint_mapping,
@@ -496,14 +488,20 @@ def build_mapping(target_path, base_path):
     }
 
     # Print summary
-    print(f"\nBody mapping: {result['summary']['bodies_common']} common, "
-          f"{result['summary']['bodies_target_only']} target-only, "
-          f"{result['summary']['bodies_base_only']} base-only")
-    print(f"Joint mapping: {result['summary']['joints_common']} common, "
-          f"{result['summary']['joints_type_mismatches']} type mismatches")
-    print(f"Coordinate mapping: {result['summary']['coords_common']} common, "
-          f"{result['summary']['coords_target_only']} target-only, "
-          f"{result['summary']['coords_base_only']} base-only")
+    print(
+        f"\nBody mapping: {result['summary']['bodies_common']} common, "
+        f"{result['summary']['bodies_target_only']} target-only, "
+        f"{result['summary']['bodies_base_only']} base-only"
+    )
+    print(
+        f"Joint mapping: {result['summary']['joints_common']} common, "
+        f"{result['summary']['joints_type_mismatches']} type mismatches"
+    )
+    print(
+        f"Coordinate mapping: {result['summary']['coords_common']} common, "
+        f"{result['summary']['coords_target_only']} target-only, "
+        f"{result['summary']['coords_base_only']} base-only"
+    )
     print(f"Coordinate conflicts: {len(coord_conflicts)}")
     print(f"\nScale factors computed for {len(scale_factors)} bodies")
 

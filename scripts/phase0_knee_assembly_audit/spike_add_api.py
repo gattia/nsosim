@@ -106,12 +106,8 @@ def test_ligament_setters(buf):
 
     if gp is not None:
         try:
-            gp.appendNewPathPoint(
-                "test_MCLd1-P1", body_a, osim.Vec3(0.01, -0.02, 0.03)
-            )
-            gp.appendNewPathPoint(
-                "test_MCLd1-P2", body_b, osim.Vec3(-0.01, 0.02, -0.03)
-            )
+            gp.appendNewPathPoint("test_MCLd1-P1", body_a, osim.Vec3(0.01, -0.02, 0.03))
+            gp.appendNewPathPoint("test_MCLd1-P2", body_b, osim.Vec3(-0.01, 0.02, -0.03))
             tee_print("    appendNewPathPoint(): OK (2 points added)", buf)
         except Exception as e:
             tee_print(f"    appendNewPathPoint(): FAILED ({e})", buf)
@@ -339,7 +335,9 @@ def test_contact_force_setters(buf):
     # Test socket connections for target/casting mesh
     for socket_name in ["target_mesh", "casting_mesh"]:
         try:
-            force.updSocket(socket_name).setConnecteePath(f"/contactgeometryset/dummy_{socket_name}")
+            force.updSocket(socket_name).setConnecteePath(
+                f"/contactgeometryset/dummy_{socket_name}"
+            )
             tee_print(f"  socket {socket_name} (updSocket): OK", buf)
         except Exception as e:
             tee_print(f"  socket {socket_name}: FAILED ({e})", buf)
@@ -570,8 +568,14 @@ def test_custom_joint_spatial_transform(buf):
     tee_print("    SpatialTransform(): OK", buf)
 
     # Set up rotation1 axis with a LinearFunction
-    axis_names = ["rotation1", "rotation2", "rotation3",
-                  "translation1", "translation2", "translation3"]
+    axis_names = [
+        "rotation1",
+        "rotation2",
+        "rotation3",
+        "translation1",
+        "translation2",
+        "translation3",
+    ]
     coord_names = ["flex", "add", "rot", "tx", "ty", "tz"]
 
     for i, (axis_name, coord_name) in enumerate(zip(axis_names, coord_names)):
@@ -636,13 +640,13 @@ def test_custom_joint_spatial_transform(buf):
     try:
         joint = osim.CustomJoint(
             "test_knee",
-            body_a,             # parent
-            osim.Vec3(0),       # parent offset translation
-            osim.Vec3(0),       # parent offset orientation
-            body_b,             # child
-            osim.Vec3(0),       # child offset translation
-            osim.Vec3(0),       # child offset orientation
-            st,                 # spatial transform
+            body_a,  # parent
+            osim.Vec3(0),  # parent offset translation
+            osim.Vec3(0),  # parent offset orientation
+            body_b,  # child
+            osim.Vec3(0),  # child offset translation
+            osim.Vec3(0),  # child offset orientation
+            st,  # spatial transform
         )
         model.addJoint(joint)
         tee_print("  CustomJoint constructor (7 args + st): OK", buf)
@@ -692,12 +696,12 @@ def test_weld_joint_offsets(buf):
     try:
         weld = osim.WeldJoint(
             "femur_femur_distal_r",
-            body_a,                                      # parent
-            osim.Vec3(-0.0056, -0.3742, -0.0012),       # parent offset translation
-            osim.Vec3(0, 0, 0),                          # parent offset orientation
-            body_b,                                      # child
-            osim.Vec3(0, 0, 0),                          # child offset translation
-            osim.Vec3(0, 0, 0),                          # child offset orientation
+            body_a,  # parent
+            osim.Vec3(-0.0056, -0.3742, -0.0012),  # parent offset translation
+            osim.Vec3(0, 0, 0),  # parent offset orientation
+            body_b,  # child
+            osim.Vec3(0, 0, 0),  # child offset translation
+            osim.Vec3(0, 0, 0),  # child offset orientation
         )
         model.addJoint(weld)
         tee_print("  WeldJoint constructor (7 args): OK", buf)
@@ -716,8 +720,12 @@ def test_weld_joint_offsets(buf):
     try:
         parent_frame = weld.getParentFrame()
         child_frame = weld.getChildFrame()
-        tee_print(f"  Parent frame: {parent_frame.getName()} ({parent_frame.getConcreteClassName()})", buf)
-        tee_print(f"  Child frame: {child_frame.getName()} ({child_frame.getConcreteClassName()})", buf)
+        tee_print(
+            f"  Parent frame: {parent_frame.getName()} ({parent_frame.getConcreteClassName()})", buf
+        )
+        tee_print(
+            f"  Child frame: {child_frame.getName()} ({child_frame.getConcreteClassName()})", buf
+        )
     except Exception as e:
         tee_print(f"  Frame inspection: FAILED ({e})", buf)
 
@@ -782,8 +790,12 @@ def test_full_mini_model(buf):
 
     knee = osim.CustomJoint(
         "knee_r",
-        fem_dist, osim.Vec3(0), osim.Vec3(0),
-        tib_prox, osim.Vec3(0), osim.Vec3(0),
+        fem_dist,
+        osim.Vec3(0),
+        osim.Vec3(0),
+        tib_prox,
+        osim.Vec3(0),
+        osim.Vec3(0),
         st_knee,
     )
     model.addJoint(knee)
@@ -818,8 +830,12 @@ def test_full_mini_model(buf):
 
     pf = osim.CustomJoint(
         "pf_r",
-        fem_dist, osim.Vec3(0, 0, 0.03), osim.Vec3(0, 0, 0),
-        patella, osim.Vec3(0, 0, 0), osim.Vec3(0, 0, 0),
+        fem_dist,
+        osim.Vec3(0, 0, 0.03),
+        osim.Vec3(0, 0, 0),
+        patella,
+        osim.Vec3(0, 0, 0),
+        osim.Vec3(0, 0, 0),
         st_pf,
     )
     model.addJoint(pf)
@@ -926,7 +942,10 @@ def test_extract_spanning_muscle_from_real_model(buf):
         if pp is not None:
             loc = pp.get_location()
             body_name = pp.getParentFrame().getName()
-            tee_print(f"    {pp.getName()}: body={body_name}, loc=[{loc[0]:.6f}, {loc[1]:.6f}, {loc[2]:.6f}]", buf)
+            tee_print(
+                f"    {pp.getName()}: body={body_name}, loc=[{loc[0]:.6f}, {loc[1]:.6f}, {loc[2]:.6f}]",
+                buf,
+            )
         else:
             tee_print(f"    {pt.getName()}: type={pt.getConcreteClassName()} (not PathPoint)", buf)
 

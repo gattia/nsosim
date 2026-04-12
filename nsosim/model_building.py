@@ -59,9 +59,7 @@ def load_transform(path):
         elif "transform_matrix" in data:
             return np.array(data["transform_matrix"]).reshape(4, 4)
         else:
-            raise ValueError(
-                f"JSON at {path} has no 'linear_transform' or 'transform_matrix' key"
-            )
+            raise ValueError(f"JSON at {path} has no 'linear_transform' or 'transform_matrix' key")
     else:
         raise ValueError(f"Unsupported transform format: {path} (use .npy or .json)")
 
@@ -106,9 +104,7 @@ def build_dict_bones_for_interpolation(models, latents, transforms, labeled_bone
                 "recon_latent": latent,
             },
             "wrap": {
-                "path_labeled_bone": os.path.join(
-                    labeled_bone_dir, f"{bone_name}_labeled.vtk"
-                ),
+                "path_labeled_bone": os.path.join(labeled_bone_dir, f"{bone_name}_labeled.vtk"),
             },
         }
 
