@@ -111,3 +111,15 @@ venv.bak/
 .mypy_cache/
 .dmypy.json
 dmypy.json
+
+# Test fixtures — large mesh/model files not checked into git
+tests/fixtures/osim_models/Geometry/
+tests/fixtures/osim_models/rajagopal/Geometry/
+tests/fixtures/osim_models/rajagopal/*.osim
+tests/fixtures/osim_models/*_settled.osim
+tests/fixtures/osim_models/opensim.log
+
+# Phase 6 generated files (large JSON audit data, forsim results, scaling XML)
+scripts/phase6_rajagopal_audit/forsim_results/
+scripts/phase6_rajagopal_audit/*.json
+scripts/phase6_rajagopal_audit/*.xml

@@ -1,0 +1,509 @@
+Phase 0 Model Audit: /dataNAS/people/aagatti/projects/comak_gait_simulation/COMAK_SIMULATION_REQUIREMENTS/data/reference_data/comak_models/current/full_body_healthy_knee.osim
+Model name: smith2019
+
+============================================================
+0A: COMPONENT ENUMERATION
+============================================================
+
+--- Bodies (27) ---
+  pelvis (mass=6.841478)
+  femur_r (mass=8.274697)
+  femur_distal_r (mass=0.008166)
+  patella_r (mass=0.398116)
+  tibia_proximal_r (mass=0.008166)
+  meniscus_lateral_r (mass=0.100000)
+  meniscus_medial_r (mass=0.100000)
+  tibia_r (mass=2.652068)
+  talus_r (mass=0.036749)
+  calcn_r (mass=1.008562)
+  toes_r (mass=0.161288)
+  femur_l (mass=8.274697)
+  patella_l (mass=0.398116)
+  tibia_l (mass=2.652068)
+  talus_l (mass=0.036749)
+  calcn_l (mass=1.008562)
+  toes_l (mass=0.161288)
+  torso (mass=19.777200)
+  neckhead (mass=4.250659)
+  humerus_r (mass=1.659839)
+  ulna_r (mass=0.496114)
+  radius_r (mass=0.496114)
+  hand_r (mass=0.373617)
+  humerus_l (mass=1.659839)
+  ulna_l (mass=0.496114)
+  radius_l (mass=0.496114)
+  hand_l (mass=0.373617)
+
+--- Joints (27) ---
+  gnd_pelvis -> CustomJoint
+  hip_r -> CustomJoint
+  femur_femur_distal_r -> WeldJoint
+  pf_r -> CustomJoint
+  knee_r -> CustomJoint
+  meniscus_lateral_r -> CustomJoint
+  meniscus_medial_r -> CustomJoint
+  tibia_tibia_proximal_r -> WeldJoint
+  ankle_r -> CustomJoint
+  subtalar_r -> CustomJoint
+  mtp_r -> CustomJoint
+  hip_l -> CustomJoint
+  pf_l -> CustomJoint
+  knee_l -> CustomJoint
+  ankle_l -> CustomJoint
+  subtalar_l -> CustomJoint
+  mtp_l -> CustomJoint
+  pelvis_torso -> CustomJoint
+  torso_neckhead -> CustomJoint
+  acromial_r -> CustomJoint
+  elbow_r -> CustomJoint
+  radioulnar_r -> CustomJoint
+  radius_hand_r -> CustomJoint
+  acromial_l -> CustomJoint
+  elbow_l -> CustomJoint
+  radioulnar_l -> CustomJoint
+  radius_hand_l -> CustomJoint
+
+--- Forces (165) ---
+  addbrev_r -> Millard2012EquilibriumMuscle
+  addlong_r -> Millard2012EquilibriumMuscle
+  addmagProx_r -> Millard2012EquilibriumMuscle
+  addmagMid_r -> Millard2012EquilibriumMuscle
+  addmagDist_r -> Millard2012EquilibriumMuscle
+  addmagIsch_r -> Millard2012EquilibriumMuscle
+  bflh_r -> Millard2012EquilibriumMuscle
+  bfsh_r -> Millard2012EquilibriumMuscle
+  edl_r -> Millard2012EquilibriumMuscle
+  ehl_r -> Millard2012EquilibriumMuscle
+  fdl_r -> Millard2012EquilibriumMuscle
+  fhl_r -> Millard2012EquilibriumMuscle
+  gaslat_r -> Millard2012EquilibriumMuscle
+  gasmed_r -> Millard2012EquilibriumMuscle
+  gem_r -> Millard2012EquilibriumMuscle
+  glmax1_r -> Millard2012EquilibriumMuscle
+  glmax2_r -> Millard2012EquilibriumMuscle
+  glmax3_r -> Millard2012EquilibriumMuscle
+  glmed1_r -> Millard2012EquilibriumMuscle
+  glmed2_r -> Millard2012EquilibriumMuscle
+  glmed3_r -> Millard2012EquilibriumMuscle
+  glmin1_r -> Millard2012EquilibriumMuscle
+  glmin2_r -> Millard2012EquilibriumMuscle
+  glmin3_r -> Millard2012EquilibriumMuscle
+  grac_r -> Millard2012EquilibriumMuscle
+  iliacus_r -> Millard2012EquilibriumMuscle
+  pect_r -> Millard2012EquilibriumMuscle
+  perbrev_r -> Millard2012EquilibriumMuscle
+  perlong_r -> Millard2012EquilibriumMuscle
+  pertert_r -> Millard2012EquilibriumMuscle
+  piri_r -> Millard2012EquilibriumMuscle
+  psoas_r -> Millard2012EquilibriumMuscle
+  quadfem_r -> Millard2012EquilibriumMuscle
+  recfem_r -> Millard2012EquilibriumMuscle
+  sart_r -> Millard2012EquilibriumMuscle
+  semimem_r -> Millard2012EquilibriumMuscle
+  semiten_r -> Millard2012EquilibriumMuscle
+  soleus_r -> Millard2012EquilibriumMuscle
+  tfl_r -> Millard2012EquilibriumMuscle
+  tibant_r -> Millard2012EquilibriumMuscle
+  tibpost_r -> Millard2012EquilibriumMuscle
+  vasint_r -> Millard2012EquilibriumMuscle
+  vaslat_r -> Millard2012EquilibriumMuscle
+  vasmed_r -> Millard2012EquilibriumMuscle
+  MCLd1 -> Blankevoort1991Ligament
+  MCLd2 -> Blankevoort1991Ligament
+  MCLd3 -> Blankevoort1991Ligament
+  MCLd4 -> Blankevoort1991Ligament
+  MCLd5 -> Blankevoort1991Ligament
+  MCLs1 -> Blankevoort1991Ligament
+  MCLs2 -> Blankevoort1991Ligament
+  MCLs3 -> Blankevoort1991Ligament
+  MCLs4 -> Blankevoort1991Ligament
+  MCLs5 -> Blankevoort1991Ligament
+  MCLs6 -> Blankevoort1991Ligament
+  ACLpl1 -> Blankevoort1991Ligament
+  ACLpl2 -> Blankevoort1991Ligament
+  ACLpl3 -> Blankevoort1991Ligament
+  ACLpl4 -> Blankevoort1991Ligament
+  ACLpl5 -> Blankevoort1991Ligament
+  ACLpl6 -> Blankevoort1991Ligament
+  ACLam1 -> Blankevoort1991Ligament
+  ACLam2 -> Blankevoort1991Ligament
+  ACLam3 -> Blankevoort1991Ligament
+  ACLam4 -> Blankevoort1991Ligament
+  ACLam5 -> Blankevoort1991Ligament
+  ACLam6 -> Blankevoort1991Ligament
+  PCLal1 -> Blankevoort1991Ligament
+  PCLal2 -> Blankevoort1991Ligament
+  PCLal3 -> Blankevoort1991Ligament
+  PCLal4 -> Blankevoort1991Ligament
+  PCLal5 -> Blankevoort1991Ligament
+  PCLpm1 -> Blankevoort1991Ligament
+  PCLpm2 -> Blankevoort1991Ligament
+  PCLpm3 -> Blankevoort1991Ligament
+  PCLpm4 -> Blankevoort1991Ligament
+  PCLpm5 -> Blankevoort1991Ligament
+  LCL1 -> Blankevoort1991Ligament
+  LCL2 -> Blankevoort1991Ligament
+  LCL3 -> Blankevoort1991Ligament
+  LCL4 -> Blankevoort1991Ligament
+  PT1 -> Blankevoort1991Ligament
+  PT2 -> Blankevoort1991Ligament
+  PT3 -> Blankevoort1991Ligament
+  PT4 -> Blankevoort1991Ligament
+  PT5 -> Blankevoort1991Ligament
+  PT6 -> Blankevoort1991Ligament
+  lPFL1 -> Blankevoort1991Ligament
+  lPFL2 -> Blankevoort1991Ligament
+  lPFL3 -> Blankevoort1991Ligament
+  lPFL4 -> Blankevoort1991Ligament
+  lPFL5 -> Blankevoort1991Ligament
+  lPFL6 -> Blankevoort1991Ligament
+  lPFL7 -> Blankevoort1991Ligament
+  lPFL8 -> Blankevoort1991Ligament
+  mPFL1 -> Blankevoort1991Ligament
+  mPFL2 -> Blankevoort1991Ligament
+  mPFL3 -> Blankevoort1991Ligament
+  mPFL4 -> Blankevoort1991Ligament
+  mPFL5 -> Blankevoort1991Ligament
+  mPFL6 -> Blankevoort1991Ligament
+  MCLp1 -> Blankevoort1991Ligament
+  MCLp2 -> Blankevoort1991Ligament
+  MCLp3 -> Blankevoort1991Ligament
+  MCLp4 -> Blankevoort1991Ligament
+  MCLp5 -> Blankevoort1991Ligament
+  PFL1 -> Blankevoort1991Ligament
+  PFL2 -> Blankevoort1991Ligament
+  PFL3 -> Blankevoort1991Ligament
+  PFL4 -> Blankevoort1991Ligament
+  PFL5 -> Blankevoort1991Ligament
+  pCAP1 -> Blankevoort1991Ligament
+  pCAP2 -> Blankevoort1991Ligament
+  pCAP3 -> Blankevoort1991Ligament
+  pCAP4 -> Blankevoort1991Ligament
+  pCAP5 -> Blankevoort1991Ligament
+  pCAP6 -> Blankevoort1991Ligament
+  pCAP7 -> Blankevoort1991Ligament
+  pCAP8 -> Blankevoort1991Ligament
+  ITB1 -> Blankevoort1991Ligament
+  meniscus_lateral_COR1 -> Blankevoort1991Ligament
+  meniscus_lateral_COR2 -> Blankevoort1991Ligament
+  meniscus_lateral_COR3 -> Blankevoort1991Ligament
+  meniscus_lateral_AHORN1 -> Blankevoort1991Ligament
+  meniscus_lateral_AHORN2 -> Blankevoort1991Ligament
+  meniscus_lateral_PHORN1 -> Blankevoort1991Ligament
+  meniscus_lateral_PHORN2 -> Blankevoort1991Ligament
+  meniscus_medial_COR1 -> Blankevoort1991Ligament
+  meniscus_medial_COR2 -> Blankevoort1991Ligament
+  meniscus_medial_COR3 -> Blankevoort1991Ligament
+  meniscus_medial_AHORN1 -> Blankevoort1991Ligament
+  meniscus_medial_AHORN2 -> Blankevoort1991Ligament
+  meniscus_medial_PHORN1 -> Blankevoort1991Ligament
+  meniscus_medial_PHORN2 -> Blankevoort1991Ligament
+  meniscus_TRANSVLIG1 -> Blankevoort1991Ligament
+  tf_contact -> Smith2018ArticularContactForce
+  pf_contact -> Smith2018ArticularContactForce
+  femur_meniscus_medial_contact -> Smith2018ArticularContactForce
+  tibia_meniscus_medial_contact -> Smith2018ArticularContactForce
+  femur_meniscus_lateral_contact -> Smith2018ArticularContactForce
+  tibia_meniscus_lateral_contact -> Smith2018ArticularContactForce
+  knee_flex_r -> SpringGeneralizedForce
+  knee_add_r -> SpringGeneralizedForce
+  knee_rot_r -> SpringGeneralizedForce
+  knee_tx_r -> SpringGeneralizedForce
+  knee_ty_r -> SpringGeneralizedForce
+  knee_tz_r -> SpringGeneralizedForce
+  pf_flex_r -> SpringGeneralizedForce
+  pf_rot_r -> SpringGeneralizedForce
+  pf_tilt_r -> SpringGeneralizedForce
+  pf_tx_r -> SpringGeneralizedForce
+  pf_ty_r -> SpringGeneralizedForce
+  pf_tz_r -> SpringGeneralizedForce
+  meniscus_medial_flex_r -> SpringGeneralizedForce
+  meniscus_medial_add_r -> SpringGeneralizedForce
+  meniscus_medial_rot_r -> SpringGeneralizedForce
+  meniscus_medial_tx_r -> SpringGeneralizedForce
+  meniscus_medial_ty_r -> SpringGeneralizedForce
+  meniscus_medial_tz_r -> SpringGeneralizedForce
+  meniscus_lateral_flex_r -> SpringGeneralizedForce
+  meniscus_lateral_add_r -> SpringGeneralizedForce
+  meniscus_lateral_rot_r -> SpringGeneralizedForce
+  meniscus_lateral_tx_r -> SpringGeneralizedForce
+  meniscus_lateral_ty_r -> SpringGeneralizedForce
+  meniscus_lateral_tz_r -> SpringGeneralizedForce
+
+Force class counts: {'Millard2012EquilibriumMuscle': 44, 'Blankevoort1991Ligament': 91, 'Smith2018ArticularContactForce': 6, 'SpringGeneralizedForce': 24}
+
+--- Contact Geometry (7) ---
+  femur_cartilage -> Smith2018ContactMesh
+  tibia_cartilage -> Smith2018ContactMesh
+  patella_cartilage -> Smith2018ContactMesh
+  meniscus_medial_superior -> Smith2018ContactMesh
+  meniscus_medial_inferior -> Smith2018ContactMesh
+  meniscus_lateral_superior -> Smith2018ContactMesh
+  meniscus_lateral_inferior -> Smith2018ContactMesh
+
+--- Constraints (0) ---
+  (none)
+
+--- Markers on COMAK bodies (of 39 total) ---
+  (none)
+
+============================================================
+0B: SPATIAL TRANSFORM FUNCTION TYPES
+============================================================
+
+  pf_r.rotation1: func=LinearFunction, coord=pf_flex_r, axis=[0.0,0.0,1.0]
+  pf_r.rotation2: func=LinearFunction, coord=pf_rot_r, axis=[1.0,0.0,0.0]
+  pf_r.rotation3: func=LinearFunction, coord=pf_tilt_r, axis=[0.0,1.0,0.0]
+  pf_r.translation1: func=LinearFunction, coord=pf_tx_r, axis=[1.0,0.0,0.0]
+  pf_r.translation2: func=LinearFunction, coord=pf_ty_r, axis=[0.0,1.0,0.0]
+  pf_r.translation3: func=LinearFunction, coord=pf_tz_r, axis=[0.0,0.0,1.0]
+
+  knee_r.rotation1: func=LinearFunction, coord=knee_flex_r, axis=[0.0,0.0,1.0]
+  knee_r.rotation2: func=LinearFunction, coord=knee_add_r, axis=[1.0,0.0,0.0]
+  knee_r.rotation3: func=LinearFunction, coord=knee_rot_r, axis=[0.0,1.0,0.0]
+  knee_r.translation1: func=LinearFunction, coord=knee_tx_r, axis=[1.0,0.0,0.0]
+  knee_r.translation2: func=LinearFunction, coord=knee_ty_r, axis=[0.0,1.0,0.0]
+  knee_r.translation3: func=LinearFunction, coord=knee_tz_r, axis=[0.0,0.0,1.0]
+
+  meniscus_lateral_r.rotation1: func=LinearFunction, coord=meniscus_lateral_flex_r, axis=[0.0,0.0,1.0]
+  meniscus_lateral_r.rotation2: func=LinearFunction, coord=meniscus_lateral_add_r, axis=[1.0,0.0,0.0]
+  meniscus_lateral_r.rotation3: func=LinearFunction, coord=meniscus_lateral_rot_r, axis=[0.0,1.0,0.0]
+  meniscus_lateral_r.translation1: func=LinearFunction, coord=meniscus_lateral_tx_r, axis=[1.0,0.0,0.0]
+  meniscus_lateral_r.translation2: func=LinearFunction, coord=meniscus_lateral_ty_r, axis=[0.0,1.0,0.0]
+  meniscus_lateral_r.translation3: func=LinearFunction, coord=meniscus_lateral_tz_r, axis=[0.0,0.0,1.0]
+
+  meniscus_medial_r.rotation1: func=LinearFunction, coord=meniscus_medial_flex_r, axis=[0.0,0.0,1.0]
+  meniscus_medial_r.rotation2: func=LinearFunction, coord=meniscus_medial_add_r, axis=[1.0,0.0,0.0]
+  meniscus_medial_r.rotation3: func=LinearFunction, coord=meniscus_medial_rot_r, axis=[0.0,1.0,0.0]
+  meniscus_medial_r.translation1: func=LinearFunction, coord=meniscus_medial_tx_r, axis=[1.0,0.0,0.0]
+  meniscus_medial_r.translation2: func=LinearFunction, coord=meniscus_medial_ty_r, axis=[0.0,1.0,0.0]
+  meniscus_medial_r.translation3: func=LinearFunction, coord=meniscus_medial_tz_r, axis=[0.0,0.0,1.0]
+
+
+============================================================
+0C: LIGAMENT PATH POINT TYPES + SPANNING MUSCLES
+============================================================
+
+Total path points across 91 ligaments: 183
+All path points are standard PathPoint
+
+--- Spanning muscle path points ---
+  recfem_r: 3 points
+    recfem_r-P1 (PathPoint) on /bodyset/pelvis @ [-0.028700, -0.041149, 0.111573]
+    recfem_r-P2 (PathPoint) on /bodyset/patella_r @ [-0.000102, 0.014970, 0.001138]
+    recfem_r-P3 (PathPoint) on /bodyset/patella_r @ [0.003519, 0.012571, 0.000789]
+    Wrap objects: 1
+      KnExt_at_fem_r
+  vasint_r: 3 points
+    vasint_r-P1 (PathPoint) on /bodyset/femur_r @ [0.026831, -0.178012, 0.028682]
+    vasint_r-P2 (PathPoint) on /bodyset/femur_r @ [0.030995, -0.192816, 0.026369]
+    vasint_r-P3 (PathPoint) on /bodyset/patella_r @ [-0.003804, 0.018061, -0.000357]
+    Wrap objects: 1
+      KnExt_vasint_at_fem_r
+  vaslat_r: 3 points
+    vaslat_r-P1 (PathPoint) on /bodyset/femur_r @ [0.004441, -0.171535, 0.032290]
+    vaslat_r-P2 (PathPoint) on /bodyset/femur_r @ [0.024888, -0.239724, 0.037841]
+    vaslat_r-P3 (PathPoint) on /bodyset/patella_r @ [0.001655, 0.015091, 0.011850]
+    Wrap objects: 1
+      KnExt_at_fem_r
+  vasmed_r: 3 points
+    vasmed_r-P1 (PathPoint) on /bodyset/femur_r @ [0.012953, -0.194203, 0.017394]
+    vasmed_r-P2 (PathPoint) on /bodyset/femur_r @ [0.032938, -0.256193, 0.000833]
+    vasmed_r-P3 (PathPoint) on /bodyset/patella_r @ [-0.000394, 0.015683, -0.009335]
+    Wrap objects: 1
+      KnExt_at_fem_r
+
+============================================================
+0D: WRAP SURFACES ON COMAK AND MAIN CHAIN BODIES
+============================================================
+
+femur_distal_r: 1 wrap objects
+  Capsule_r -> WrapCylinder
+    translation: [-0.004000, -0.003000, 0.000000]
+    rotation: [-0.029907, 0.020000, 0.331613]
+    radius=0.018000, length=0.500000, quadrant=all
+tibia_proximal_r: 2 wrap objects
+  Med_Lig_r -> WrapEllipsoid
+    translation: [0.001000, -0.034600, -0.018700]
+    rotation: [-0.104907, -0.034907, 0.181613]
+    dimensions=[0.030000, 0.018000, 0.012000]
+  Med_LigP_r -> WrapEllipsoid
+    translation: [-0.010400, -0.031400, -0.022700]
+    rotation: [-0.139813, 0.349066, 0.181613]
+    dimensions=[0.025000, 0.005400, 0.005300]
+patella_r: 1 wrap objects
+  PatTen_r -> WrapEllipsoid
+    translation: [0.000500, -0.009389, 0.000482]
+    rotation: [0.000000, 0.000000, 0.010000]
+    dimensions=[0.005000, 0.008000, 0.012000]
+meniscus_medial_r: 0 wrap objects
+meniscus_lateral_r: 0 wrap objects
+femur_r: 10 wrap objects
+  AB_at_femshaft_r -> WrapEllipsoid
+    translation: [0.013509, -0.108400, 0.023564]
+    rotation: [0.111701, 0.000000, 0.176278]
+    dimensions=[0.015266, 0.064765, 0.019430]
+  AL_at_femshaft_r -> WrapEllipsoid
+    translation: [0.028559, -0.220193, 0.011025]
+    rotation: [0.111701, 0.000000, 0.054105]
+    dimensions=[0.018597, 0.092522, 0.016654]
+  AMprox_at_femshaft_r -> WrapEllipsoid
+    translation: [0.005585, -0.071795, 0.027670]
+    rotation: [0.111701, 0.000000, 0.211185]
+    dimensions=[0.019522, 0.064765, 0.029607]
+  AMmid_at_femshaft_r -> WrapEllipsoid
+    translation: [0.021292, -0.148693, 0.019045]
+    rotation: [0.111701, -0.000000, 0.123918]
+    dimensions=[0.019800, 0.111026, 0.028682]
+  AMdist_at_femshaft_r -> WrapEllipsoid
+    translation: [0.028411, -0.241268, 0.008661]
+    rotation: [0.111701, 0.000000, 0.176278]
+    dimensions=[0.020170, 0.185044, 0.019892]
+  AMisch_at_condyles_r -> WrapEllipsoid
+    translation: [-0.026505, -0.348801, -0.003401]
+    rotation: [0.111701, -0.000000, -0.434587]
+    dimensions=[0.046261, 0.222052, 0.037194]
+  PECT_at_femshaft_r -> WrapEllipsoid
+    translation: [0.007051, -0.078918, 0.026871]
+    rotation: [0.111701, 0.000000, 0.211185]
+    dimensions=[0.015359, 0.046261, 0.012120]
+  KnExt_at_fem_r -> WrapCylinder
+    translation: [0.009252, -0.367312, 0.000000]
+    rotation: [0.000000, 0.000000, 0.000000]
+    radius=0.025906, length=0.185044, quadrant=x
+  KnExt_vasint_at_fem_r -> WrapCylinder
+    translation: [0.009252, -0.367312, 0.000000]
+    rotation: [0.000000, 0.000000, 0.000000]
+    radius=0.024056, length=0.185044, quadrant=x
+  Gastroc_at_Condyles_r -> WrapEllipsoid
+    translation: [0.009252, -0.377026, 0.000278]
+    rotation: [0.058992, -0.087266, 0.023213]
+    dimensions=[0.027757, 0.023130, 0.138783]
+tibia_r: 5 wrap objects
+  GR_at_condyles_r -> WrapEllipsoid
+    translation: [0.000000, 0.000000, 0.000000]
+    rotation: [0.000000, 0.000000, -0.183260]
+    dimensions=[0.036298, 0.064025, 0.053741]
+  SM_at_condyles_r -> WrapEllipsoid
+    translation: [0.000000, 0.000000, 0.000000]
+    rotation: [0.000000, 0.000000, -0.296706]
+    dimensions=[0.035491, 0.060698, 0.049304]
+  ST_at_condyles_r -> WrapEllipsoid
+    translation: [0.000000, 0.000000, 0.000000]
+    rotation: [0.000000, 0.000000, -0.270526]
+    dimensions=[0.042851, 0.069570, 0.057673]
+  BFLH_at_gastroc_r -> WrapCylinder
+    translation: [-0.031861, -0.044666, 0.000000]
+    rotation: [0.000000, 0.000000, 0.000000]
+    radius=0.010083, length=0.100827, quadrant=y
+  Gastroc_at_Shank_r -> WrapCylinder
+    translation: [-0.007461, -0.074612, -0.003327]
+    rotation: [2.967230, 0.028973, -1.478120]
+    radius=0.055455, length=0.100827, quadrant=-y
+
+============================================================
+0E: API CONSTRUCTOR VERIFICATION + PROPERTY DUMPS
+============================================================
+
+addBody + addJoint + initSystem: CONFIRMED
+
+--- Blankevoort1991Ligament ---
+Constructor: CONFIRMED
+All properties:
+  [0] components = (No Objects)
+  [1] appliesForce = true
+  [2] path = GeometryPath
+  [3] linear_stiffness = 1
+  [4] transition_strain = 0.06
+  [5] damping_coefficient = 0.003
+  [6] slack_length = 0
+
+--- SpringGeneralizedForce ---
+Constructor: CONFIRMED
+All properties:
+  [0] components = (No Objects)
+  [1] appliesForce = true
+  [2] coordinate = ()
+  [3] stiffness = 0
+  [4] rest_length = 0
+  [5] viscosity = 0
+
+--- Smith2018ContactMesh ---
+Constructor: CONFIRMED
+All properties:
+  [0] components = (No Objects)
+  [1] socket_frame = 
+  [2] location = (0 0 0)
+  [3] orientation = (0 0 0)
+  [4] Appearance = Appearance
+  [5] socket_scale_frame = 
+  [6] mesh_file = 
+  [7] elastic_modulus = 1e+06
+  [8] poissons_ratio = 0.5
+  [9] thickness = 0.005
+  [10] use_variable_thickness = false
+  [11] mesh_back_file = ()
+  [12] min_thickness = (0.001)
+  [13] max_thickness = (0.01)
+  [14] scale_factors = (1 1 1)
+
+--- Smith2018ArticularContactForce ---
+Constructor: CONFIRMED
+All properties:
+  [0] components = (No Objects)
+  [1] appliesForce = true
+  [2] socket_target_mesh = 
+  [3] socket_casting_mesh = 
+  [4] min_proximity = 0
+  [5] max_proximity = 0.01
+  [6] elastic_foundation_formulation = linear
+  [7] use_lumped_contact_model = true
+
+--- Millard2012EquilibriumMuscle ---
+Constructor: CONFIRMED
+All properties:
+  [0] components = (No Objects)
+  [1] appliesForce = true
+  [2] min_control = 0.01
+  [3] max_control = 1
+  [4] path = GeometryPath
+  [5] optimal_force = 1
+  [6] max_isometric_force = 1000
+  [7] optimal_fiber_length = 0.1
+  [8] tendon_slack_length = 0.2
+  [9] pennation_angle_at_optimal = 0
+  [10] max_contraction_velocity = 10
+  [11] ignore_tendon_compliance = false
+  [12] ignore_activation_dynamics = false
+  [13] fiber_damping = 0.1
+  [14] default_activation = 0.05
+  [15] default_fiber_length = 0.1
+  [16] activation_time_constant = 0.01
+  [17] deactivation_time_constant = 0.04
+  [18] minimum_activation = 0.01
+  [19] maximum_pennation_angle = 1.47063
+  [20] ActiveForceLengthCurve = ActiveForceLengthCurve
+  [21] ForceVelocityCurve = ForceVelocityCurve
+  [22] FiberForceLengthCurve = FiberForceLengthCurve
+  [23] TendonForceLengthCurve = TendonForceLengthCurve
+
+============================================================
+0F: REFERENCE SEGMENT LENGTHS + WELD JOINT OFFSETS
+============================================================
+
+Hip center (ground):   [-0.067298, 0.885759, 0.092392]
+Knee center (ground):  [-0.070849, 0.508577, 0.091221]
+Ankle center (ground): [-0.074932, 0.105332, 0.098260]
+Femur length (hip->knee):    0.377200 m
+Tibia length (knee->ankle):  0.403327 m
+Total leg length:            0.780527 m
+
+--- Weld joint offsets ---
+femur_femur_distal_r:
+  parent frame: femur_r_offset (PhysicalOffsetFrame)
+  child frame: femur_distal_r (Body)
+  parent offset: t=[-0.005551, -0.374181, -0.001171], o=[0.000000, 0.000000, 0.000000]
+tibia_tibia_proximal_r:
+  parent frame: tibia_proximal_r_offset (PhysicalOffsetFrame)
+  child frame: tibia_r (Body)
+  parent offset: t=[0.006000, 0.000000, 0.000000], o=[0.000000, 0.000000, 0.000000]
