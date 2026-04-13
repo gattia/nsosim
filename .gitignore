@@ -121,5 +121,6 @@ tests/fixtures/osim_models/opensim.log
 
 # Phase 6 generated files (large JSON audit data, forsim results, scaling XML)
 scripts/phase6_rajagopal_audit/forsim_results/
-scripts/phase6_rajagopal_audit/*.json
+scripts/phase6_rajagopal_audit/*_audit.json
+scripts/phase6_rajagopal_audit/model_mapping.json
 scripts/phase6_rajagopal_audit/*.xml
