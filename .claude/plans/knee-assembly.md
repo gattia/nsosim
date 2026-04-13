@@ -991,17 +991,92 @@ If any answer is surprising (e.g., a function type we didn't expect, or `addBody
 
 ## Implementation Order
 
-0. **Phase 0**: Model audit & API verification — **COMPLETE** (see `scripts/phase0_knee_assembly_audit/`). Includes `spike_add_api.py` — all 10 setter tests pass, Pattern A (direct setters) confirmed for all component types.
-1. **Phase 1**: Data classes + serialization — **COMPLETE** (see implementation notes below)
-2. **Phase 2**: ~~`extract_comak_knee()`~~ — **merged into Phase 3** (extract-as-you-strip)
-3. **Phase 3**: `strip_comak_knee()` — **COMPLETE** (see implementation notes below)
-4. **Phase 4**: `add_comak_knee()` — **COMPLETE** (see implementation notes below)
-5. **Phase 5**: Full round-trip test (structural + simulation) — **COMPLETE** (see implementation notes below)
-6. **Phase 6**: Add COMAK knee to Rajagopal — 6A: audit both models + mapping (**COMPLETE**), 6B: scale Rajagopal down + add full COMAK knee (5 bodies + weld joints) + test with gait data
-7. **Phase 7**: `scale_comak_knee_config` + `compute_knee_scale_factor` — uniform scaling of configs
-8. **Phase 8**: `build_comak_knee_config` — bridge model_building → ComakKneeConfig (enables synthetic + MRI paths)
-9. **Phase 9**: NSM pipeline integration — preserve subject bone size through similarity registration (rigid-only + scale undo)
-10. **Commit code changes, then autoformat separately**
+### Completed
+
+0. **Phase 0**: Model audit & API verification — **COMPLETE**
+   - `scripts/phase0_knee_assembly_audit/` — component enumeration, property dumps, constructor spike
+1. **Phase 1**: Data classes + serialization — **COMPLETE**
+   - `nsosim/knee_assembly/config.py` — all dataclasses with JSON round-trip
+2. **Phase 2**: ~~`extract_comak_knee()`~~ — **merged into Phase 3**
+3. **Phase 3**: `strip_comak_knee()` — **COMPLETE**
+   - `nsosim/knee_assembly/strip.py` — extract-as-you-strip, dynamic discovery
+4. **Phase 4**: `add_comak_knee()` — **COMPLETE**
+   - `nsosim/knee_assembly/add.py` — all component add helpers + `knee_frame_orientation` parameter
+5. **Phase 5**: Full round-trip test (structural + simulation) — **COMPLETE**
+   - `tests/test_knee_assembly.py` (64 tests), `tests/test_knee_assembly_forsim.py` (4 tests)
+6. **Phase 6A**: Audit both models + mapping — **COMPLETE**
+   - `scripts/phase6_rajagopal_audit/audit_model.py` — reusable audit for any OpenSim model
+   - `scripts/phase6_rajagopal_audit/build_model_mapping.py` — cross-model body/joint/coordinate/scale mapping
+   - `scripts/phase6_rajagopal_audit/marker_mapping.json` — TRC → Rajagopal marker correspondence
+6. **Phase 6B**: Add COMAK knee to Rajagopal (prototype) — **COMPLETE (scripts, not library code)**
+   - `scripts/phase6_rajagopal_audit/add_comak_to_rajagopal.py` — full pipeline:
+     - Strip Rajagopal's walker knee, patellofemoral joint, constraint, patella body
+     - Swap quad/gastroc wrap surfaces on femur_r (Rajagopal → COMAK personalized wraps)
+     - Build hybrid spanning muscles (Rajagopal proximal paths/wraps + COMAK patella attachments)
+     - Add COMAK knee with `knee_frame_orientation="rajagopal"` for body frame correction
+     - Rescale muscle fiber/tendon lengths to match new (shorter) path lengths
+     - Update gastroc condyle wrap references to COMAK shared ellipsoid
+   - `scripts/phase6_rajagopal_audit/run_forsim_rajagopal.py` — settle + forward sim comparison
+   - `scripts/phase6_rajagopal_audit/scale_rajagopal.py` — ScaleTool-based scaling (rough, replaced by AB)
+   - **Result**: COMAK knee functional in Rajagopal — flexion, settle, contacts, muscles all work
+   - **Known issues**: Manual scaling has pelvis/torso proportion artifacts; needs AddBiomechanics
+
+### Discovered During Phase 6B (Key Lessons)
+
+These findings affect future phases and should inform the pipeline design:
+
+- **Knee frame orientation**: Different models use different femur body frame conventions.
+  The `knee_frame_orientation` parameter on `add_comak_knee()` rotates the weld joint to align
+  COMAK joint axes with the target model's anatomical axes. Presets stored in `KNEE_FRAME_PRESETS`.
+  Currently only applied to the femur weld (not tibia — rotating tibia weld breaks contact mechanics).
+
+- **Spanning muscles need hybrid construction**: Can't use Smith2019's muscle definitions
+  (wrong wraps) or Rajagopal's (wrong patella path). Must extract Rajagopal proximal paths/wraps,
+  merge with COMAK patella attachment points, then rescale fiber/tendon lengths to match the new
+  shorter path. `rescale_muscle_properties_to_path_length()` handles the rescaling.
+
+- **Wrap surfaces on femur_r must come from COMAK**: The quad wraps (`KnExt_at_fem_r`,
+  `KnExt_vasint_at_fem_r`) and gastroc wrap (`Gastroc_at_Condyles_r`) are personalized from
+  bone mesh in the NSM pipeline. Rajagopal's equivalents are replaced. Rajagopal's shank wraps
+  (on tibia_r) are kept.
+
+- **Weld joints are kept (not consolidated)**: They serve as local coordinate frames for the
+  COMAK knee assembly. All ligament/wrap/contact positions are relative to intermediate bodies.
+  Scaling only needs to touch the weld offset — internal geometry stays in its local frame.
+
+- **ForsimTool expects degrees** for rotational coordinates in prescribed kinematics .sto files.
+
+- **Settle must only update COMAK secondary DOF defaults** — not pelvis or other coordinates.
+
+### Next Steps
+
+7. **Phase 6C**: AddBiomechanics scaling — properly scale Rajagopal to Smith2019 subject
+   - Apply marker mapping (`marker_mapping.json`) to Rajagopal model:
+     - Rename 42 existing markers to match TRC naming convention
+     - Create 3 new markers: R.GTR, L.GTR (greater trochanter, ~5% wider than ASIS laterally),
+       L.Clavicle (average of Smith2019 R/L clavicle positions)
+     - Drop 3 TRC markers not in model: S2, R.SH4, L.TH4 (strip from TRC before upload)
+   - Upload to AddBiomechanics with static1.trc → get `rescaling_setup.xml`
+   - Extend scaling XML with COMAK body entries (femur_distal_r, tibia_proximal_r, patella_r)
+   - Apply via ScaleTool → properly scaled Rajagopal
+   - Add COMAK knee to AB-scaled model
+   - Test with overground_17.trc gait data (COMAK IK → forsim → compare)
+
+8. **Phase 7**: `scale_comak_knee_config` + `compute_knee_scale_factor`
+   - Uniform scaling of ComakKneeConfig spatial quantities
+   - Enables adding COMAK knee at any target size without re-running model_building
+
+9. **Phase 8**: `build_comak_knee_config` — bridge model_building → ComakKneeConfig
+   - Package model_building.py outputs (wraps, ligaments, contacts) into ComakKneeConfig
+   - Enables synthetic knee generation and MRI-derived knees
+
+10. **Phase 9**: NSM pipeline integration — preserve subject bone size
+    - Modify similarity registration to decompose into rigid + scale
+    - Apply rigid only, undo scale → aligned at subject's actual size
+    - `linear_transform` encodes subject-sized-mm → canonical mapping
+    - Decode produces subject-sized output directly
+
+11. **Commit code changes, then autoformat separately**
 
 ---
 
