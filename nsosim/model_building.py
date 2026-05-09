@@ -719,6 +719,7 @@ def build_joint_model(
     path_base_osim_model,
     config=None,
     project_meniscal_to_tibia=False,
+    project_coronary=True,
     triangle_density=3_000_000,
 ):
     """Build a subject-specific OpenSim knee model from OSIM-space meshes.
@@ -785,6 +786,14 @@ def build_joint_model(
 
     project_meniscal_to_tibia : bool
         Whether to project meniscal ligament tibia attachments onto tibia surface.
+    project_coronary : bool
+        Whether to project coronary ligament tibia attachments to the closest
+        point on the tibia surface. Defaults to True (the corrected behavior).
+        Set False to match the original comak_1_nsm_fitting.py production
+        behavior, where the coronary block wrote to 'xyz_mesh' instead of
+        the 'xyz_mesh_updated' key consumed by update_osim_model — making
+        the projection dead code. Used in the rewire regression test to
+        confirm bit-exact equivalence with production.
     triangle_density : int
         Triangle density for articular surface extraction (can also be set via config).
 
@@ -987,13 +996,13 @@ def build_joint_model(
     # -----------------------------------------------------------------------
     # CORONARY LIGAMENT TIBIA ATTACHMENTS
     # -----------------------------------------------------------------------
-    print("=== Coronary Ligament Tibia Attachments ===")
-
-    update_coronary_ligament_tibia_attachments(
-        dict_lig_musc_attach_params=dict_lig_musc_attach_params,
-        tib_mesh_osim=tib_mesh_osim,
-        lig_attachment_key="xyz_mesh_updated",
-    )
+    if project_coronary:
+        print("=== Coronary Ligament Tibia Attachments ===")
+        update_coronary_ligament_tibia_attachments(
+            dict_lig_musc_attach_params=dict_lig_musc_attach_params,
+            tib_mesh_osim=tib_mesh_osim,
+            lig_attachment_key="xyz_mesh_updated",
+        )
 
     # -----------------------------------------------------------------------
     # PATELLA
