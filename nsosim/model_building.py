@@ -721,6 +721,7 @@ def build_joint_model(
     project_meniscal_to_tibia=False,
     project_coronary=True,
     triangle_density=3_000_000,
+    folder_save_bones=None,
 ):
     """Build a subject-specific OpenSim knee model from OSIM-space meshes.
 
@@ -796,6 +797,12 @@ def build_joint_model(
         confirm bit-exact equivalence with production.
     triangle_density : int
         Triangle density for articular surface extraction (can also be set via config).
+    folder_save_bones : str or None
+        Directory for per-bone intermediate outputs (subdirs femur/, tibia/,
+        patella/). Defaults to ``save_dir`` when None — keeps the synthetic-
+        joint behavior where per-bone files sit alongside the model dir.
+        Pass an explicit path (e.g. ``geometries_nsm_similarity``) to keep
+        per-bone outputs separate from the model's parent directory.
 
     Returns
     -------
@@ -814,7 +821,8 @@ def build_joint_model(
     fitter_configs = cfg("fitter_configs", None)
     patella_wrap_dim_scale = cfg("patella_wrap_dimension_scale", 0.9)
     folder_ref_recons = ref_data_paths["folder_ref_recons"]
-    folder_save_bones = save_dir
+    if folder_save_bones is None:
+        folder_save_bones = save_dir
 
     fitted_wrap_parameters = {}
 
