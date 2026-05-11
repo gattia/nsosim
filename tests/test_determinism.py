@@ -362,14 +362,10 @@ class TestPostProcessingDeterminism:
         a, b = decoded_meshes
 
         set_global_seed(42)
-        art_a = create_articular_surfaces(
-            a["femur"]["bone"], a["femur"]["cart"], n_largest=1
-        )
+        art_a = create_articular_surfaces(a["femur"]["bone"], a["femur"]["cart"], n_largest=1)
 
         set_global_seed(42)
-        art_b = create_articular_surfaces(
-            b["femur"]["bone"], b["femur"]["cart"], n_largest=1
-        )
+        art_b = create_articular_surfaces(b["femur"]["bone"], b["femur"]["cart"], n_largest=1)
 
         ok, msg = _mesh_arrays_equal(art_a, art_b)
         assert ok, f"femur articular surface not bit-identical: {msg}"
