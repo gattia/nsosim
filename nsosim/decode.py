@@ -35,6 +35,7 @@ def decode_latent_to_osim(
     model_config,
     n_pts_per_axis=256,
     clusters=None,
+    seed=0,
 ):
     """Decode a latent vector to OSIM-space meshes for a single bone.
 
@@ -55,10 +56,18 @@ def decode_latent_to_osim(
         n_pts_per_axis (int): Marching-cubes grid resolution per axis.
         clusters (dict or None): Per-mesh resampling targets, e.g.
             ``{'bone': 20000, 'cart': None}``. ``None`` to skip resampling.
+        seed (int or None): Seed for all RNGs (PyTorch, CUDA, NumPy, Python
+            ``random``, cudnn flags) used during decode. Defaults to 0 for
+            deterministic output. Pass ``None`` to opt out.
 
     Returns:
         dict: ``{'bone': Mesh, 'cart': Mesh, ...}`` — keys from ``mesh_names``.
     """
+    if seed is not None:
+        from nsosim._determinism import set_global_seed
+
+        set_global_seed(seed)
+
     n_objects = model_config.get("objects_per_decoder", 1)
     mesh_names = get_mesh_names(model_config)
 
@@ -112,6 +121,7 @@ def decode_joint_from_descriptors(
     fem_ref_center,
     n_pts_per_axis=256,
     clusters=None,
+    seed=0,
 ):
     """Decode a full joint from per-bone latent vectors and pose transforms.
 
@@ -134,10 +144,18 @@ def decode_joint_from_descriptors(
         clusters (dict or None): Per-bone resampling targets, e.g.
             ``{'femur': {'bone': 20000}, 'tibia': {'bone': 20000}}``.
             ``None`` to skip all resampling.
+        seed (int or None): Seed for all RNGs. Set once at the top so the
+            three per-bone decode calls share a single deterministic stream.
+            Defaults to 0. Pass ``None`` to opt out.
 
     Returns:
         dict: ``{'femur': {'bone': Mesh, ...}, 'tibia': {...}, 'patella': {...}}``.
     """
+    if seed is not None:
+        from nsosim._determinism import set_global_seed
+
+        set_global_seed(seed)
+
     T_tib = recover_bone_transform(T_rel_tib, T_fem)
     T_pat = recover_bone_transform(T_rel_pat, T_fem)
 
@@ -161,6 +179,7 @@ def decode_joint_from_descriptors(
             model_config=model_configs[bone],
             n_pts_per_axis=n_pts_per_axis,
             clusters=bone_clusters,
+            seed=None,
         )
 
     return result

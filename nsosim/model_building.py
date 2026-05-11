@@ -213,6 +213,67 @@ def interpolate_bone_ligaments(
     return labeled_mesh, labeled_mesh_points, lig_xyz_points_updated, list_lig_musc_name_pt_idx
 
 
+def _fit_with_restarts(
+    fitter_class,
+    constructor_kwargs,
+    fit_kwargs,
+    points,
+    n_restarts=1,
+    jitter_scale=1e-6,
+):
+    """Run fitter.fit() ``n_restarts`` times and return the fitter with the
+    lowest ``final_loss``.
+
+    The wrap fitters (CylinderFitter / EllipsoidFitter) are deterministic
+    given a fixed seed and identical input — but they're also sensitive to
+    sub-micron input perturbations near degenerate axis configurations,
+    which means tiny upstream drift in the bone mesh (from grid_sample
+    backward CUDA non-determinism) can amplify into mm-scale wrap surface
+    drift. Multi-start with input jitter gives the fitter a chance to find
+    the dominant optimum across small perturbations rather than locking
+    onto whatever local minimum the unperturbed init lands in.
+
+    First restart uses the unperturbed input (matches single-fit behavior
+    when n_restarts=1). Subsequent restarts add gaussian jitter scaled by
+    ``jitter_scale`` (default 1 µm — well below MRI voxel resolution and
+    smaller than the upstream drift we're trying to hedge against).
+    """
+    import numpy as np
+    import torch
+
+    points_arr = np.asarray(points, dtype=np.float64)
+    best_fitter = None
+
+    for k in range(n_restarts):
+        if k == 0:
+            jittered = points_arr
+        else:
+            # Deterministic per-restart jitter: tie torch+numpy state to k.
+            torch.manual_seed(int(1e6) + k)
+            np.random.seed(int(1e6) + k)
+            jittered = points_arr + np.random.randn(*points_arr.shape) * jitter_scale
+
+        fitter = fitter_class(**constructor_kwargs)
+        these_fit_kwargs = dict(fit_kwargs)
+        these_fit_kwargs["points"] = jittered
+        # Carry over near_surface_points override (used by CylinderFitter).
+        if "near_surface_points" in fit_kwargs and fit_kwargs["near_surface_points"] is not None:
+            # Same indices were already applied — just jitter the same way.
+            ns = np.asarray(fit_kwargs["near_surface_points"], dtype=np.float64)
+            if k == 0:
+                these_fit_kwargs["near_surface_points"] = ns
+            else:
+                these_fit_kwargs["near_surface_points"] = (
+                    ns + np.random.randn(*ns.shape) * jitter_scale
+                )
+        fitter.fit(**these_fit_kwargs)
+
+        if best_fitter is None or fitter.final_loss < best_fitter.final_loss:
+            best_fitter = fitter
+
+    return best_fitter
+
+
 def fit_bone_wrap_surfaces(
     bone_name,
     labeled_mesh,
@@ -220,6 +281,8 @@ def fit_bone_wrap_surfaces(
     wrap_surface_spec=None,
     fitter_configs=None,
     patella_wrap_dimension_scale=0.9,
+    n_restarts=1,
+    jitter_scale=1e-6,
 ):
     """Fit wrap surfaces to a labeled bone mesh.
 
@@ -244,6 +307,16 @@ def fit_bone_wrap_surfaces(
         Fitter configurations. If None, uses DEFAULT_FITTING_CONFIG.
     patella_wrap_dimension_scale : float
         Scale factor for patella wrap surface dimensions (default 0.9 = 10% reduction).
+    n_restarts : int
+        Number of multi-start restarts per wrap surface (default 1 = no multi-start,
+        preserves prior behavior). Set to 3+ to hedge against wrap-fitter
+        sensitivity to sub-micron input drift; pays ~n_restarts× the wrap fitting
+        time but improves run-to-run reproducibility of wrap surface params.
+    jitter_scale : float
+        Std-dev of gaussian noise added to input points on restart 2+, in metres.
+        Default 1e-6 (1 µm) — well below biomechanically meaningful scale and
+        comparable to the upstream input drift the multi-start is hedging against.
+        Ignored if n_restarts == 1.
 
     Returns
     -------
@@ -286,14 +359,20 @@ def fit_bone_wrap_surfaces(
                     labels = labeled_mesh[f"{wrap_name}_binary"].copy()
                     sdf = labeled_mesh[f"{wrap_name}_sdf"].copy()
 
-                    fitter = EllipsoidFitter(**ellipsoid_constructor)
-                    fitter.fit(
-                        points=labeled_mesh_points,
+                    fit_kwargs = dict(
                         labels=labels,
                         sdf=sdf,
                         mesh=labeled_mesh,
                         surface_name=wrap_name,
                         **ellipsoid_fit,
+                    )
+                    fitter = _fit_with_restarts(
+                        EllipsoidFitter,
+                        ellipsoid_constructor,
+                        fit_kwargs,
+                        labeled_mesh_points,
+                        n_restarts=n_restarts,
+                        jitter_scale=jitter_scale,
                     )
                     wrap_params = fitter.wrap_params
                     wrap_params.name = wrap_name
@@ -310,15 +389,21 @@ def fit_bone_wrap_surfaces(
                     near_surface_labels = labels[near_surface_bool == 1]
                     near_surface_sdf = sdf[near_surface_bool == 1]
 
-                    fitter = CylinderFitter(**cylinder_constructor)
-                    fitter.fit(
-                        points=near_surface_points,
+                    fit_kwargs = dict(
                         labels=near_surface_labels,
                         sdf=near_surface_sdf,
                         mesh=labeled_mesh,
                         surface_name=wrap_name,
                         near_surface_points=near_surface_points,
                         **cylinder_fit,
+                    )
+                    fitter = _fit_with_restarts(
+                        CylinderFitter,
+                        cylinder_constructor,
+                        fit_kwargs,
+                        near_surface_points,
+                        n_restarts=n_restarts,
+                        jitter_scale=jitter_scale,
                     )
                     wrap_params = fitter.wrap_params
                     wrap_params.name = wrap_name
@@ -722,6 +807,7 @@ def build_joint_model(
     project_coronary=True,
     triangle_density=3_000_000,
     folder_save_bones=None,
+    seed=0,
 ):
     """Build a subject-specific OpenSim knee model from OSIM-space meshes.
 
@@ -803,6 +889,11 @@ def build_joint_model(
         joint behavior where per-bone files sit alongside the model dir.
         Pass an explicit path (e.g. ``geometries_nsm_similarity``) to keep
         per-bone outputs separate from the model's parent directory.
+    seed : int or None
+        Seed for all RNGs (PyTorch, CUDA, NumPy, Python ``random``, cudnn
+        flags). Pinned at the top of the orchestrator so wrap-surface fitting
+        and any downstream sampling are deterministic. Defaults to 0. Pass
+        ``None`` to opt out.
 
     Returns
     -------
@@ -810,6 +901,11 @@ def build_joint_model(
         Path to the saved .osim model file.
     """
     import opensim as osim
+
+    if seed is not None:
+        from ._determinism import set_global_seed
+
+        set_global_seed(seed)
 
     if config is None:
         config = {}
@@ -820,6 +916,8 @@ def build_joint_model(
     tri_density = cfg("triangle_density", triangle_density)
     fitter_configs = cfg("fitter_configs", None)
     patella_wrap_dim_scale = cfg("patella_wrap_dimension_scale", 0.9)
+    wrap_n_restarts = cfg("wrap_n_restarts", 1)
+    wrap_jitter_scale = cfg("wrap_jitter_scale", 1e-6)
     folder_ref_recons = ref_data_paths["folder_ref_recons"]
     if folder_save_bones is None:
         folder_save_bones = save_dir
@@ -879,6 +977,8 @@ def build_joint_model(
         labeled_mesh=fem_labeled_mesh,
         labeled_mesh_points=fem_labeled_points,
         fitter_configs=fitter_configs,
+        n_restarts=wrap_n_restarts,
+        jitter_scale=wrap_jitter_scale,
     )
 
     # Apply ligament updates after wrap fitting (matches original order)
@@ -935,6 +1035,8 @@ def build_joint_model(
         labeled_mesh=tib_labeled_mesh,
         labeled_mesh_points=tib_labeled_points,
         fitter_configs=fitter_configs,
+        n_restarts=wrap_n_restarts,
+        jitter_scale=wrap_jitter_scale,
     )
 
     # Apply ligament updates

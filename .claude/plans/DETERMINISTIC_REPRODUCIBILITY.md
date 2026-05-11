@@ -1,9 +1,68 @@
 # Make NSM Fitting & Decode Deterministic
 
-**Status:** Planned — no implementation yet.
+**Status:** Tasks 1, 2, 4 implemented (2026-05-10). Tasks 3, 5, 6 still pending — they live in `comak_gait_simulation` and need a real subject run to verify.
 **Driver:** Verification work in `comak_gait_simulation` traced cascading Step 2 biomechanical variance (5–15% NRMSE on contact pressures, ~3° on PF flexion, 28-39% COMAK convergence flips) back to NSM-fitting stochasticity. Two independent runs of the same code on the same subject produce different geometry → different contact mechanics → different optimizer trajectories.
 
 **Goal:** Given identical inputs (subject mesh + model weights + config), produce bit-identical outputs across runs. This unlocks pipeline verification with tight tolerances and reproducibility for paper-grade results.
+
+## Implementation status (2026-05-10)
+
+| Task | Status | Notes |
+|---|---|---|
+| 1. `set_global_seed()` utility | ✅ Done | [`nsosim/_determinism.py`](../../nsosim/_determinism.py) |
+| 2. Wire seed into entry points | ✅ Done | `seed=0` default on `fit_nsm`, `align_knee_osim_fit_nsm`, `align_bone_osim_fit_nsm`, `nsm_recon_to_osim`, `decode_latent_to_osim`, `decode_joint_from_descriptors`, `build_joint_model` |
+| 3. Confirm meniscus boundary stability | ⚠️ Partial | Unit-tested on decoded reference meshes — bit-identical (medial + lateral). Needs verification on real subject geometry via Task 6. |
+| 4. Bit-identical determinism test | ✅ Done | [`tests/test_determinism.py`](../../tests/test_determinism.py) — 12 tests covering decode + post-processing (articular surfaces, both menisci, fat pad). All bit-identical on TITAN Xp. Slurm script: [`scripts/determinism_verification/run_determinism_test.sbatch`](../../scripts/determinism_verification/run_determinism_test.sbatch) |
+| 5. Update `comak_gait_simulation` to pass seed | ⚠️ Optional | Default seed=0 is wired through, so two consecutive comak_1 runs are already deterministic without code changes there. An explicit `--seed` flag is still nice-to-have for reproducibility audits. |
+| 6. Re-run verification | ⏳ Pending | Integration script ready: [`comak_gait_simulation/tests/verify_determinism/submit_determinism_check.sh`](file:///dataNAS/people/aagatti/projects/comak_gait_simulation/tests/verify_determinism/submit_determinism_check.sh). Submit when ready. |
+
+**What we know now (post-Task 4):**
+- Decode → mesh: bit-identical
+- ACVD resample: bit-identical (when input is)
+- Articular surface extraction: bit-identical
+- Meniscus articulating surface (medial + lateral): bit-identical — closes the persistent failure flagged below
+- Prefemoral fat pad: bit-identical
+
+**What remains unverified until Task 6:**
+- `fit_nsm` Adam/LBFGS path on a real subject mesh (the unit tests don't have raw subject input fixtures, only post-fit outputs)
+- Wrap surface fitting on a real labeled bone mesh
+- `.osim` XML output reproducibility
+- The full Step 1 → Step 2 verification chain
+
+## End-to-end findings (2026-05-10, jobs 46776 → 46788)
+
+After running the integration test (`comak_gait_simulation/tests/verify_determinism/submit_determinism_check.sh`) repeatedly with progressively more fixes:
+
+### What worked
+
+1. **Seed AFTER `model.cuda()`** — `model.cuda()` consumes CUDA random state during weight transfer. Seeding before leaves the CUDA RNG at an unpredictable offset. Fix: in `nsosim/utils.py:fit_nsm`, call `set_global_seed(seed)` *after* `load_model(...)`. (Inspired by `kneepipeline/steps/run_nsm.py`.) Result: NSM mesh ASSDs dropped to <0.0001 mm.
+
+2. **Wrap surface multi-start** (3 restarts, sub-micron input jitter) — helps for some wraps (Capsule_r 1.16mm → 0.001mm) but is a mixed bag overall. Best-of-3 reduces wrap fail count from ~4-5 to ~3 per run.
+
+### What did NOT work (counterintuitively)
+
+**Adam+LBFGS hybrid NSM optimizer**, per the `HYBRID_OPTIMIZER_REPORT.md` recipe (`test_hybrid_norm_10_3_full_dataset.json`): made reproducibility **10-30× worse** on every mesh, and 8 wrap fails vs 3-5 with plain Adam.
+
+| Mesh | Plain Adam ASSD | Hybrid Adam+LBFGS ASSD | Latent max_abs |
+|---|---|---|---|
+| Femur bone | 0.000045 mm | **0.001452 mm** (32×) | 1e-4 → 6e-3 |
+| Femur cart | 0.000023 mm | **0.000769 mm** (33×) | |
+| Tibia bone | 0.000027 mm | **0.000296 mm** (11×) | |
+| Patella bone | 0.000008 mm | **0.000085 mm** (11×) | |
+
+**Why**: LBFGS uses a Hessian approximation built from recent gradients. With `grid_sample` backward producing non-deterministic CUDA gradients (PyTorch limitation, not nsosim), the Hessian approximation diverges between runs, sending the L-BFGS optimizer along different directions. Adam's momentum smoothing happens to dampen this gradient noise; LBFGS's curvature estimator amplifies it.
+
+The hybrid recipe was tuned for **single-run fit quality** (best ASSD against ground truth), not **run-to-run reproducibility**. Different objectives. The hybrid plumbing stays in nsosim as an available knob (`use_hybrid_optimizer=True` on `fit_nsm` / `align_*_osim_fit_nsm`); just don't enable it for reproducibility runs.
+
+### Wrap-fitter sensitivity remains the residual issue
+
+Bone meshes are reproducible to <0.0001 mm but the wrap fitter (CylinderFitter, EllipsoidFitter) amplifies micron-scale input drift into mm-scale wrap surface drift, particularly for the `Gastroc_at_Condyles_r` ellipsoid (Euler angles near gimbal-lock singularity → ambiguous parameter representation of geometrically-similar surfaces). Multi-start helps some configurations and hurts others.
+
+**Where it leaves us**: geometric meshes meet the <0.05mm ASSD bar comfortably; a handful of wrap surfaces still drift 0.3-1.5 mm. End-to-end COMAK verification (Task 6) will tell us whether this matters biomechanically. The wrap-fitter robustness is a separate workstream.
+
+### Best combination (committed)
+
+Plain Adam + wrap multi-start (`wrap_n_restarts=3`, `wrap_jitter_scale=1e-6`). Hybrid NSM available but not enabled by default.
 
 ## Why this matters
 

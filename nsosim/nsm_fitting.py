@@ -45,6 +45,9 @@ def align_bone_osim_fit_nsm(
     convergence_patience=50,
     femur_transform=None,
     femur_acs_inverse=None,
+    seed=0,
+    use_hybrid_optimizer=False,
+    hybrid_config=None,
 ):
     """
     Aligns a single bone (femur, tibia, or patella) and its cartilage, then fits an NSM.
@@ -256,6 +259,9 @@ def align_bone_osim_fit_nsm(
         n_samples_latent_recon=n_samples_latent_recon,
         num_iter=num_iter,
         convergence_patience=convergence_patience,
+        seed=seed,
+        use_hybrid_optimizer=use_hybrid_optimizer,
+        hybrid_config=hybrid_config,
     )
 
     # SAVE THE RECONSTRUCTED MESHES - IN THE DICT, AND BOTH IN mm AND m
@@ -294,6 +300,9 @@ def align_knee_osim_fit_nsm(
     rigid_reg_type="rigid",
     acs_align=False,
     bones_to_ignore=["meniscus"],
+    seed=0,
+    use_hybrid_optimizer=False,
+    hybrid_config=None,
 ):
     """
     Aligns all knee bones (femur, tibia, patella) and their cartilages, then fits NSMs.
@@ -323,10 +332,18 @@ def align_knee_osim_fit_nsm(
         rigid_reg_type (str, optional): Type of rigid registration. Defaults to 'rigid'.
         acs_align (bool, optional): Whether to perform ACS alignment for the femur.
             Defaults to False.
+        seed (int or None, optional): Seed for all RNGs (PyTorch, CUDA, NumPy,
+            Python ``random``, cudnn flags) used during fitting. Defaults to 0
+            for deterministic output. Pass ``None`` to opt out.
 
     Returns:
         dict: The updated `dict_bones` with results from NSM fitting for all bones.
     """
+
+    if seed is not None:
+        from ._determinism import set_global_seed
+
+        set_global_seed(seed)
 
     # Validate dict_bones structure before processing
     validate_dict_bones(dict_bones)
@@ -370,6 +387,9 @@ def align_knee_osim_fit_nsm(
             convergence_patience=convergence_patience,
             femur_transform=femur_transform,
             femur_acs_inverse=femur_acs_inverse,
+            seed=seed,
+            use_hybrid_optimizer=use_hybrid_optimizer,
+            hybrid_config=hybrid_config,
         )
 
         recon_dict = dict_bones[bone]["subject"]["recon_dict"]
@@ -877,6 +897,7 @@ def nsm_recon_to_osim(
     bone_clusters=20_000,
     cart_clusters=None,
     men_clusters=None,
+    seed=0,
 ):
     """
     Transforms NSM-reconstructed bone and cartilage meshes to OSIM coordinates.
@@ -899,6 +920,10 @@ def nsm_recon_to_osim(
             bone mesh after coordinate conversion. If None, no resampling. Defaults to 20_000.
         cart_clusters (int, optional): Target number of points for resampling the
             cartilage mesh after coordinate conversion. If None, no resampling. Defaults to None.
+        seed (int or None, optional): Seed for all RNGs. Pinned here too because
+            ``resample_surface`` (ACVD) is sensitive to upstream numerical noise
+            and we want any determinism guarantee to hold from a single call.
+            Defaults to 0. Pass ``None`` to opt out.
 
     Returns:
         tuple: A tuple containing:
@@ -907,6 +932,11 @@ def nsm_recon_to_osim(
             - cart_mesh_osim (pymskt.mesh.Mesh): The cartilage mesh with points in
               OSIM coordinates, optionally resampled.
     """
+    if seed is not None:
+        from ._determinism import set_global_seed
+
+        set_global_seed(seed)
+
     dict_osim_surfaces = {}
     bone_mesh_nsm = dict_bones[bone]["subject"]["bone_mesh_nsm"].copy()
     bone_mesh_osim = _nsm_recon_to_osim_single_surface(

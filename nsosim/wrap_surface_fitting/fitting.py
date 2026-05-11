@@ -383,6 +383,11 @@ class BaseShapeFitter(ABC):
             surface_name: Surface name (required for geometric initialization)
             near_surface_points: Optional (N, 3) array/tensor of points known to be near the surface
         """
+        # Sentinel for multi-start selection. Stays at +inf if a fit aborts
+        # before any stage completes (e.g. Adam-only run with use_lbfgs=False
+        # — currently not used but kept defensive).
+        self.final_loss = float("inf")
+
         # 1. Prepare data
         x, y = self._prepare_data(points, labels)
 
@@ -654,6 +659,8 @@ class BaseShapeFitter(ABC):
                 final_loss = self._compute_shape_loss(
                     final_d, y, sdf_tensor, near_surface_points_tensor, margin, final_epoch
                 )
+                # Expose for multi-start/restart selection
+                self.final_loss = float(final_loss.item())
                 logger.info(f"{stage_name} final loss: {final_loss.item():.6f}")
                 improvement = ((initial_loss - final_loss) / initial_loss * 100).item()
                 logger.info(f"{stage_name} improvement: {improvement:.2f}%")

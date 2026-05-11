@@ -260,6 +260,36 @@ def read_iv(file_path):
     return mesh
 
 
+#: Default hybrid Adam+LBFGS optimizer config for NSM latent reconstruction.
+#: Sourced from /dataNAS/people/aagatti/programming/NSM/planning/HYBRID_OPTIMIZER_REPORT.md
+#: (test_hybrid_norm_10_3_full_dataset.json — chosen recipe, 139-case validated).
+#: LBFGS uses curvature info to converge tighter than plain Adam, reducing
+#: per-vertex drift that the wrap fitter is sensitive to.
+DEFAULT_HYBRID_OPTIMIZER_CONFIG = {
+    "hybrid_optimizer": True,
+    "adam_iterations": 10,
+    "lbfgs_iterations": 50,
+    "lbfgs_lr": 1.0,
+    "lbfgs_max_iter": 10,
+    "lbfgs_history_size": 50,
+    "latent_norm": 10.0,
+    "use_soft_norm_constraint": True,  # default — soft quadratic penalty
+    "norm_penalty_weight": 100.0,
+    "norm_penalty_type": "quadratic",
+    # Tuned alongside hybrid; override model_config values when hybrid is on
+    "lr": 1e-2,
+    "n_lr_updates": 1,
+    "lr_update_factor": 1.1,
+    "loss_type": "l1",
+    "convergence": "recon_loss",
+    "convergence_patience": 5,
+    "n_samples_latent_recon": 1_000_000,
+    "batch_size_latent_recon": 1_000_000,
+    "num_iterations": 2000,
+    "clamp_dist": 0.1,
+}
+
+
 def recon_mesh(
     mesh_paths,
     model,
@@ -271,6 +301,8 @@ def recon_mesh(
     verbose=False,
     clip_bone=True,
     clip_bone_max_z_rel_x=0.7,
+    use_hybrid_optimizer=False,
+    hybrid_config=None,
 ):
     """
     Reconstructs meshes using a Neural Shape Model (NSM) by fitting to target meshes.
@@ -344,7 +376,9 @@ def recon_mesh(
             clipped_bone_mesh.save_mesh(temp_bone_mesh_path)
             mesh_paths[0] = temp_bone_mesh_path
 
-    mesh_result = reconstruct_mesh(
+    # Build kwargs for reconstruct_mesh. Defaults from model_config; if
+    # use_hybrid_optimizer is on, overlay the tuned hybrid recipe values on top.
+    recon_kwargs = dict(
         path=mesh_paths,
         decoders=model,
         latent_size=model_config["latent_size"],
@@ -379,6 +413,30 @@ def recon_mesh(
         verbose=verbose,
         return_registration_params=True,
     )
+
+    if use_hybrid_optimizer:
+        # Merge default hybrid recipe with caller override (override wins).
+        cfg = dict(DEFAULT_HYBRID_OPTIMIZER_CONFIG)
+        if hybrid_config:
+            cfg.update(hybrid_config)
+        # Override recon_kwargs with hybrid values where they exist.
+        for key, value in cfg.items():
+            recon_kwargs[key] = value
+        # Caller-supplied n_samples_latent_recon and num_iter still take
+        # precedence if explicitly passed (non-None).
+        if n_samples_latent_recon is not None:
+            recon_kwargs["n_samples_latent_recon"] = n_samples_latent_recon
+        if num_iter is not None:
+            recon_kwargs["num_iterations"] = num_iter
+        logger.info(
+            "Using hybrid Adam+LBFGS optimizer (adam=%d, lbfgs=%d, lr=%.4f, norm=%.1f)",
+            recon_kwargs["adam_iterations"],
+            recon_kwargs["lbfgs_iterations"],
+            recon_kwargs["lr"],
+            recon_kwargs.get("latent_norm", -1),
+        )
+
+    mesh_result = reconstruct_mesh(**recon_kwargs)
 
     if clip_bone and (model_config["bone"] in ["femur", "tibia"]) and (mesh_paths[0] is not None):
         # delete the temp clipped mesh
@@ -550,6 +608,9 @@ def fit_nsm(
     num_iter=None,
     convergence_patience=10,
     dict_update_params=None,
+    seed=0,
+    use_hybrid_optimizer=False,
+    hybrid_config=None,
 ):
     """
     Fits a Neural Shape Model (NSM) to a list of target meshes.
@@ -571,6 +632,10 @@ def fit_nsm(
             to wait before stopping. Defaults to 10.
         scale_jointly (bool, optional): If True and multiple meshes are provided,
             their scaling is optimized jointly. Defaults to False.
+        seed (int or None, optional): Seed for all RNGs used during fitting (PyTorch,
+            CUDA, NumPy, Python ``random``, cudnn flags). Defaults to 0 for
+            deterministic output. Pass ``None`` to opt out and preserve the
+            previous stochastic behavior.
 
     Returns:
         tuple: A tuple containing:
@@ -589,13 +654,28 @@ def fit_nsm(
 
     model = load_model(model_config, path_model_state, model_type="triplanar")
 
+    # Seed AFTER model loading: model.cuda() consumes CUDA random state during
+    # weight transfer, so seeding before would leave the CUDA RNG at an
+    # unpredictable offset by the time recon_mesh's optimizer runs. Verified
+    # in kneepipeline/steps/run_nsm.py.
+    if seed is not None:
+        from ._determinism import set_global_seed
+
+        set_global_seed(seed)
+
+    # When the hybrid recipe is on, let its tuned n_samples_latent_recon
+    # default (1e6) win — pass None so recon_mesh uses the hybrid value.
+    effective_n_samples = None if use_hybrid_optimizer else n_samples_latent_recon
+
     recon_output = recon_mesh(
         list_paths_meshes,
         model,
         model_config,
-        n_samples_latent_recon=n_samples_latent_recon,
+        n_samples_latent_recon=effective_n_samples,
         num_iter=num_iter,
         convergence_patience=convergence_patience,
+        use_hybrid_optimizer=use_hybrid_optimizer,
+        hybrid_config=hybrid_config,
     )
 
     # Add the model to the mesh_result dictionary within recon_output

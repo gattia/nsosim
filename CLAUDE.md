@@ -556,6 +556,18 @@ fitted_wrap_parameters = {
 
 ## Key Design Decisions
 
+### Determinism (default seed=0 on public entry points)
+The fitting + decode pipelines are deterministic by default. Public API entry points accept a `seed` parameter (defaults to 0; pass `None` to opt out and restore stochastic behavior):
+
+- `nsosim.utils.fit_nsm`
+- `nsosim.nsm_fitting.align_knee_osim_fit_nsm` / `align_bone_osim_fit_nsm` / `nsm_recon_to_osim`
+- `nsosim.decode.decode_latent_to_osim` / `decode_joint_from_descriptors`
+- `nsosim.model_building.build_joint_model`
+
+Each calls `nsosim._determinism.set_global_seed(seed)` at the top, which pins Python `random`, NumPy, torch CPU+CUDA, and sets `cudnn.deterministic=True`, `cudnn.benchmark=False`. Two runs with the same seed and inputs produce **bit-identical** mesh point coordinates (verified by `tests/test_determinism.py` — 12 tests covering decode, ACVD resample, articular surface extraction, both meniscus articulating surfaces, and prefemoral fat pad).
+
+The seed parameter does NOT propagate downstream into COMAK simulation — only the geometry pipeline up to `.osim` is pinned. See `.claude/plans/DETERMINISTIC_REPRODUCIBILITY.md` for the full story and the comak_gait_simulation integration test (`tests/verify_determinism/submit_determinism_check.sh`).
+
 ### `LOC_SDF_CACHE` Environment Variable
 `nsm_fitting.py:13` sets `os.environ["LOC_SDF_CACHE"] = ""` at import time. This is a workaround — the upstream NSM library expects this env var to exist but nsosim doesn't use it. Without this line, importing from `NSM.mesh.interpolate` would fail.
 
