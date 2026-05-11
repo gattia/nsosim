@@ -1,9 +1,10 @@
 # Make NSM Fitting & Decode Deterministic
 
-**Status:** Tasks 1, 2, 4 implemented (2026-05-10). Tasks 3, 5, 6 still pending — they live in `comak_gait_simulation` and need a real subject run to verify.
-**Driver:** Verification work in `comak_gait_simulation` traced cascading Step 2 biomechanical variance (5–15% NRMSE on contact pressures, ~3° on PF flexion, 28-39% COMAK convergence flips) back to NSM-fitting stochasticity. Two independent runs of the same code on the same subject produce different geometry → different contact mechanics → different optimizer trajectories.
+**Status (2026-05-10):** Tasks 1, 2, 4 implemented. Tasks 3, 5, 6 verified via end-to-end test in `comak_gait_simulation` (job 46797). **Outcome: substantially improved but not bit-identical.** NSM mesh outputs reproducible to ~1e-4 mm (CUDA reproducibility floor); most wrap surfaces also sub-0.05 mm ASSD; four specific wrap surfaces still drift 0.17–1.18 mm between two seeded runs with multi-start. The original "bit-identical" goal is not achievable while CUDA SDF gradients remain non-deterministic and the wrap fitter operates near singular configurations.
 
-**Goal:** Given identical inputs (subject mesh + model weights + config), produce bit-identical outputs across runs. This unlocks pipeline verification with tight tolerances and reproducibility for paper-grade results.
+**Driver:** Verification work in `comak_gait_simulation` traced cascading Step 2 biomechanical variance (5–15% NRMSE on contact pressures, ~3° on PF flexion, 28-39% COMAK convergence flips) back to NSM-fitting stochasticity. Two independent runs of the same code on the same subject produced different geometry → different contact mechanics → different optimizer trajectories.
+
+**Goal (revised after end-to-end test):** Given identical inputs (subject mesh + model weights + config), produce outputs that agree to within the CUDA reproducibility floor on NSM mesh reconstruction (~1e-4 mm vertex drift) and within a known small tolerance on downstream fitted parameters. Bit-identity is not achievable for this stochastic GPU workflow; tight bounded drift is.
 
 ## Implementation status (2026-05-10)
 
@@ -11,10 +12,10 @@
 |---|---|---|
 | 1. `set_global_seed()` utility | ✅ Done | [`nsosim/_determinism.py`](../../nsosim/_determinism.py) |
 | 2. Wire seed into entry points | ✅ Done | `seed=0` default on `fit_nsm`, `align_knee_osim_fit_nsm`, `align_bone_osim_fit_nsm`, `nsm_recon_to_osim`, `decode_latent_to_osim`, `decode_joint_from_descriptors`, `build_joint_model` |
-| 3. Confirm meniscus boundary stability | ⚠️ Partial | Unit-tested on decoded reference meshes — bit-identical (medial + lateral). Needs verification on real subject geometry via Task 6. |
-| 4. Bit-identical determinism test | ✅ Done | [`tests/test_determinism.py`](../../tests/test_determinism.py) — 12 tests covering decode + post-processing (articular surfaces, both menisci, fat pad). All bit-identical on TITAN Xp. Slurm script: [`scripts/determinism_verification/run_determinism_test.sbatch`](../../scripts/determinism_verification/run_determinism_test.sbatch) |
-| 5. Update `comak_gait_simulation` to pass seed | ⚠️ Optional | Default seed=0 is wired through, so two consecutive comak_1 runs are already deterministic without code changes there. An explicit `--seed` flag is still nice-to-have for reproducibility audits. |
-| 6. Re-run verification | ⏳ Pending | Integration script ready: [`comak_gait_simulation/tests/verify_determinism/submit_determinism_check.sh`](file:///dataNAS/people/aagatti/projects/comak_gait_simulation/tests/verify_determinism/submit_determinism_check.sh). Submit when ready. |
+| 3. Confirm meniscus boundary stability | ✅ Done | Unit tests bit-identical on decoded reference meshes (medial + lateral). End-to-end test (job 46797): both meniscus articulating surfaces match to ASSD < 0.05 mm on real subject geometry. The persistent `med_men_lower_art_surf` boundary-extraction failure is resolved. |
+| 4. Bit-identical determinism test | ✅ Done | [`tests/test_determinism.py`](../../tests/test_determinism.py) — 12 tests covering decode + post-processing (articular surfaces, both menisci, fat pad). All bit-identical on TITAN Xp. |
+| 5. Update `comak_gait_simulation` to pass seed | ✅ Done implicitly | `seed=0` default propagates through all entry points, so the integration test runs deterministically without code changes in `comak_1_nsm_fitting.py`. An explicit `--seed` flag is still a nice-to-have for reproducibility audits but not required. |
+| 6. Re-run verification | ✅ Done | See "End-to-end results" section below. Outcome: substantial improvement, not bit-identical. |
 
 **What we know now (post-Task 4):**
 - Decode → mesh: bit-identical
@@ -183,9 +184,79 @@ Once Tasks 1+2 ship: rerun `comak_gait_simulation/tests/verify_pipeline/submit_v
 - `comak_gait_simulation/.claude/plans/VERIFICATION_PHASES_BC_PLAN.md` — Steps 3, 4, 5 (calibrate stochasticity ceiling) become moot once determinism lands; Step 1 geometry tolerances can drop from 0.1mm ASSD to ~1e-6 mm.
 - `comak_gait_simulation/CLAUDE.md` Gotchas section — the ACVD scale-up pattern for NSM-space meshes.
 
-## Done when
+## Done when (revised after end-to-end test)
 
-- `set_global_seed()` exists and is called from all public entry points.
-- Two runs of `fit_nsm(seed=42)` on the same subject produce bit-identical latents and mesh point coordinates.
-- The verification suite in `comak_gait_simulation` runs with two fresh seeded runs and reports bit-identical Step 1 geometry.
-- Step 2 biomechanical variance drops to numerical noise (or, if it doesn't, we have proof that COMAK itself contributes non-determinism worth investigating separately).
+- ✅ `set_global_seed()` exists and is called from all public entry points
+- ⚠️ Two runs of `fit_nsm(seed=0)` agree to ~1e-4 mm vertex drift, not bit-identical (CUDA SDF gradient non-determinism, not nsosim's bug)
+- ⚠️ End-to-end Step 1 reproducibility: most meshes ≤ 0.05 mm ASSD; 4 wrap surfaces drift 0.17–1.18 mm
+- ⚠️ Step 2 biomechanical variance reduced substantially but still has 1–3 marginal-failure columns per file (RMSE just past tolerance), driven by the residual wrap-surface drift
+
+The original "bit-identical" framing was the right target on paper but isn't achievable on this stack. The achieved state is "tight, bounded, and reproducible-up-to-known-floors."
+
+---
+
+## End-to-end results (2026-05-10, job 46797)
+
+Two complete pipeline runs (comak_1 + comak_2) under current code, compared against each other.
+
+### What is bit-identical or effectively so
+
+- Decode → mesh (unit tests on reference latents): bit-identical
+- ACVD resample given fixed input: bit-identical
+- Articular surface extraction (femur, tibia, patella): bit-identical
+- Meniscus articulating surfaces (medial + lateral): bit-identical
+- Prefemoral fat pad creation (in unit tests): bit-identical
+- COMAK Step 2 given fixed `.osim` input (separate test, job 46768): bit-identical across all `.sto`, VTP, HDF5 outputs
+
+### What is reproducible to small, bounded drift
+
+| Output | Inter-run drift | Threshold |
+|---|---|---|
+| NSM-fit latent vectors | ~1e-4 max-abs, `np.allclose(rtol=1e-3, atol=1e-3)` passes | CUDA SDF backward grad floor |
+| Most reconstructed meshes (`*_nsm_recon*`, articular surfaces, both menisci, labeled bones) | ASSD ≤ 0.05 mm | well under MRI voxel scale |
+| `PatTen_r`, `KnExt_at_fem_r`, `KnExt_vasint_at_fem_r` wraps | ASSD ≤ 0.025 mm | passes |
+| Alignment JSONs, patella offset JSON | bit-identical or within rtol | |
+
+### What does *not* meet the 0.05 mm bar
+
+| Output | Inter-run drift |
+|---|---|
+| `Med_Lig_r` wrap | 1.18 mm |
+| `Gastroc_at_Condyles_r` wrap | 0.88 mm |
+| `Med_LigP_r` wrap | 0.42 mm |
+| `Capsule_r` wrap | 0.17 mm |
+| `femur_prefemoral_fat_pad.{vtk,stl}` | 0.082 mm (borderline) |
+
+Multi-start (3 restarts, sub-micron input jitter) helped some wraps but did not stabilize these four. They sit near singular configurations in the geometric-primitive fit (notably `Gastroc_at_Condyles_r` ellipsoid near gimbal lock), where multiple parameter representations produce nearly equivalent surface fits at very close objective values.
+
+### Downstream Step 2 impact (RMSE mode against itself)
+
+- 2/9 files fully pass; remaining 7 each have 1–3 columns just past tolerance
+- Worst single-column drift: `pf_flex_r` IK at 2.0° RMSE vs 1.5° tolerance
+- `_values.sto` (64/64) and `_ik_marker_errors.sto` (3/3) both pass cleanly
+- Convergence flip rate: 31% across timesteps (down from ~30-40% against production, similar magnitude — IPOPT is sensitive to small geometry shifts)
+
+### Things that worked unexpectedly
+
+- **Seed AFTER `model.cuda()`** — `model.cuda()` consumes CUDA random state during weight transfer. Seeding before leaves CUDA RNG at an unpredictable offset. Fixed in `nsosim/utils.py:fit_nsm`. Reduced NSM mesh inter-run ASSD from ~0.03 mm to <1e-4 mm.
+- **Multi-start helped 6/10 wrap surfaces**; the other 4 remain.
+
+### Things that did NOT work (kept as off-by-default knobs)
+
+- **Adam+LBFGS hybrid NSM optimizer** — made reproducibility 10–30× worse. CUDA grid_sample backward produces non-deterministic gradients; LBFGS's curvature estimator amplifies this gradient noise while Adam's momentum smooths it. The hybrid plumbing remains in nsosim (`use_hybrid_optimizer=True` flag) but is not enabled by default.
+
+### Cross-references
+
+- comak_gait_simulation determinism test: [`tests/verify_determinism/submit_determinism_check.sh`](file:///dataNAS/people/aagatti/projects/comak_gait_simulation/tests/verify_determinism/submit_determinism_check.sh) (Step 1 only) and [`submit_end_to_end_determinism.sh`](file:///dataNAS/people/aagatti/projects/comak_gait_simulation/tests/verify_determinism/submit_end_to_end_determinism.sh) (full pipeline)
+- Step 1 differ: [`diff_runs.py`](file:///dataNAS/people/aagatti/projects/comak_gait_simulation/tests/verify_determinism/diff_runs.py)
+- Step 2 differ: [`compare_step2_to_step2.py --mode rmse`](file:///dataNAS/people/aagatti/projects/comak_gait_simulation/tests/verify_pipeline/compare_step2_to_step2.py)
+
+---
+
+## Future work: pre-NSM-fit robustness (the right next target)
+
+The dominant residual non-determinism comes from the **non-shape-model parts of `comak_1`** — wrap surface fitting, mesh remeshing/ACVD, ligament attachment interpolation, fat pad construction. These are deterministic algorithms in principle: each operates on a fixed input mesh with no random sources of its own. But they are **sensitive** to small (1e-4 mm vertex) perturbations from the upstream NSM fit, and that sensitivity gets amplified into mm-scale drift on certain wrap parameters and borderline mm-scale drift on the fat pad.
+
+The shape-model fitting itself has a fundamental CUDA reproducibility floor we can't push past without disabling `grid_sample` backward or moving to CPU — which would be slow. But the algorithms downstream of the NSM fit do not have this constraint. If they are rewritten to be tolerant of micron-scale input perturbations — e.g., wrap fitter using better-conditioned parameterizations away from gimbal lock, ACVD's iterative refinement initialized from a canonical state rather than the input mesh's vertex ordering, fat-pad construction with explicit boundary anchoring — they should produce nearly identical outputs across runs.
+
+This is a separate workstream from determinism. The hooks are in place (seeds pin what's pinnable; multi-start mitigates some wrap cases); the next round of improvement is algorithmic robustness, not more random-source pinning.
