@@ -237,6 +237,74 @@ class RotationUtils:
         return euler
 
     @staticmethod
+    def canonical_ellipsoid_pose(
+        R: Union[torch.Tensor, np.ndarray],
+        axes: Union[torch.Tensor, np.ndarray],
+    ):
+        """Canonical (R, axes) for an ellipsoid, stable near gimbal lock.
+
+        An ellipsoid {x : (x-c)ᵀ R diag(1/a²) Rᵀ (x-c) = 1} has 24 equivalent
+        (R, axes) representations (axis permutations × sign-pair flips that
+        preserve det = +1). The standard `enforce_sign_convention` keys on
+        R[0,0] and R[1,1], whose magnitudes shrink to zero near gimbal lock —
+        so a sub-percent perturbation of the input rotation can trigger a
+        column-flip that swings the Euler representation by several degrees.
+
+        This routine picks a canonical representative whose sign convention
+        is keyed on each column's **dominant component** (the entry with
+        largest |.|). That choice is stable as long as each column has a
+        clear dominant component, which holds for anatomical wrap surfaces
+        away from highly-symmetric configurations.
+
+        Steps:
+          1. Sort axes descending. Permute R columns to match (and absorb
+             permutation parity into a column-negation if needed to keep
+             det = +1).
+          2. For column 0: if its dominant component is negative, negate
+             columns 0 and 1 (preserves det).
+          3. For column 1: if its dominant component is negative, negate
+             columns 1 and 2 (preserves det).
+
+        Returns (R_canonical, axes_canonical) with det(R_canonical) = +1 and
+        the same geometric ellipsoid.
+        """
+        input_type = "torch" if isinstance(R, torch.Tensor) else "numpy"
+        if input_type == "numpy":
+            R_t = torch.tensor(R, dtype=torch.float64)
+            axes_t = torch.tensor(axes, dtype=torch.float64)
+        else:
+            R_t = R.clone().to(torch.float64)
+            axes_t = axes.clone().to(torch.float64)
+
+        assert R_t.shape == (3, 3), f"Expected (3, 3), got {R_t.shape}"
+        assert axes_t.shape == (3,), f"Expected (3,) axes, got {axes_t.shape}"
+
+        # 1) Sort axes descending; permute columns to match.
+        order = torch.argsort(-axes_t, stable=True)
+        R_t = R_t[:, order]
+        axes_t = axes_t[order]
+
+        # 2) Ensure right-handed (det = +1) by flipping last column if needed.
+        if torch.det(R_t) < 0:
+            R_t[:, 2] *= -1
+
+        # 3) Sign convention via dominant component of each column. Pair the
+        # negation with another column so det stays +1.
+        dom0 = int(torch.argmax(torch.abs(R_t[:, 0])))
+        if R_t[dom0, 0] < 0:
+            R_t[:, 0] *= -1
+            R_t[:, 1] *= -1
+
+        dom1 = int(torch.argmax(torch.abs(R_t[:, 1])))
+        if R_t[dom1, 1] < 0:
+            R_t[:, 1] *= -1
+            R_t[:, 2] *= -1
+
+        if input_type == "numpy":
+            return R_t.numpy(), axes_t.numpy()
+        return R_t.to(R.dtype), axes_t.to(axes.dtype)
+
+    @staticmethod
     def enforce_sign_convention(
         R: Union[torch.Tensor, np.ndarray],
     ) -> Union[torch.Tensor, np.ndarray]:

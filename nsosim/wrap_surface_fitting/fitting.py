@@ -1395,8 +1395,13 @@ class EllipsoidFitter(BaseShapeFitter):
         axes = axes.detach().cpu().numpy()
         rot_matrix = rot_matrix.detach().cpu().numpy()
 
-        # Apply sign convention fix to ensure deterministic Euler angles
-        rot_matrix_fixed = RotationUtils.enforce_sign_convention(rot_matrix)
+        # Canonicalize (R, axes) for an ellipsoid: sort axes descending and
+        # apply sign convention keyed on each column's dominant component.
+        # This is stable near gimbal lock — the previous enforce_sign_convention
+        # keyed on R[0,0]/R[1,1] which approach zero there, so micron-scale
+        # input drift would flip columns and swing the Euler representation
+        # by several degrees. See `canonical_ellipsoid_pose` docstring.
+        rot_matrix_fixed, axes = RotationUtils.canonical_ellipsoid_pose(rot_matrix, axes)
 
         # convert rot_matrix to xyz euler angles
         xyz_body_rotation = RotationUtils.rot_to_euler_xyz_body(rot_matrix_fixed)
