@@ -594,6 +594,54 @@ multi-minima problem on Med_Lig_r is likely an intrinsic property of
 that wrap's geometry, not subject-specific), but it could also be subject
 anatomy-dependent.
 
+### Iter 10 (2026-05-12) — Per-wrap opt-out e2e validation ✅ COMMITTED
+
+SLURM job 46872 ran `build_joint_model` with `config['wraps_to_skip_anchor']`
+defaulting to `['Med_Lig_r']`. Confirms the iter8.5 sweep prediction holds
+in the real pipeline.
+
+**A vs B reproducibility** (unchanged from iter9, criterion 1 still passes):
+- 111 differing lines / 15623, same as iter9
+- WrapEllipsoid max_abs 0.001275 rad (≈0.073°) — Med_Lig_r no longer
+  anchor-pinned so slightly more sensitive than iter9's 0.000102 rad, but
+  still well below criterion-1 gate (0.073° × 30 mm ellipsoid scale ≈ 38 µm).
+- WrapCylinder max_abs 1e-6 m (1 µm) — same as iter9.
+
+**Fit-quality per wrap** (Smith2019-derived label classification accuracy):
+
+| Wrap | iter3 | iter7 | iter9 | iter10 |
+|---|---|---|---|---|
+| Capsule_r | 90.58 % | 98.79 | 98.72 | 98.72 |
+| KnExt_at_fem_r | 94.31 | 96.22 | 96.08 | 96.08 |
+| KnExt_vasint_at_fem_r | 95.28 | 95.70 | 95.51 | 95.51 |
+| Gastroc_at_Condyles_r | 98.00 | 97.73 | 97.73 | 97.73 |
+| Med_LigP_r | 99.62 | 99.33 | 99.33 | 99.33 |
+| **Med_Lig_r** | **99.37** | 97.09 | 97.09 | **99.31** |
+| PatTen_r | 95.97 | 95.97 | 95.97 | 95.97 |
+| **Mean** | **96.16** | 97.26 | 97.20 | **97.52** |
+
+Med_Lig_r recovered to within 0.06 % of iter3 — algebraic init wins the
+multi-minima problem, as predicted. iter7's gains on Capsule_r (+8.14 %)
+and KnExt cylinders are fully preserved. Mean accuracy +1.36 % over iter3
+— best of any iter.
+
+### Wrap-fitter robustness work — final state
+
+Iter10 is the closing configuration: anchor ON by default for 5/6 wraps,
+algebraic init for Med_Lig_r via the `wraps_to_skip_anchor` config key
+(default `['Med_Lig_r']`). Net result vs the iter0 baseline:
+
+- **A↔B reproducibility**: ~1000-10000× amplification suppressed to ≤ 1 µm
+  on center/radius/dim and ≤ 1 µrad on cylinder rotation. Ellipsoid rotation
+  drifts up to 0.073° on Med_Lig_r without its anchor pin, but produces
+  only ~38 µm spatial drift — still under the 100 µm criterion-1 gate.
+- **Fit quality**: +1.36 % mean classification accuracy over iter3, with
+  Capsule_r +8.14 % the headline gain.
+- **No regressions** vs iter3 beyond noise.
+
+Plan is complete. Multi-subject Level 3 validation is a future-work item
+to confirm the per-wrap opt-out default generalizes beyond 9018389_RIGHT.
+
 ## Open issues (out of scope for this work)
 1. All 10 wraps ≤ 0.10 mm A vs B
 2. No regression on axis-aligned wraps
