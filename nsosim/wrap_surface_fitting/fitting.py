@@ -730,6 +730,8 @@ class CylinderFitter(BaseShapeFitter):
         center_transform="linear",
         fix_height=False,
         random_axis_degrees=0.0,
+        lambda_center_reg=0.0,
+        lambda_axis_reg=0.0,
         **kwargs,
     ):
         """
@@ -745,6 +747,13 @@ class CylinderFitter(BaseShapeFitter):
                        If False, allows oversized cylinders but may help alignment optimization.
             random_axis_degrees: Optional random rotation to apply to initialized axis vector (in degrees).
                                Useful for testing robustness or escaping local minima. Default: 0.0 (no perturbation)
+            lambda_center_reg: Weight for ``λ * ||log_center - log_center_init||²`` regularizer
+                — pins the cylinder center to its initialization in flat directions of the
+                loss landscape. The cylinder's axial direction is often flat (sliding the
+                cylinder along its long axis doesn't change which bone points are inside it).
+                For ``center_transform='linear'`` (the default) the regularizer is in linear
+                meters. Default 0 (off).
+            lambda_axis_reg: Weight for ``λ * ||axis - axis_init||²`` regularizer. Default 0 (off).
         """
         super().__init__(*args, **kwargs)
         self.center_offset = center_offset
@@ -752,6 +761,10 @@ class CylinderFitter(BaseShapeFitter):
         self.center_scale = 100.0  # Scale small meter values (0.06-0.1) to reasonable range (6-10)
         self.fix_height = fix_height
         self.random_axis_degrees = random_axis_degrees
+        self.lambda_center_reg = lambda_center_reg
+        self.lambda_axis_reg = lambda_axis_reg
+        self._init_log_center = None
+        self._init_axis = None
 
     def _apply_random_axis_rotation(self, axis_vector):
         """Apply random rotation to axis vector if random_axis_degrees > 0.
@@ -955,7 +968,7 @@ class CylinderFitter(BaseShapeFitter):
             log_center = torch.nn.Parameter(torch.clamp(center_scaled, min=1e-6).log())
         elif self.center_transform == "linear":
             # No transformation - original behavior
-            log_center = torch.nn.Parameter(center0)
+            log_center = torch.nn.Parameter(center0.clone())
         else:
             raise ValueError(f"Unknown center_transform: {self.center_transform}")
 
@@ -963,7 +976,11 @@ class CylinderFitter(BaseShapeFitter):
         log_h = torch.nn.Parameter(torch.clamp(half_len0, min=1e-6).log())
 
         # Axis vector parameterization (no constraints needed - normalization handled in forward pass)
-        axis_vector = torch.nn.Parameter(axis0)
+        axis_vector = torch.nn.Parameter(axis0.clone())
+
+        # Snapshot initial values for the regularizer anchor.
+        self._init_log_center = log_center.detach().clone()
+        self._init_axis = axis_vector.detach().clone()
 
         return [log_center, log_r, log_h, axis_vector]
 
@@ -1041,14 +1058,37 @@ class CylinderFitter(BaseShapeFitter):
         else:
             surface_points_loss = torch.tensor(0.0, device=self.device)
 
+        # Parameter regularizers — pin flat directions of the loss landscape to
+        # the (stable) initialization. The cylinder axial direction is often
+        # flat (a long cylinder slides along its axis without changing in/out
+        # classification of bone points by much).
+        reg_loss = torch.tensor(0.0, device=self.device)
+        if self.lambda_center_reg > 0 or self.lambda_axis_reg > 0:
+            if self.lambda_center_reg > 0 and self._init_log_center is not None:
+                reg_loss = reg_loss + self.lambda_center_reg * (
+                    (log_center - self._init_log_center) ** 2
+                ).sum()
+            if self.lambda_axis_reg > 0 and self._init_axis is not None:
+                # Account for the axis-vector sign ambiguity: regularize toward
+                # whichever sign of init is closer.
+                a = axis_vector
+                a_init = self._init_axis
+                d_pos = ((a - a_init) ** 2).sum()
+                d_neg = ((a + a_init) ** 2).sum()
+                reg_loss = reg_loss + self.lambda_axis_reg * torch.minimum(d_pos, d_neg)
+
         logger.info(
             f"Epoch {epoch}: Margin={margin_decayed:.6f} (decay={margin_decayed/margin:.3f}), "
-            f"MarginLoss={margin_loss:.6f}, DistLoss={distance_loss:.6f}, SurfLoss={surface_points_loss:.6f}"
+            f"MarginLoss={margin_loss:.6f}, DistLoss={distance_loss:.6f}, "
+            f"SurfLoss={surface_points_loss:.6f}, RegLoss={reg_loss.item():.6e}"
         )
 
-        # Hybrid loss: alpha * margin_loss + beta * distance_loss + gamma * surface_points_loss
+        # Hybrid loss: alpha * margin_loss + beta * distance_loss + gamma * surface_points_loss + reg
         return (
-            self.alpha * margin_loss + self.beta * distance_loss + self.gamma * surface_points_loss
+            self.alpha * margin_loss
+            + self.beta * distance_loss
+            + self.gamma * surface_points_loss
+            + reg_loss
         )
 
     def _extract_results(self, parameters):

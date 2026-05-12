@@ -117,12 +117,56 @@ A_v1 vs B   : 125/15623 differing lines
 
 Still above 0.10 mm acceptance threshold but headed in the right direction.
 
-## Iter 3 plan
+### Iter 3 (2026-05-12) — Cylinder + ellipsoid axes/quat regularizers ✅ COMMITTED
 
-Two parallel additions:
-1. **Add translation regularizer to CylinderFitter** — analogous to ellipsoid; addresses Capsule_r 289µm Z drift.
-2. **Add `lambda_axes_reg > 0` and `lambda_quat_reg > 0`** to ellipsoid — to prevent axis-drift "blame transfer" and tackle Med_Lig_r rotation drift.
+Added:
+- `CylinderFitter.lambda_center_reg` (default 1.0 in config)
+- `EllipsoidFitter.lambda_axes_reg` (default 0.1)
+- `EllipsoidFitter.lambda_quat_reg` (default 0.1, with quaternion double-cover handling)
 
-For lambda_quat_reg: anchor to `quat_init` (from algebraic-fit-derived rotation). For non-degenerate axis ratios (Med_Lig_r has 0.012, 0.017, 0.032 — all well-separated), `quat_init` should be reasonably stable.
+**SLURM iter 3 result (job 46862)**:
+```
+A_v1 vs A_v2: 1/15623 differing lines (determinism ✓)
+A_v1 vs B   : 120/15623 differing lines (was 125)
+  WrapEllipsoid          max_abs: 0.000233 rad (0.013°)     ← was 0.02135, baseline 0.1241
+  WrapCylinder           max_abs: 2.5e-05 m (25 µm)         ← was 289 µm, baseline 715 µm
+  Blankevoort1991Ligament max_abs: 2.227e-05 m (22 µm)      ← similar to iter 2
+  PathPoint, Coordinate, Millard: unchanged
+```
 
-Cylinder also needs care: the axis vector parameter and the cylinder's translation along its axis. Translation reg should be on the **center** parameter.
+**Per-wrap geometric drift A vs B (worst case)**:
+- Gastroc_at_Condyles_r: ~17 µm (translation 5µm + rotation 0.001° × 151mm)
+- Med_Lig_r: ~6 µm
+- Med_LigP_r: ~25 µm
+- Capsule_r: ~10 µm
+- All ellipsoids in pelvis/femshaft (axis-aligned, unchanged): bit-identical
+
+**All 10 wraps now < 50 µm A-vs-B drift, comfortably below the 0.10 mm acceptance criterion!**
+
+Fit quality preserved: L-BFGS final loss ~1e-6 (well-converged), improvements 5-93% per fit (real optimization happening, not just sitting at init).
+
+### Acceptance criteria status
+
+1. ✅ All 10 wrap surfaces ≤ 0.10 mm drift A vs B (estimated; all < 50 µm)
+2. ✅ No regression on already-good wraps (they stay at exact match for axis-aligned ones)
+3. ⚠️  **NOT YET VERIFIED**: ASSD against template reference wraps within 10% of current production. Risk: my regularizers bias fits toward init; if init differs from "true" template wraps by > 10%, this could fail.
+4. ✅ Determinism preserved (A_v1 vs A_v2 = 1/15623, just the model name diff)
+5. ✅ No new randomness (regularizers are deterministic)
+
+### Iter 4 plan
+
+Verify criterion 3 (fit quality vs template). Options:
+- Run a new test: fit wraps to the TEMPLATE/REFERENCE labeled bone with my new code, compare to the original Smith2019 reference wraps.
+- Inspect: compare iter 3 wraps to Full-Pipeline baseline (n_restarts=3) for Med_Lig_r and Med_LigP_r centers — initial check.
+
+Compare to Full Pipeline baseline (subj 9018389):
+
+| Wrap | param | iter 3 | full pipeline | Δ |
+|---|---|---|---|---|
+| Gastroc | translation | [0.0105, -0.3754, -0.0180] | [0.0110, -0.3758, -0.0173] | ~1 mm |
+| Med_LigP_r | translation | [-0.0120, -0.0287, -0.0211] | [-0.0141, -0.0289, -0.0204] | 2.2 mm |
+| Med_Lig_r | dimensions | [0.0323, 0.0177, 0.0124] (sorted) | [0.012, 0.017, 0.032] (unsorted) | same (just sorted) |
+
+Med_LigP_r center shifts 2 mm = 6% of largest axis (34 mm). Borderline.
+
+**Approach**: keep iter 3 as default, but consider lowering λs if criterion 3 fails.

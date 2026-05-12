@@ -79,8 +79,8 @@ DEFAULT_FITTING_CONFIG = {
             # directions. See EllipsoidFitter.__init__ docstring. Tuned for
             # the Smith2019 wraps fit in meters.
             "lambda_center_reg": 1.0,  # ~ 1 µm² at 1 mm offset; floor for flat Z dirs
-            "lambda_axes_reg": 0.0,  # off in iter 2
-            "lambda_quat_reg": 0.0,  # off in iter 2
+            "lambda_axes_reg": 0.1,  # mild — prevents axis-drift "blame transfer"
+            "lambda_quat_reg": 0.1,  # mild — pins rotation in flat directions
         },
         # fit() method parameters
         "fit": {
@@ -102,6 +102,11 @@ DEFAULT_FITTING_CONFIG = {
             "margin_decay_type": None,  # No margin decay for cylinders
             "initialization": "geometric",  # Initialization method
             "lr_schedule": None,  # Learning rate schedule
+            # Anchor regularizers — pin flat directions to init. The cylinder's
+            # axial direction is often flat (sliding the cylinder along its
+            # long axis doesn't change in/out classification much).
+            "lambda_center_reg": 1.0,  # in meters (linear center_transform)
+            "lambda_axis_reg": 0.0,  # axis direction handled by initialization already
         },
         # fit() method parameters
         "fit": {
