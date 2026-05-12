@@ -149,9 +149,7 @@ def test_ellipsoid_strong_reg_pulls_fit_to_anchor():
     wp = fitter.wrap_params
     # Should snap to the anchor regardless of where the data optimum was
     assert np.linalg.norm(wp.translation - anchor.translation) < 5e-4
-    assert (
-        np.linalg.norm(np.sort(wp.dimensions)[::-1] - np.sort(anchor.dimensions)[::-1]) < 5e-4
-    )
+    assert np.linalg.norm(np.sort(wp.dimensions)[::-1] - np.sort(anchor.dimensions)[::-1]) < 5e-4
 
 
 def test_ellipsoid_no_anchor_unchanged():
