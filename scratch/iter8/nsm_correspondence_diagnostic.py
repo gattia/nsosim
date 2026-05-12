@@ -107,6 +107,93 @@ def label_transfer_test(labeled_a_path: Path, labeled_b_path: Path,
     return report
 
 
+def boundary_jitter_distance(labeled_a_path: Path, labeled_b_path: Path,
+                              n_closest: int = 3) -> dict:
+    """For each binary field, locate B-vertices where the spatially-transferred
+    A label disagrees with B's own label, then find the spatial distance to
+    the nearest B-vertex whose own label matches the transferred A value.
+
+    Answers: "how far along B's surface is the inside/outside boundary
+    between independent-A and independent-B labelings?"
+    """
+    from scipy.spatial import cKDTree
+
+    b_native = Mesh(str(labeled_b_path))
+    b_target = Mesh(str(labeled_b_path))
+    a = Mesh(str(labeled_a_path))
+    incoming = list(b_native.point_data.keys())
+    renamed = [f"{n}__fromA" for n in incoming]
+    b_target.copy_scalars_from_other_mesh_to_current(
+        a, orig_scalars_name=incoming, new_scalars_name=renamed,
+        weighted_avg=True, n_closest=n_closest,
+    )
+
+    b_points = np.asarray(b_native.point_coords)
+    tree = cKDTree(b_points)
+
+    out = {"by_array": {}}
+    for arr in incoming:
+        b_truth = np.asarray(b_native.point_data[arr], dtype=np.float64)
+        try:
+            b_from_a = np.asarray(b_target.point_data[f"{arr}__fromA"], dtype=np.float64)
+        except Exception:
+            continue
+        if b_truth.shape != b_from_a.shape:
+            continue
+        unique = np.unique(b_truth)
+        is_binary = (unique.size <= 2) and set(unique.tolist()).issubset({0.0, 1.0})
+        if not is_binary:
+            continue
+
+        # Discretize the transferred (averaged) value back to {0, 1}.
+        a_label_at_b = (b_from_a > 0.5).astype(np.float64)
+        flip_mask = (a_label_at_b != b_truth)
+        if not flip_mask.any():
+            out["by_array"][arr] = {"n_flipped": 0}
+            continue
+
+        flipped_idx = np.where(flip_mask)[0]
+        distances = np.full(flipped_idx.size, np.inf)
+        for j, i in enumerate(flipped_idx):
+            # Look for nearest B-vertex whose own label matches what A said.
+            # Increase k until found or exhausted.
+            wanted_label = a_label_at_b[i]
+            k = 16
+            while k <= b_points.shape[0]:
+                d, idx = tree.query(b_points[i], k=k)
+                # idx[0] is self; skip
+                match = b_truth[idx[1:]] == wanted_label
+                if match.any():
+                    j_match = np.argmax(match)
+                    distances[j] = d[1 + j_match]
+                    break
+                k *= 2
+        d_mm = distances * 1000.0
+        out["by_array"][arr] = {
+            "n_flipped": int(flipped_idx.size),
+            "min_mm": float(d_mm.min()),
+            "median_mm": float(np.median(d_mm)),
+            "max_mm": float(d_mm.max()),
+        }
+    return out
+
+
+def fmt_boundary(label: str, r: dict) -> str:
+    lines = [f"\n=== {label} ==="]
+    for arr in sorted(r.get("by_array", {})):
+        info = r["by_array"][arr]
+        if info["n_flipped"] == 0:
+            lines.append(f"  {arr:<42}  no flips")
+        else:
+            lines.append(
+                f"  {arr:<42}  flips={info['n_flipped']:>3}  "
+                f"dist-to-agreement: min={info['min_mm']:.3f}mm  "
+                f"median={info['median_mm']:.3f}mm  "
+                f"max={info['max_mm']:.3f}mm"
+            )
+    return "\n".join(lines)
+
+
 def fmt_surface(label: str, r: dict) -> str:
     return (
         f"\n=== {label} ===\n"
@@ -161,6 +248,11 @@ def main():
     print(fmt_labels(
         "TEST 2: spatial label-transfer A→B vs independent B labels",
         label_transfer_test(labeled_a, labeled_b, n_closest=args.n_closest),
+    ))
+
+    print(fmt_boundary(
+        "TEST 3: surface distance from each flipped B-vertex to nearest B-vertex matching A's label",
+        boundary_jitter_distance(labeled_a, labeled_b, n_closest=args.n_closest),
     ))
 
 
