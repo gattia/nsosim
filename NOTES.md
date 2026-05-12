@@ -235,6 +235,57 @@ The 3 ellipsoid wraps that were the dominant amplifiers (Med_Lig_r, Med_LigP_r,
 Gastroc_at_Condyles_r) and Capsule_r all show 5-500× reductions in run-to-run
 drift. The previously-passing 6 wraps are unaffected.
 
+### Iter 4 (2026-05-12) — Procrustes anchor scaffolding ✅ COMMITTED
+
+Per plan rev 2 step 1: build the foundational Procrustes-anchor pipeline. Not
+yet wired into the fitter (that's iter 5); this iter delivers the helpers and
+verifies the algebraic roundtrip is tight enough to act as a trustworthy
+anchor.
+
+Added `nsosim/wrap_surface_fitting/procrustes_anchor.py`:
+- `umeyama_similarity(src, dst)` — closed-form 4×4 similarity Procrustes.
+- `transform_points(T, points)` — apply 4×4 affine.
+- `sample_ellipsoid_surface_points` / `sample_cylinder_surface_points` —
+  deterministic Fibonacci/grid samplers in OpenSim body frame.
+- `procrustes_anchor_for_wrap(wrap_name, smith2019_params, bone_transform=None)`
+  — full pipeline: sample → transform → algebraic refit → `wrap_surface`.
+- `procrustes_anchors_from_smith2019(osim_path, bone_transforms=None)` —
+  convenience entry for all 7 Smith2019 wraps at once.
+
+Reuses iter 1's `canonical_ellipsoid_pose` logic (sort + dominant-component
+sign) so the anchor's Euler representation is stable through gimbal lock.
+
+**Identity-transform roundtrip on real Smith2019 osim** (max drift, mm):
+| Wrap | type | Δcenter | Δdim_sorted / Δradius |
+|---|---|---|---|
+| Gastroc_at_Condyles_r | ell | 0.008 | 0.003 |
+| KnExt_at_fem_r | cyl | 0.000 | 0.000 |
+| KnExt_vasint_at_fem_r | cyl | 0.000 | 0.000 |
+| Capsule_r | cyl | 0.001 | 0.000 |
+| Med_Lig_r | ell | 0.001 | 0.011 |
+| Med_LigP_r | ell | 0.041 | 0.026 |
+| PatTen_r | ell | 0.002 | 0.010 |
+
+All under 50 µm. The algebraic refit is not the sensitivity bottleneck — when
+the input points lie exactly on the surface, the algebraic fit recovers the
+parameters to better than 50 µm. Med_LigP_r is the noisiest at 41 µm; likely
+the most ill-conditioned ellipsoid (smallest, most degenerate) in the set.
+
+11 unit tests added (`tests/test_procrustes_anchor.py`), all pass:
+- 5 Umeyama recovery cases (identity, known similarity, pure scale,
+  reflection handling, input validation).
+- 2 surface-sampler correctness checks (points actually on surface).
+- 4 anchor roundtrip cases (ellipsoid+cylinder × identity+known similarity).
+
+**Next iter (5):** Add `anchor_params` kwarg to `EllipsoidFitter` and
+`CylinderFitter`. When present:
+- Override the algebraic init with anchor center/axes/rotation.
+- Override `_init_*` regularizer snapshots with the anchor (instead of init).
+- Reduce default λ values (center 1.0 → 0.05, axes/quat 0.1 → 0.005).
+Then run the isolation test against subject 9018389_RIGHT and check both
+the A vs B drift (criterion 1) and Capsule_r-vs-Smith2019 distance (criterion 3,
+target < 0.5 mm).
+
 ## Open issues (out of scope for this work)
 
 1. **`create_ellipsoid_polydata` (and `create_cylinder_polydata`) rotation convention bug.** Should use `Rx @ Ry @ Rz` (intrinsic XYZ) to match OpenSim's interpretation. For large rotations the rendered mesh doesn't match what OpenSim simulates. Fix: replace pyvista's `rotate_x().rotate_y().rotate_z()` chain with an explicit `scipy.spatial.transform.Rotation.from_euler('XYZ', ...).as_matrix() @ points`.
