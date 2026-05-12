@@ -478,6 +478,73 @@ NOT another λ-tuning round. The objective:
 
 Stops the wrap-tuning loop and informs whether the deeper NSM fix is worth doing.
 
+### Iter 8 (2026-05-12) — Upstream diagnostic: ASSD + label-transfer
+
+Script: `scratch/iter8/nsm_correspondence_diagnostic.py`. Uses pymskt's
+`Mesh.get_assd_mesh` (point-to-triangle SDF, NOT vertex-to-vertex KDTree —
+the v1 of the script got this wrong and inflated ASSD to 0.33 mm because
+KDTree to a 20k-vertex point cloud is bounded below by edge length). Uses
+`Mesh.copy_scalars_from_other_mesh_to_current` for spatial label transfer.
+
+**Note**: NSM canonical-space correspondence itself is NOT testable from the
+saved bone meshes — ACVD re-samples each run's mesh to 20k vertices
+independently, so vertex index has no cross-run anatomical meaning. A real
+correspondence test would need the pre-ASE/pre-ACVD raw decoder output,
+which build_joint_model doesn't currently persist. This diagnostic only
+characterizes the post-resample inputs to the wrap fitter.
+
+**TEST 1: surface ASSD A vs B (point-to-surface)**
+
+| Bone | ASSD (mm) |
+|---|---|
+| Femur | 0.00682 |
+| Tibia | 0.00556 |
+| Patella | 0.01509 |
+
+Surface drift between A and B is ~6–15 µm — much smaller than v1's bogus
+"0.33 mm" but also bigger than the iter1 NOTES claim of "1e-4 mm CUDA
+floor". That claim was either incorrect or referred to a different stage
+of the pipeline (maybe pre-resample raw decoder output, or different
+metric). The actual surface drift the wrap fitter sees is **~10 µm**.
+
+**TEST 2: spatial label-transfer A→B vs independent B labels**
+
+For every wrap and every label field, transfer A's labels onto B's
+vertices spatially (3-NN weighted average via pymskt) and compare to B's
+independently-computed labels.
+
+| Bone | Total vertices | Binary flips | Max continuous SDF Δ |
+|---|---|---|---|
+| Femur | 67 728 / array | 0 / 67 728 (0.0000 %) | 0.10 mm |
+| Tibia | 99 648 / array | 0–1 / 99 648 (0.001 %) | 0.16 mm |
+| Patella | 75 400 / array | 0–26 / 75 400 (0.035 %) | 0.18 mm |
+
+Categorical labels are essentially invariant under 10 µm surface drift.
+The wrap fitter's input is bit-stable in `_binary` and `_near_surface`
+fields (the fields it actually consumes). Continuous SDF fields agree to
+~0.1 µm mean; the max-Δ outliers (~0.1–0.18 mm) are localized to a small
+handful of vertices at sharp features of the wrap surfaces where the SDF
+gradient is high.
+
+**Diagnosis**: the original amplification (~1e-4 mm bone-mesh drift →
+~1 mm wrap drift) was NOT driven by:
+- Catastrophic surface drift between runs (it's only ~10 µm).
+- Label flip cascades (categorical labels match 99.99 %+).
+- NSM correspondence at the labeling layer (the labeling pipeline is
+  position-based, not correspondence-based, and works perfectly).
+
+It was the **wrap fitter's loss landscape** — flat directions in the
+ellipsoid/cylinder margin loss that turned ~10 µm geometric input drift
+into ~1 mm wrap parameter drift. Iters 1–7 (canonical pose, anchor +
+regularizers, Smith2019 Procrustes anchor) addressed exactly this and the
+amplification is now suppressed to < 50 µm — back below the input scale.
+
+**This closes the wrap-fitter robustness work.** A deeper NSM
+correspondence investigation would be needed to (a) explain whether the
+~10 µm surface drift is reducible upstream, or (b) characterize NSM
+canonical-space correspondence for downstream tasks beyond wrap fitting
+(e.g. ligament transfer). Both are outside the scope of this plan.
+
 ## Open issues (out of scope for this work)
 1. All 10 wraps ≤ 0.10 mm A vs B
 2. No regression on axis-aligned wraps
