@@ -74,6 +74,13 @@ DEFAULT_FITTING_CONFIG = {
             "margin_decay_type": "linear",  # How to decay margin over epochs
             "initialization": "geometric",  # Initialization method (geometric/pca)
             "lr_schedule": None,  # Learning rate schedule
+            # Anchor regularizers — pin flat directions of the loss landscape
+            # to the (stable) initialization, without affecting non-flat
+            # directions. See EllipsoidFitter.__init__ docstring. Tuned for
+            # the Smith2019 wraps fit in meters.
+            "lambda_center_reg": 1.0,  # ~ 1 µm² at 1 mm offset; floor for flat Z dirs
+            "lambda_axes_reg": 0.0,  # off in iter 2
+            "lambda_quat_reg": 0.0,  # off in iter 2
         },
         # fit() method parameters
         "fit": {

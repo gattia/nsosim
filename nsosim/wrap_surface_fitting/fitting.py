@@ -1121,7 +1121,16 @@ class CylinderFitter(BaseShapeFitter):
 class EllipsoidFitter(BaseShapeFitter):
     """Ellipsoid fitting using PCA initialization and PyTorch optimization."""
 
-    def __init__(self, *args, center_offset=0.3, center_transform="linear", **kwargs):
+    def __init__(
+        self,
+        *args,
+        center_offset=0.3,
+        center_transform="linear",
+        lambda_center_reg=0.0,
+        lambda_axes_reg=0.0,
+        lambda_quat_reg=0.0,
+        **kwargs,
+    ):
         """
         Args:
             center_offset: Offset added to center coordinates before log transformation
@@ -1131,11 +1140,27 @@ class EllipsoidFitter(BaseShapeFitter):
                             - 'log_offset': log(center + offset)
                             - 'scale': log(center * scale + 1) for small values
                             - 'linear': no transformation (original behavior)
+            lambda_center_reg: Weight for ``λ * ||center - center_init||²`` regularizer
+                (units: 1/m²). Pins the fit center to its (stable) initialization in
+                flat directions of the loss landscape; the geometric loss dominates
+                wherever the landscape has real curvature. Default 0 (off).
+            lambda_axes_reg: Weight for ``λ * ||log_axes - log_axes_init||²``
+                regularizer. Pins axes magnitudes in flat directions. Default 0 (off).
+            lambda_quat_reg: Weight for ``λ * ||quat - quat_init||²`` regularizer
+                (in unit-quaternion space — ||q - q_init|| ≈ angle/2 for small angles).
+                Pins rotation in flat directions. Default 0 (off).
         """
         super().__init__(*args, **kwargs)
         self.center_offset = center_offset
         self.center_transform = center_transform
         self.center_scale = 100.0  # Scale small meter values (0.06-0.1) to reasonable range (6-10)
+        self.lambda_center_reg = lambda_center_reg
+        self.lambda_axes_reg = lambda_axes_reg
+        self.lambda_quat_reg = lambda_quat_reg
+        # Initialization snapshot used as regularizer anchor; set by _create_parameters.
+        self._init_center = None
+        self._init_log_axes = None
+        self._init_quat = None
 
     def _initialize_parameters_pca(self, points_inside):
         """Ellipsoid-specific PCA: all 3 components become ellipsoid semi-axes."""
@@ -1233,13 +1258,20 @@ class EllipsoidFitter(BaseShapeFitter):
     def _create_parameters(self, initial_params):
         center0, axes0, R0 = initial_params
         center = torch.nn.Parameter(center0)
-        log_axes = torch.nn.Parameter(torch.clamp(axes0, min=1e-6).log())
+        log_axes_init = torch.clamp(axes0, min=1e-6).log()
+        log_axes = torch.nn.Parameter(log_axes_init.clone())
 
         # 4. Rotation (quaternion parameterization)
         initial_quat = RotationUtils.quat_from_rot(R0)
         # Ensure initial quaternion is normalized
         initial_quat /= torch.norm(initial_quat) + 1e-8
-        quat = torch.nn.Parameter(initial_quat)
+        quat = torch.nn.Parameter(initial_quat.clone())
+
+        # Snapshot initial parameter values for the regularizer anchor. These
+        # detach from the computation graph and are not optimized.
+        self._init_center = center0.detach().clone()
+        self._init_log_axes = log_axes_init.detach().clone()
+        self._init_quat = initial_quat.detach().clone()
 
         return [center, log_axes, quat]
 
@@ -1312,14 +1344,42 @@ class EllipsoidFitter(BaseShapeFitter):
         else:
             surface_points_loss = torch.tensor(0.0, device=self.device)
 
+        # Parameter regularizers — pull the fit toward its (stable) init in flat
+        # directions of the loss landscape. Geometric loss dominates wherever
+        # the landscape has real curvature. See lambda_*_reg docstrings.
+        reg_loss = torch.tensor(0.0, device=self.device)
+        if self.lambda_center_reg > 0 or self.lambda_axes_reg > 0 or self.lambda_quat_reg > 0:
+            center, log_axes, quat = self._current_parameters
+            if self.lambda_center_reg > 0 and self._init_center is not None:
+                reg_loss = reg_loss + self.lambda_center_reg * (
+                    (center - self._init_center) ** 2
+                ).sum()
+            if self.lambda_axes_reg > 0 and self._init_log_axes is not None:
+                reg_loss = reg_loss + self.lambda_axes_reg * (
+                    (log_axes - self._init_log_axes) ** 2
+                ).sum()
+            if self.lambda_quat_reg > 0 and self._init_quat is not None:
+                # Account for the quaternion double cover (q and -q encode the
+                # same rotation): regularize toward whichever sign of init is
+                # closer in L2.
+                q = quat
+                q_init = self._init_quat
+                d_pos = ((q - q_init) ** 2).sum()
+                d_neg = ((q + q_init) ** 2).sum()
+                reg_loss = reg_loss + self.lambda_quat_reg * torch.minimum(d_pos, d_neg)
+
         logger.info(
             f"Epoch {epoch}: Margin={margin_decayed:.6f} (decay={margin_decayed/margin:.3f}), "
-            f"MarginLoss={margin_loss:.6f}, DistLoss={distance_loss:.6f}, SurfLoss={surface_points_loss:.6f}"
+            f"MarginLoss={margin_loss:.6f}, DistLoss={distance_loss:.6f}, "
+            f"SurfLoss={surface_points_loss:.6f}, RegLoss={reg_loss.item():.6e}"
         )
 
-        # Hybrid loss: alpha * margin_loss + beta * distance_loss + gamma * surface_points_loss
+        # Hybrid loss: alpha * margin_loss + beta * distance_loss + gamma * surface_points_loss + reg
         return (
-            self.alpha * margin_loss + self.beta * distance_loss + self.gamma * surface_points_loss
+            self.alpha * margin_loss
+            + self.beta * distance_loss
+            + self.gamma * surface_points_loss
+            + reg_loss
         )
 
     def _setup_plotting(self, plot):

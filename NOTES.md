@@ -87,10 +87,42 @@ All above criterion 0.10 mm. **Need to address upstream fit sensitivity, not out
 | 17 | **(new)** Apply same canonicalization (sort + sign-by-dominant) but for the **fit's internal quaternion** before extracting Euler — would canonicalize the optimization basin, not just the output. Risk: changes fit dynamics. | HIGH | HIGH | MEDIUM | [ ] |
 | 18 | **(new)** For Gastroc's 2mm Z translation drift: investigate WHY — is the loss landscape flat in Z? Add a 1D probe. | LOW | INFO | LOW | [ ] diagnostic |
 
-## Iter 2 plan (TBD)
+### Iter 2 (2026-05-11) — Translation regularizer (ellipsoid) ✅ COMMITTED
 
-Probably approach #14 (regularization toward init). Reasoning: low risk, addresses both translation drift and rotation drift in one shot, doesn't require preprocessing changes.
+Added `lambda_center_reg=1.0` (1/m²) to EllipsoidFitter. Pulls center toward
+its initialization (geometric/algebraic-fit center) in flat directions; the
+geometric loss dominates wherever the landscape has real curvature.
 
-Alternative: turn on `beta > 0` (#12) — even simpler. SDF correlation loss should reduce sensitivity by anchoring the fit to the broader SDF shape, not just binary in/out.
+**SLURM iter 2 result (job 46861)**:
+```
+A_v1 vs A_v2: 1/15623 differing lines (determinism ✓)
+A_v1 vs B   : 125/15623 differing lines
+  WrapEllipsoid          max_abs: 0.02135 rad (1.22°)     ← was 0.02516 in iter 1
+  WrapCylinder           max_abs: 0.000289 m (unchanged)  ← cylinder reg not yet added
+  Blankevoort1991Ligament max_abs: 2.434e-05 m (24 µm)    ← was 208 µm. 8.5× drop!
+  PathPoint, Coordinate, Millard: unchanged
+```
 
-Pick #12 first because it's a one-line config change. If insufficient, do #14.
+**Per-wrap detail** (Δ between A_v1 and B):
+- **Gastroc_at_Condyles_r**: Z translation **2mm → 4µm (500×!)**. Dimensions Δa 84µm → 360µm (axis absorbed some drift). Rotation max 0.68° → 0.4°.
+- **Med_Lig_r**: translation now <25µm all axes. Rotation 1.23° (geometric drift unchanged). Dimensions Δa 50→187µm (slight regression).
+- **Med_LigP_r**: translation <10µm. Rotation 0.33°. Dimensions Δa 258→365µm.
+- **Capsule_r**: 289µm Z translation (unchanged — cylinder reg not applied).
+
+**Geometric ASSD estimates** (rough, rotation×axis + translation + dim):
+- Gastroc: iter 1 ~2 mm → iter 2 ~1 mm
+- Med_Lig_r: ~0.7 mm → ~0.7 mm
+- Med_LigP_r: ~0.4 mm → ~0.4 mm
+- Capsule_r: 0.29 mm → 0.29 mm
+
+Still above 0.10 mm acceptance threshold but headed in the right direction.
+
+## Iter 3 plan
+
+Two parallel additions:
+1. **Add translation regularizer to CylinderFitter** — analogous to ellipsoid; addresses Capsule_r 289µm Z drift.
+2. **Add `lambda_axes_reg > 0` and `lambda_quat_reg > 0`** to ellipsoid — to prevent axis-drift "blame transfer" and tackle Med_Lig_r rotation drift.
+
+For lambda_quat_reg: anchor to `quat_init` (from algebraic-fit-derived rotation). For non-degenerate axis ratios (Med_Lig_r has 0.012, 0.017, 0.032 — all well-separated), `quat_init` should be reasonably stable.
+
+Cylinder also needs care: the axis vector parameter and the cylinder's translation along its axis. Translation reg should be on the **center** parameter.
