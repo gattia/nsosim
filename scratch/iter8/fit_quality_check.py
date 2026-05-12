@@ -168,31 +168,35 @@ def main():
     iter7_osim = Path("scratch/iter7/build_isolation_20260512_124021/A_v1/"
                        "custom_nsm_full_body_healthy_knee_model/isolation_test_A_v1/"
                        "isolation_test_A_v1.osim")
+    iter9_osim = Path("scratch/iter9/build_isolation_20260512_144421/A_v1/"
+                       "custom_nsm_full_body_healthy_knee_model/isolation_test_A_v1/"
+                       "isolation_test_A_v1.osim")
     # Use iter7's labelled meshes for evaluation — they're geometrically the
     # same A-run input meshes for both iters.
     labeled_root = Path("scratch/iter7/build_isolation_20260512_124021")
 
     iter3 = evaluate_fit_quality(iter3_osim, labeled_root)
     iter7 = evaluate_fit_quality(iter7_osim, labeled_root)
+    iter9 = evaluate_fit_quality(iter9_osim, labeled_root)
 
-    print(f"\n{'Wrap':<26}{'type':<5}{'iter3 acc':>11}{'iter7 acc':>11}{'Δacc':>9}   "
-          f"{'iter3 viol_mm':>14}{'iter7 viol_mm':>14}")
+    print(f"\n{'Wrap':<26}{'type':<5}{'iter3 acc':>11}{'iter7 acc':>11}{'iter9 acc':>11}"
+          f"{'Δ(9-3)':>9}")
     for wn in sorted(iter3.keys()):
-        if wn not in iter7:
+        a3 = iter3.get(wn); a7 = iter7.get(wn); a9 = iter9.get(wn)
+        if not (a3 and a7 and a9):
             continue
-        a3 = iter3[wn]; a7 = iter7[wn]
         kind = 'ell' if a3['type'] == 'WrapEllipsoid' else 'cyl'
-        delta = a7['accuracy'] - a3['accuracy']
+        delta = a9['accuracy'] - a3['accuracy']
         sign = '↑' if delta > 0 else ('↓' if delta < 0 else '·')
         print(f"  {wn:<24}{kind:<5}"
-              f"{a3['accuracy']:>11.5f}{a7['accuracy']:>11.5f}{delta:>+8.5f}{sign}  "
-              f"{a3['mean_margin_violation_mm']:>13.4f}{a7['mean_margin_violation_mm']:>13.4f}")
+              f"{a3['accuracy']:>11.5f}{a7['accuracy']:>11.5f}{a9['accuracy']:>11.5f}"
+              f"{delta:>+8.5f}{sign}")
 
-    # Aggregate accuracy across wraps
-    a3 = np.mean([v["accuracy"] for v in iter3.values()])
-    a7 = np.mean([v["accuracy"] for v in iter7.values()])
-    print(f"\nMean classification accuracy across {len(iter3)} wraps: "
-          f"iter3={a3:.5f}  iter7={a7:.5f}  Δ={a7-a3:+.5f}")
+    m3 = np.mean([v["accuracy"] for v in iter3.values()])
+    m7 = np.mean([v["accuracy"] for v in iter7.values()])
+    m9 = np.mean([v["accuracy"] for v in iter9.values()])
+    print(f"\nMean accuracy across {len(iter3)} wraps: "
+          f"iter3={m3:.5f}  iter7={m7:.5f}  iter9={m9:.5f}  Δ(9-3)={m9-m3:+.5f}")
 
 
 if __name__ == "__main__":

@@ -545,6 +545,55 @@ correspondence investigation would be needed to (a) explain whether the
 canonical-space correspondence for downstream tasks beyond wrap fitting
 (e.g. ligament transfer). Both are outside the scope of this plan.
 
+### Iter 8.5 (2026-05-12) — Per-wrap λ sweep + init-basin analysis
+
+`scratch/iter8/lambda_sweep_all_wraps.py` runs every wrap × {anchor init,
+algebraic init} × {iter9-default, 10x lower, 100x lower, zero, iter3-λ}
+on the existing iter7 SLURM bone meshes. Reports per-wrap accuracy on
+Smith2019-derived labels, A↔B center drift, Δ vs Smith2019.
+
+Headline per-wrap pattern (1 subject, 9018389_RIGHT; multi-subject still
+needed for generalization):
+
+| Wrap | Best init | Best setting acc | A↔B drift | Notes |
+|---|---|---|---|---|
+| Capsule_r | **anchor** | 98.72 % (default) | 0 µm | algebraic falls to 90.58 % — wrong basin |
+| KnExt_at_fem_r | **anchor** | 96.09 % | 0 µm | algebraic basin gives 94.31 % |
+| KnExt_vasint_at_fem_r | **anchor** | 95.51 % | 0 µm | both inits similar |
+| Gastroc_at_Condyles_r | toss-up | 97.73 % (anchor) / 98.00 % (algebraic) | 34 µm / 7 µm | algebraic +0.3 % but 18 mm from Smith2019 |
+| Med_LigP_r | **anchor** | 99.33 % | 1 µm | algebraic +0.3 % but 433 µm drift — exceeds gate |
+| Med_Lig_r | **algebraic** | 99.37 % | 1.5 µm | anchor stuck in worse local minimum (97.08 % @ 2.6 mm vs algebraic 99.4 % @ 1.5 mm) |
+
+**Clear pattern**: anchor wins for 5/6 wraps; Med_Lig_r is the lone
+exception where the anchor lands L-BFGS in a worse basin than algebraic
+init does.
+
+**λ sensitivity inside the anchor path** (with the anchor on):
+
+- Capsule_r, KnExt cylinders: λ barely matters until zero. Default is fine.
+- Gastroc: lower λ slightly degrades both accuracy and reproducibility. Default fine.
+- Med_LigP_r, Med_Lig_r: lower λ improves accuracy 0.2–0.7 % with negligible drift cost. Could drop 10× as a default.
+
+**Updated recommendation** (overrides the earlier "per-wrap opt-out" suggestion):
+
+1. **Anchor ON by default** (set `smith2019_osim_path` in `build_joint_model`
+   config). 5/6 wraps benefit, several materially (Capsule_r +8 %).
+2. **Per-wrap opt-out for Med_Lig_r**: skip the anchor entry only for this
+   wrap; fall back to algebraic init at iter3-level λ. ~5 lines in
+   `build_joint_model`. Recovers iter3's 99.4 % accuracy with 1.5 µm A↔B
+   drift.
+3. **Optional**: lower ellipsoid λ defaults 10× (0.05/0.005/0.005 →
+   0.005/0.0005/0.0005). Tiny generalized improvement across ellipsoids,
+   no impact on cylinders, no drift cost beyond ~10 µm.
+
+**Caveat**: all the above is from **one subject** (9018389_RIGHT). The
+per-wrap "best init" choice should be validated on additional subjects
+before being committed as a permanent default — see Level 3 in the
+methodology discussion. The decision *could* generalize cleanly (the
+multi-minima problem on Med_Lig_r is likely an intrinsic property of
+that wrap's geometry, not subject-specific), but it could also be subject
+anatomy-dependent.
+
 ## Open issues (out of scope for this work)
 1. All 10 wraps ≤ 0.10 mm A vs B
 2. No regression on axis-aligned wraps
