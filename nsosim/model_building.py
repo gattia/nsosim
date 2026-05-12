@@ -894,6 +894,11 @@ def build_joint_model(
         - 'meniscus_smooth_iter': int (default 10)
         - 'meniscus_boundary_smoothing': bool (default False)
         - 'meniscus_radial_percentile': float (default 95.0)
+        - 'smith2019_osim_path': str or None (default None). When set, Procrustes
+          anchors are built from the named Smith2019 osim and passed to each
+          wrap fit as the init + regularizer target. Biases fits toward
+          trusted Smith2019 geometry instead of the algebraic init's biased
+          estimate on the subject bone.
 
     project_meniscal_to_tibia : bool
         Whether to project meniscal ligament tibia attachments onto tibia surface.
@@ -945,6 +950,20 @@ def build_joint_model(
     folder_ref_recons = ref_data_paths["folder_ref_recons"]
     if folder_save_bones is None:
         folder_save_bones = save_dir
+
+    # Build Procrustes-from-Smith2019 anchors once if a reference osim is
+    # supplied via config['smith2019_osim_path']. The anchors get passed to
+    # each fit_bone_wrap_surfaces call as the init + regularizer target,
+    # biasing fits toward the trusted Smith2019 geometry rather than toward
+    # the algebraic init's biased estimate. See WRAP_FITTER_ROBUSTNESS rev 2.
+    smith2019_osim_path = cfg("smith2019_osim_path", None)
+    anchors_by_bone = {}
+    if smith2019_osim_path is not None:
+        from nsosim.wrap_surface_fitting.procrustes_anchor import (
+            procrustes_anchors_from_smith2019,
+        )
+
+        anchors_by_bone = procrustes_anchors_from_smith2019(smith2019_osim_path)
 
     fitted_wrap_parameters = {}
 
@@ -1003,6 +1022,7 @@ def build_joint_model(
         fitter_configs=fitter_configs,
         n_restarts=wrap_n_restarts,
         jitter_scale=wrap_jitter_scale,
+        anchors=anchors_by_bone.get("femur"),
     )
 
     # Apply ligament updates after wrap fitting (matches original order)
@@ -1061,6 +1081,7 @@ def build_joint_model(
         fitter_configs=fitter_configs,
         n_restarts=wrap_n_restarts,
         jitter_scale=wrap_jitter_scale,
+        anchors=anchors_by_bone.get("tibia"),
     )
 
     # Apply ligament updates

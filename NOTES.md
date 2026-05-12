@@ -327,6 +327,55 @@ Plan: build a Procrustes anchors dict once per bone via
 `model_building.build_joint_model` to optionally build & pass anchors when
 a `smith2019_osim_path` is supplied. Then run the isolation test.
 
+### Iter 6 (2026-05-12) — Reduce defaults + wire anchors into orchestrator ✅ COMMITTED
+
+Two changes in this iter:
+
+1. **`DEFAULT_FITTING_CONFIG` defaults reduced 20× now that the anchor is
+   trusted** (`config.py`):
+   - Ellipsoid: `λ_center` 1.0 → 0.05, `λ_axes` 0.1 → 0.005, `λ_quat` 0.1 → 0.005
+   - Cylinder: `λ_center` 1.0 → 0.05
+
+   Rationale: with the algebraic init as anchor (iter3), strong λ was needed
+   to suppress spurious gradient amplification. With the
+   Procrustes-from-Smith2019 anchor (iter4/5), the anchor itself is trusted,
+   so the regularizer only needs to gently bias flat directions — the
+   geometric loss handles non-flat directions. The plan rev 2 calls for this
+   exact ratio.
+
+2. **`build_joint_model` builds anchors when `smith2019_osim_path` is set**
+   (`model_building.py`):
+   - New config key `smith2019_osim_path` (default `None`).
+   - When set, `procrustes_anchors_from_smith2019(path)` runs once and the
+     resulting `{bone: {body: {surface_type: {wrap_name: wrap_surface}}}}`
+     dict is passed per-bone into `fit_bone_wrap_surfaces` via the iter5
+     `anchors=` parameter.
+   - Default `None` ⇒ preserves pre-iter5 behavior (algebraic init).
+   - Patella is not plumbed (uses specialized `PatellaFitter`, axis-aligned
+     wrap, already bit-stable).
+
+**One new integration test** (`tests/test_anchor_wiring.py`,
+`test_fit_bone_wrap_surfaces_passes_anchors_to_constructor`) using a
+monkeypatched fitter verifies:
+- Wrap with an anchor entry gets `anchor_params=<the anchor>` in constructor kwargs.
+- Wrap without an entry gets NO `anchor_params` key (falls back to algebraic).
+- Tests both ellipsoid and cylinder paths.
+
+**Test results:** 96/96 pass across `test_fitting.py` (23) + `test_anchor_wiring.py`
+(6) + `test_procrustes_anchor.py` (11) + `test_rotation_utils.py` (51) +
+`test_mesh_labeling.py` (5). Pre-existing fixture errors in `test_knee_assembly.py`
+(missing Smith2019 mesh files in test fixtures dir) are unrelated to iter6 —
+confirmed they reproduce on baseline.
+
+**Next iter (7):** Run the e2e isolation test (`isolate_build_joint_model.py`)
+on subject 9018389_RIGHT with the new defaults + `smith2019_osim_path` config,
+and verify all 5 acceptance criteria:
+1. All 10 wraps ≤ 0.10 mm A vs B
+2. No regression on axis-aligned wraps
+3. Capsule_r center within 0.5 mm of Smith2019 anchor (the new tight gate)
+4. Determinism preserved (A_v1 vs A_v2 ≤ 1 line)
+5. No new randomness leaks
+
 ## Open issues (out of scope for this work)
 
 1. **`create_ellipsoid_polydata` (and `create_cylinder_polydata`) rotation convention bug.** Should use `Rx @ Ry @ Rz` (intrinsic XYZ) to match OpenSim's interpretation. For large rotations the rendered mesh doesn't match what OpenSim simulates. Fix: replace pyvista's `rotate_x().rotate_y().rotate_z()` chain with an explicit `scipy.spatial.transform.Rotation.from_euler('XYZ', ...).as_matrix() @ points`.

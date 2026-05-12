@@ -75,12 +75,16 @@ DEFAULT_FITTING_CONFIG = {
             "initialization": "geometric",  # Initialization method (geometric/pca)
             "lr_schedule": None,  # Learning rate schedule
             # Anchor regularizers — pin flat directions of the loss landscape
-            # to the (stable) initialization, without affecting non-flat
-            # directions. See EllipsoidFitter.__init__ docstring. Tuned for
-            # the Smith2019 wraps fit in meters.
-            "lambda_center_reg": 1.0,  # ~ 1 µm² at 1 mm offset; floor for flat Z dirs
-            "lambda_axes_reg": 0.1,  # mild — prevents axis-drift "blame transfer"
-            "lambda_quat_reg": 0.1,  # mild — pins rotation in flat directions
+            # to the anchor (Procrustes-from-Smith2019 when supplied, else the
+            # algebraic init), without affecting non-flat directions. Tuned
+            # down 20x from the iter3 defaults (1.0 / 0.1 / 0.1) once the
+            # anchor became Smith2019-derived: the anchor itself is trusted,
+            # so the regularizer only needs to gently bias flat directions —
+            # the geometric loss handles everything else. See
+            # EllipsoidFitter.__init__ docstring.
+            "lambda_center_reg": 0.05,  # ~ 50 nm² at 1 mm offset; floor for flat Z dirs
+            "lambda_axes_reg": 0.005,  # mild — prevents axis-drift "blame transfer"
+            "lambda_quat_reg": 0.005,  # mild — pins rotation in flat directions
         },
         # fit() method parameters
         "fit": {
@@ -102,10 +106,13 @@ DEFAULT_FITTING_CONFIG = {
             "margin_decay_type": None,  # No margin decay for cylinders
             "initialization": "geometric",  # Initialization method
             "lr_schedule": None,  # Learning rate schedule
-            # Anchor regularizers — pin flat directions to init. The cylinder's
-            # axial direction is often flat (sliding the cylinder along its
-            # long axis doesn't change in/out classification much).
-            "lambda_center_reg": 1.0,  # in meters (linear center_transform)
+            # Anchor regularizers — pin flat directions to the anchor
+            # (Procrustes-from-Smith2019 when supplied, else algebraic init).
+            # The cylinder's axial direction is often flat (sliding the
+            # cylinder along its long axis doesn't change in/out classification
+            # much). Tuned down 20x from the iter3 default (1.0) once the
+            # anchor became Smith2019-derived.
+            "lambda_center_reg": 0.05,  # in meters (linear center_transform)
             "lambda_axis_reg": 0.0,  # axis direction handled by initialization already
         },
         # fit() method parameters

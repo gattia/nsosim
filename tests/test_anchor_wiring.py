@@ -224,6 +224,119 @@ def test_cylinder_anchor_overrides_init_snapshot():
     np.testing.assert_allclose(init_center, anchor.translation, atol=1e-6)
 
 
+def test_fit_bone_wrap_surfaces_passes_anchors_to_constructor(monkeypatch):
+    """fit_bone_wrap_surfaces should pass anchors[body][surface_type][wrap_name]
+    as ``anchor_params`` into the fitter constructor; missing entries pass nothing."""
+    import nsosim.model_building as mb
+
+    captured = []
+
+    class _FakeFitter:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def fit(self, **fit_kwargs):
+            captured.append((self.kwargs, fit_kwargs))
+            # Build a dummy result the rest of the call doesn't actually use.
+
+            class _Result:
+                final_loss = 0.0
+
+                @property
+                def wrap_params(_self):
+                    return wrap_surface(
+                        name=fit_kwargs.get("surface_name"),
+                        body=None,
+                        type_="WrapEllipsoid",
+                        xyz_body_rotation=np.zeros(3),
+                        translation=np.zeros(3),
+                        radius=None,
+                        length=None,
+                        dimensions=np.ones(3) * 0.01,
+                    )
+
+            return _Result()
+
+        @property
+        def final_loss(self):
+            return 0.0
+
+        @property
+        def wrap_params(self):
+            return wrap_surface(
+                name=None,
+                body=None,
+                type_="WrapEllipsoid",
+                xyz_body_rotation=np.zeros(3),
+                translation=np.zeros(3),
+                radius=None,
+                length=None,
+                dimensions=np.ones(3) * 0.01,
+            )
+
+    # Bypass _fit_with_restarts entirely — directly invoke the stubbed fitter
+    # so we can capture the constructor kwargs.
+    def _fake_fit_with_restarts(fitter_class, constructor_kwargs, fit_kwargs, points, **_):
+        f = _FakeFitter(**constructor_kwargs)
+        f.fit(**fit_kwargs)
+        return f
+
+    monkeypatch.setattr(mb, "_fit_with_restarts", _fake_fit_with_restarts)
+
+    # Provide a labeled mesh that has the required point-data keys for one
+    # ellipsoid wrap (Gastroc_at_Condyles_r) and one cylinder (Capsule_r).
+    class _FakeMesh:
+        def __init__(self, n=100):
+            self._data = {
+                "Gastroc_at_Condyles_r_binary": np.ones(n),
+                "Gastroc_at_Condyles_r_sdf": np.zeros(n),
+                "Capsule_r_binary": np.ones(n),
+                "Capsule_r_sdf": np.zeros(n),
+                "Capsule_r_near_surface": np.ones(n),
+                "KnExt_at_fem_r_binary": np.ones(n),
+                "KnExt_at_fem_r_sdf": np.zeros(n),
+                "KnExt_at_fem_r_near_surface": np.ones(n),
+                "KnExt_vasint_at_fem_r_binary": np.ones(n),
+                "KnExt_vasint_at_fem_r_sdf": np.zeros(n),
+                "KnExt_vasint_at_fem_r_near_surface": np.ones(n),
+            }
+
+        def __getitem__(self, k):
+            return self._data[k]
+
+    pts = np.random.default_rng(0).normal(scale=0.01, size=(100, 3))
+
+    ellipse_anchor = _make_offset_ellipsoid_anchor()
+    cylinder_anchor = _make_offset_cylinder_anchor()
+    anchors = {
+        "femur_r": {
+            "ellipsoid": {"Gastroc_at_Condyles_r": ellipse_anchor},
+            # Intentionally NO entry for KnExt_at_fem_r or KnExt_vasint_at_fem_r
+            # to verify the per-wrap fallback to no anchor.
+        },
+        "femur_distal_r": {
+            "cylinder": {"Capsule_r": cylinder_anchor},
+        },
+    }
+
+    mb.fit_bone_wrap_surfaces(
+        bone_name="femur",
+        labeled_mesh=_FakeMesh(),
+        labeled_mesh_points=pts,
+        anchors=anchors,
+    )
+
+    # 4 wraps in femur (Gastroc_at_Condyles_r, KnExt_at_fem_r, KnExt_vasint_at_fem_r, Capsule_r)
+    assert len(captured) == 4
+    # Map wrap_name → captured constructor kwargs
+    by_wrap = {kw[1]["surface_name"]: kw[0] for kw in captured}
+    assert by_wrap["Gastroc_at_Condyles_r"].get("anchor_params") is ellipse_anchor
+    assert by_wrap["Capsule_r"].get("anchor_params") is cylinder_anchor
+    # Wraps without an entry should NOT have anchor_params in their kwargs
+    assert "anchor_params" not in by_wrap["KnExt_at_fem_r"]
+    assert "anchor_params" not in by_wrap["KnExt_vasint_at_fem_r"]
+
+
 def test_cylinder_strong_reg_pulls_fit_to_anchor():
     """With huge λ, fitted center (perpendicular component) snaps to the anchor."""
     pts = _cylinder_surface_points(TRUE_CENTER_C, TRUE_RADIUS_C, TRUE_HALF_LEN_C, n=400)
