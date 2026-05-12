@@ -1065,9 +1065,10 @@ class CylinderFitter(BaseShapeFitter):
         reg_loss = torch.tensor(0.0, device=self.device)
         if self.lambda_center_reg > 0 or self.lambda_axis_reg > 0:
             if self.lambda_center_reg > 0 and self._init_log_center is not None:
-                reg_loss = reg_loss + self.lambda_center_reg * (
-                    (log_center - self._init_log_center) ** 2
-                ).sum()
+                reg_loss = (
+                    reg_loss
+                    + self.lambda_center_reg * ((log_center - self._init_log_center) ** 2).sum()
+                )
             if self.lambda_axis_reg > 0 and self._init_axis is not None:
                 # Account for the axis-vector sign ambiguity: regularize toward
                 # whichever sign of init is closer.
@@ -1391,13 +1392,13 @@ class EllipsoidFitter(BaseShapeFitter):
         if self.lambda_center_reg > 0 or self.lambda_axes_reg > 0 or self.lambda_quat_reg > 0:
             center, log_axes, quat = self._current_parameters
             if self.lambda_center_reg > 0 and self._init_center is not None:
-                reg_loss = reg_loss + self.lambda_center_reg * (
-                    (center - self._init_center) ** 2
-                ).sum()
+                reg_loss = (
+                    reg_loss + self.lambda_center_reg * ((center - self._init_center) ** 2).sum()
+                )
             if self.lambda_axes_reg > 0 and self._init_log_axes is not None:
-                reg_loss = reg_loss + self.lambda_axes_reg * (
-                    (log_axes - self._init_log_axes) ** 2
-                ).sum()
+                reg_loss = (
+                    reg_loss + self.lambda_axes_reg * ((log_axes - self._init_log_axes) ** 2).sum()
+                )
             if self.lambda_quat_reg > 0 and self._init_quat is not None:
                 # Account for the quaternion double cover (q and -q encode the
                 # same rotation): regularize toward whichever sign of init is

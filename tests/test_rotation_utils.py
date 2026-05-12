@@ -193,7 +193,9 @@ class TestCanonicalEllipsoidPose:
         R = ScipyR.random(random_state=seed).as_matrix()
         axes = rng.uniform(0.005, 0.05, size=3)
         R2, axes2 = RotationUtils.canonical_ellipsoid_pose(R, axes)
-        np.testing.assert_allclose(_ellipsoid_matrix(R, axes), _ellipsoid_matrix(R2, axes2), atol=1e-14)
+        np.testing.assert_allclose(
+            _ellipsoid_matrix(R, axes), _ellipsoid_matrix(R2, axes2), atol=1e-14
+        )
 
     def test_idempotent(self):
         # Applying canonicalization twice should produce the same result.
