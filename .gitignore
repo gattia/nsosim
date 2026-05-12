@@ -131,3 +131,8 @@ scripts/phase6_rajagopal_audit/*.xml
 scratch/iter*/build_isolation_*/
 scratch/iter*/slurm_outputs/
 scratch/iter*/last_job_id
+
+# Claude Code internals — runtime state, never useful to track
+.claude/.nfs*
+.claude/scheduled_tasks.lock
+.claude/worktrees/
