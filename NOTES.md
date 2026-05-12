@@ -367,6 +367,24 @@ monkeypatched fitter verifies:
 (missing Smith2019 mesh files in test fixtures dir) are unrelated to iter6 —
 confirmed they reproduce on baseline.
 
+**Criterion 3 baseline — iter3 (algebraic anchor) center drift vs Smith2019**
+(loaded via `extract_wrap_parameters_from_osim` on both files, so the
+`ADDITIONAL_OFFSETS["femur_r"]` shift cancels):
+
+| Wrap | type | Δcenter (mm) | per-axis (mm) | passes 0.5 mm? |
+|---|---|---|---|---|
+| Gastroc_at_Condyles_r | ell | 18.422 | [1.28, 1.63, **-18.30**] | ❌ |
+| Capsule_r | cyl | 3.671 | [0.85, **3.44**, -0.96] | ❌ |
+| Med_LigP_r | ell | 3.494 | [-1.61, **2.65**, 1.61] | ❌ |
+| KnExt_vasint_at_fem_r | cyl | 2.863 | [0.08, 1.46, **-2.46**] | ❌ |
+| KnExt_at_fem_r | cyl | 2.595 | [-1.15, -0.11, **-2.32**] | ❌ |
+| Med_Lig_r | ell | 1.475 | [-0.01, **1.42**, -0.39] | ❌ |
+| PatTen_r | ell | 1.421 | [0.37, **-1.30**, 0.43] | ❌ |
+
+All 7 wraps violate the criterion 3 gate. Gastroc's Z drift dominates
+(-18 mm — the largest amplification in iter3). Iter7's anchor should drag
+all 7 toward Smith2019; the gate is < 0.5 mm.
+
 **Next iter (7):** Run the e2e isolation test (`isolate_build_joint_model.py`)
 on subject 9018389_RIGHT with the new defaults + `smith2019_osim_path` config,
 and verify all 5 acceptance criteria:
