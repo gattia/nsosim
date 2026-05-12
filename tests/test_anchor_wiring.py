@@ -204,6 +204,48 @@ def _make_offset_cylinder_anchor(offset_perpendicular=0.01):
     )
 
 
+def test_wraps_to_skip_anchor_pops_named_wraps():
+    """build_joint_model's wraps_to_skip_anchor config key should remove named
+    wraps from the anchors dict so they fall back to algebraic init.
+
+    iter8.5 finding: Med_Lig_r's loss landscape has a worse local minimum near
+    the Smith2019 anchor than near the algebraic init; opting out recovers
+    iter3 accuracy.
+    """
+    # Build a minimal anchors_by_bone structure shaped like
+    # procrustes_anchors_from_smith2019 returns, then run the skip-loop in
+    # isolation and verify Med_Lig_r is removed but other wraps remain.
+    sentinel = object()
+    anchors_by_bone = {
+        "femur": {
+            "femur_r": {
+                "ellipsoid": {"Gastroc_at_Condyles_r": sentinel},
+                "cylinder": {"KnExt_at_fem_r": sentinel},
+            },
+            "femur_distal_r": {"cylinder": {"Capsule_r": sentinel}},
+        },
+        "tibia": {
+            "tibia_proximal_r": {
+                "ellipsoid": {"Med_Lig_r": sentinel, "Med_LigP_r": sentinel},
+            },
+        },
+    }
+    wraps_to_skip = {"Med_Lig_r"}
+    for bone_d in anchors_by_bone.values():
+        for body_d in bone_d.values():
+            for stype_d in body_d.values():
+                for name in list(stype_d.keys()):
+                    if name in wraps_to_skip:
+                        del stype_d[name]
+
+    # Med_Lig_r removed; other tibia wrap preserved
+    assert "Med_Lig_r" not in anchors_by_bone["tibia"]["tibia_proximal_r"]["ellipsoid"]
+    assert "Med_LigP_r" in anchors_by_bone["tibia"]["tibia_proximal_r"]["ellipsoid"]
+    # Other bones untouched
+    assert "Gastroc_at_Condyles_r" in anchors_by_bone["femur"]["femur_r"]["ellipsoid"]
+    assert "Capsule_r" in anchors_by_bone["femur"]["femur_distal_r"]["cylinder"]
+
+
 def test_cylinder_anchor_overrides_init_snapshot():
     """With anchor provided, the snapshotted log_center should equal the anchor center."""
     pts = _cylinder_surface_points(TRUE_CENTER_C, TRUE_RADIUS_C, TRUE_HALF_LEN_C, n=400)

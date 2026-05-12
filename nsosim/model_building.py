@@ -899,6 +899,12 @@ def build_joint_model(
           wrap fit as the init + regularizer target. Biases fits toward
           trusted Smith2019 geometry instead of the algebraic init's biased
           estimate on the subject bone.
+        - 'wraps_to_skip_anchor': list of str (default ['Med_Lig_r']). Wrap
+          names whose anchor is removed from the per-bone anchors dict before
+          fitting. Use for wraps whose loss landscape has a worse local
+          minimum near the Smith2019 anchor than near the algebraic init
+          (Med_Lig_r is the known case from iter8.5 sweep, recovering
+          ~2 percentage points of classification accuracy).
 
     project_meniscal_to_tibia : bool
         Whether to project meniscal ligament tibia attachments onto tibia surface.
@@ -957,6 +963,13 @@ def build_joint_model(
     # biasing fits toward the trusted Smith2019 geometry rather than toward
     # the algebraic init's biased estimate. See WRAP_FITTER_ROBUSTNESS rev 2.
     smith2019_osim_path = cfg("smith2019_osim_path", None)
+    # Per-wrap opt-out: wraps named here are removed from the anchors dict so
+    # they fall back to the algebraic init + fitter defaults. Discovered
+    # empirically (iter8.5) that Med_Lig_r's loss landscape has a worse local
+    # minimum near the Smith2019 anchor than near the algebraic init; the
+    # algebraic init recovers 99.4 % vs the anchor's 97 % on subject 9018389.
+    # The default skip-list is hard-coded but overridable via config.
+    wraps_to_skip_anchor = set(cfg("wraps_to_skip_anchor", ["Med_Lig_r"]))
     anchors_by_bone = {}
     if smith2019_osim_path is not None:
         from nsosim.wrap_surface_fitting.procrustes_anchor import (
@@ -964,6 +977,13 @@ def build_joint_model(
         )
 
         anchors_by_bone = procrustes_anchors_from_smith2019(smith2019_osim_path)
+        if wraps_to_skip_anchor:
+            for bone_d in anchors_by_bone.values():
+                for body_d in bone_d.values():
+                    for stype_d in body_d.values():
+                        for name in list(stype_d.keys()):
+                            if name in wraps_to_skip_anchor:
+                                del stype_d[name]
 
     fitted_wrap_parameters = {}
 
