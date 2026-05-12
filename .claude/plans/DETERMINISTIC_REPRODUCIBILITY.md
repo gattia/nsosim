@@ -61,6 +61,8 @@ Bone meshes are reproducible to <0.0001 mm but the wrap fitter (CylinderFitter, 
 
 **Where it leaves us**: geometric meshes meet the <0.05mm ASSD bar comfortably; a handful of wrap surfaces still drift 0.3-1.5 mm. End-to-end COMAK verification (Task 6) will tell us whether this matters biomechanically. The wrap-fitter robustness is a separate workstream.
 
+**Update (2026-05-12)**: the wrap-fitter robustness workstream is **complete** — see [`completed/WRAP_FITTER_ROBUSTNESS_COMPLETED.md`](completed/WRAP_FITTER_ROBUSTNESS_COMPLETED.md). Closing config (iter10) uses a Procrustes-from-Smith2019 anchor as both L-BFGS init and regularizer target, with a per-wrap opt-out for `Med_Lig_r` (multi-minima loss landscape). A vs B wrap-surface drift suppressed to ≤1 µm on centers/radii/dims; mean classification accuracy +1.36% over the iter3 starting point. Validated end-to-end on subject 9018389_RIGHT via SLURM jobs 46868, 46869, 46872. Multi-subject Level 3 validation handed off to `comak_gait_simulation/.claude/plans/NSOSIM_WRAP_FITTER_MIGRATION.md`.
+
 ### Best combination (committed)
 
 Plain Adam + wrap multi-start (`wrap_n_restarts=3`, `wrap_jitter_scale=1e-6`). Hybrid NSM available but not enabled by default.
@@ -196,6 +198,8 @@ The original "bit-identical" framing was the right target on paper but isn't ach
 ---
 
 ## End-to-end results (2026-05-10, job 46797)
+
+**Caveat (added 2026-05-10, post-audit):** the e2e harness in `comak_gait_simulation/tests/verify_determinism/submit_end_to_end_determinism.sh` was configured with only `paths.base_results_folder` in its per-run JSON — `wrap_n_restarts` defaulted to **1** (single-start), not 3. So the 4 problem wraps below are the **single-start drift**, not the post-multi-start ceiling the section narrative implied. A re-run with `wrap_n_restarts=3` is in flight as **job 46809**; numbers below to be amended (or duplicated as "single-start vs multi-start") when it lands.
 
 Two complete pipeline runs (comak_1 + comak_2) under current code, compared against each other.
 
