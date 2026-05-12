@@ -283,6 +283,7 @@ def fit_bone_wrap_surfaces(
     patella_wrap_dimension_scale=0.9,
     n_restarts=1,
     jitter_scale=1e-6,
+    anchors=None,
 ):
     """Fit wrap surfaces to a labeled bone mesh.
 
@@ -317,6 +318,13 @@ def fit_bone_wrap_surfaces(
         Default 1e-6 (1 µm) — well below biomechanically meaningful scale and
         comparable to the upstream input drift the multi-start is hedging against.
         Ignored if n_restarts == 1.
+    anchors : dict or None
+        Optional Procrustes-from-Smith2019 anchors structured as
+        ``{body_name: {surface_type: {wrap_name: wrap_surface}}}`` (output of
+        ``procrustes_anchor.procrustes_anchors_from_smith2019()[bone_name]``).
+        When provided, each wrap is initialized from its anchor and the
+        regularizer pins toward that anchor. Wraps without an entry fall back
+        to the algebraic init.
 
     Returns
     -------
@@ -350,6 +358,14 @@ def fit_bone_wrap_surfaces(
     if wrap_surface_spec is None:
         wrap_surface_spec = DEFAULT_SMITH2019_BONES[bone_name]["wrap_surfaces"]
 
+    def _anchor_for(body_name, surface_type, wrap_name):
+        if anchors is None:
+            return None
+        try:
+            return anchors[body_name][surface_type][wrap_name]
+        except KeyError:
+            return None
+
     for body_name, body_data in wrap_surface_spec.items():
         fitted[body_name] = {}
         for surface_type, surface_list in body_data.items():
@@ -366,9 +382,13 @@ def fit_bone_wrap_surfaces(
                         surface_name=wrap_name,
                         **ellipsoid_fit,
                     )
+                    anchor = _anchor_for(body_name, surface_type, wrap_name)
+                    constructor_kwargs = dict(ellipsoid_constructor)
+                    if anchor is not None:
+                        constructor_kwargs["anchor_params"] = anchor
                     fitter = _fit_with_restarts(
                         EllipsoidFitter,
-                        ellipsoid_constructor,
+                        constructor_kwargs,
                         fit_kwargs,
                         labeled_mesh_points,
                         n_restarts=n_restarts,
@@ -397,9 +417,13 @@ def fit_bone_wrap_surfaces(
                         near_surface_points=near_surface_points,
                         **cylinder_fit,
                     )
+                    anchor = _anchor_for(body_name, surface_type, wrap_name)
+                    constructor_kwargs = dict(cylinder_constructor)
+                    if anchor is not None:
+                        constructor_kwargs["anchor_params"] = anchor
                     fitter = _fit_with_restarts(
                         CylinderFitter,
-                        cylinder_constructor,
+                        constructor_kwargs,
                         fit_kwargs,
                         near_surface_points,
                         n_restarts=n_restarts,

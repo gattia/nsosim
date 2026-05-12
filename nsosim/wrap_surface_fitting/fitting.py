@@ -423,8 +423,11 @@ class BaseShapeFitter(ABC):
         if len(inside) < 3:
             warnings.warn(f"Very few inside points ({len(inside)}) for robust fitting")
 
-        # Check initialization requirements
-        if self.initialization == "geometric":
+        # Check initialization requirements. If anchor_params is set, the
+        # anchor path short-circuits the geometric path so the mesh check
+        # doesn't apply.
+        anchor_set = getattr(self, "anchor_params", None) is not None
+        if self.initialization == "geometric" and not anchor_set:
             if mesh is None or surface_name is None:
                 warnings.warn(
                     "Geometric initialization requires mesh and surface_name. Falling back to PCA."
@@ -732,6 +735,7 @@ class CylinderFitter(BaseShapeFitter):
         random_axis_degrees=0.0,
         lambda_center_reg=0.0,
         lambda_axis_reg=0.0,
+        anchor_params=None,
         **kwargs,
     ):
         """
@@ -754,6 +758,10 @@ class CylinderFitter(BaseShapeFitter):
                 For ``center_transform='linear'`` (the default) the regularizer is in linear
                 meters. Default 0 (off).
             lambda_axis_reg: Weight for ``λ * ||axis - axis_init||²`` regularizer. Default 0 (off).
+            anchor_params: Optional ``wrap_surface`` used as BOTH the L-BFGS init and
+                the regularizer target. When provided, overrides the algebraic-fit
+                initialization with a Procrustes-from-Smith2019 anchor — the trusted
+                reference geometry. Default None.
         """
         super().__init__(*args, **kwargs)
         self.center_offset = center_offset
@@ -763,6 +771,7 @@ class CylinderFitter(BaseShapeFitter):
         self.random_axis_degrees = random_axis_degrees
         self.lambda_center_reg = lambda_center_reg
         self.lambda_axis_reg = lambda_axis_reg
+        self.anchor_params = anchor_params
         self._init_log_center = None
         self._init_axis = None
 
@@ -840,12 +849,35 @@ class CylinderFitter(BaseShapeFitter):
         return c0, radius0, half_len0, axis  # Return axis vector instead of rotation matrix
 
     def _initialize_parameters(self, points_inside, mesh=None, surface_name=None):
-        """Route to appropriate initialization method based on self.initialization."""
+        """Route to appropriate initialization method.
+
+        Order of preference:
+          1. ``anchor_params`` (Procrustes-from-Smith2019 anchor) if provided.
+          2. ``self.initialization`` ('geometric' or 'pca').
+        """
+        if self.anchor_params is not None:
+            logger.info(f"Initializing cylinder from Procrustes anchor for {surface_name}")
+            return self._initialize_parameters_from_anchor()
         if self.initialization == "geometric":
             logger.info(f"Initializing cylinder using geometric method for {surface_name}")
             return self._initialize_parameters_geometric(mesh, surface_name)
         else:  # 'pca' or fallback
             return self._initialize_parameters_pca(points_inside)
+
+    def _initialize_parameters_from_anchor(self):
+        """Build (center, radius, half_length, axis_vector) from the ``wrap_surface`` anchor."""
+        from scipy.spatial.transform import Rotation as _ScipyRotation
+
+        a = self.anchor_params
+        center = torch.as_tensor(np.asarray(a.translation), dtype=torch.float32, device=self.device)
+        radius = torch.as_tensor(float(a.radius), dtype=torch.float32, device=self.device)
+        half_length = torch.as_tensor(
+            float(a.length) / 2.0, dtype=torch.float32, device=self.device
+        )
+        R_np = _ScipyRotation.from_euler("XYZ", np.asarray(a.xyz_body_rotation)).as_matrix()
+        axis_vector = torch.as_tensor(R_np[:, 2].copy(), dtype=torch.float32, device=self.device)
+        axis_vector = self._apply_random_axis_rotation(axis_vector)
+        return center, radius, half_length, axis_vector
 
     def _initialize_parameters_geometric(self, mesh, surface_name):
         """Initialize parameters using geometric surface analysis method."""
@@ -1170,6 +1202,7 @@ class EllipsoidFitter(BaseShapeFitter):
         lambda_center_reg=0.0,
         lambda_axes_reg=0.0,
         lambda_quat_reg=0.0,
+        anchor_params=None,
         **kwargs,
     ):
         """
@@ -1190,6 +1223,12 @@ class EllipsoidFitter(BaseShapeFitter):
             lambda_quat_reg: Weight for ``λ * ||quat - quat_init||²`` regularizer
                 (in unit-quaternion space — ||q - q_init|| ≈ angle/2 for small angles).
                 Pins rotation in flat directions. Default 0 (off).
+            anchor_params: Optional ``wrap_surface`` (from ``procrustes_anchor``)
+                used as BOTH the L-BFGS init and the regularizer target. When
+                provided, overrides the algebraic-fit initialization with a
+                Procrustes-from-Smith2019 anchor — the trusted reference geometry
+                rather than whatever biased estimate the algebraic fit produces
+                on the subject bone. Default None (use algebraic / PCA init).
         """
         super().__init__(*args, **kwargs)
         self.center_offset = center_offset
@@ -1198,6 +1237,7 @@ class EllipsoidFitter(BaseShapeFitter):
         self.lambda_center_reg = lambda_center_reg
         self.lambda_axes_reg = lambda_axes_reg
         self.lambda_quat_reg = lambda_quat_reg
+        self.anchor_params = anchor_params
         # Initialization snapshot used as regularizer anchor; set by _create_parameters.
         self._init_center = None
         self._init_log_axes = None
@@ -1231,12 +1271,31 @@ class EllipsoidFitter(BaseShapeFitter):
         return c0, a0, R0
 
     def _initialize_parameters(self, points_inside, mesh=None, surface_name=None):
-        """Route to appropriate initialization method based on self.initialization."""
+        """Route to appropriate initialization method.
+
+        Order of preference:
+          1. ``anchor_params`` (Procrustes-from-Smith2019 anchor) if provided.
+          2. ``self.initialization`` ('geometric' or 'pca').
+        """
+        if self.anchor_params is not None:
+            logger.info(f"Initializing ellipsoid from Procrustes anchor for {surface_name}")
+            return self._initialize_parameters_from_anchor()
         if self.initialization == "geometric":
             logger.info(f"Initializing ellipsoid using geometric method for {surface_name}")
             return self._initialize_parameters_geometric(mesh, surface_name)
         else:  # 'pca' or fallback
             return self._initialize_parameters_pca(points_inside)
+
+    def _initialize_parameters_from_anchor(self):
+        """Build (center, axes, R) tensors from the ``wrap_surface`` anchor."""
+        from scipy.spatial.transform import Rotation as _ScipyRotation
+
+        a = self.anchor_params
+        center = torch.as_tensor(np.asarray(a.translation), dtype=torch.float32, device=self.device)
+        axes = torch.as_tensor(np.asarray(a.dimensions), dtype=torch.float32, device=self.device)
+        R_np = _ScipyRotation.from_euler("XYZ", np.asarray(a.xyz_body_rotation)).as_matrix()
+        rotation = torch.as_tensor(R_np, dtype=torch.float32, device=self.device)
+        return center, axes, rotation
 
     def _initialize_parameters_geometric(self, mesh, surface_name):
         """Initialize parameters using geometric surface analysis method."""

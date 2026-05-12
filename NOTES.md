@@ -286,6 +286,47 @@ Then run the isolation test against subject 9018389_RIGHT and check both
 the A vs B drift (criterion 1) and Capsule_r-vs-Smith2019 distance (criterion 3,
 target < 0.5 mm).
 
+### Iter 5 (2026-05-12) — Wire anchor into fitters ✅ COMMITTED
+
+Added `anchor_params` kwarg (default `None`) to both `EllipsoidFitter` and
+`CylinderFitter`. When provided:
+- `_initialize_parameters` short-circuits the algebraic/PCA path and calls a
+  new `_initialize_parameters_from_anchor()` that converts the
+  ``wrap_surface`` to (center, axes/radius, rotation) tensors via scipy
+  `from_euler("XYZ", ...)`.
+- `_create_parameters` naturally snapshots the anchor values into
+  `_init_center` / `_init_log_axes` / `_init_quat` (ellipsoid) and
+  `_init_log_center` / `_init_axis` (cylinder), so the existing regularizer
+  pulls toward the anchor with no further code changes.
+- The "geometric init requires mesh" pre-check is skipped when an anchor is
+  set (it wouldn't be hit anyway, but the early warning is misleading).
+
+Plumbed an `anchors` kwarg through `model_building.fit_bone_wrap_surfaces`
+that's lookup-by-wrap-name; missing entries fall back to algebraic init.
+Plan: build a Procrustes anchors dict once per bone via
+`procrustes_anchors_from_smith2019(smith2019_osim_path)` and pass it through.
+
+**5 new tests in `tests/test_anchor_wiring.py`** (all pass):
+- `test_ellipsoid_anchor_overrides_init_snapshot` — `_init_center` /
+  `_init_log_axes` exactly match the anchor when anchor is provided.
+- `test_ellipsoid_strong_reg_pulls_fit_to_anchor` — with λ=1e10 and an
+  offset anchor, the fit snaps to the anchor (center within 5e-4 m of
+  anchor, dimensions within 5e-4 m).
+- `test_ellipsoid_no_anchor_unchanged` — without an anchor, fit still
+  converges to the data center (regression of pre-iter5 behavior).
+- `test_cylinder_anchor_overrides_init_snapshot` — `_init_log_center`
+  matches anchor.
+- `test_cylinder_strong_reg_pulls_fit_to_anchor` — perpendicular center
+  drift < 5e-4 m when λ=1e10.
+
+`tests/test_fitting.py` (23 tests) + `tests/test_procrustes_anchor.py` (11)
++ new wiring tests = 39/39 pass. No regressions.
+
+**Next iter (6):** Reduce default λ values in `DEFAULT_FITTING_CONFIG`
+(center 1.0 → 0.05, axes/quat 0.1 → 0.005), and update
+`model_building.build_joint_model` to optionally build & pass anchors when
+a `smith2019_osim_path` is supplied. Then run the isolation test.
+
 ## Open issues (out of scope for this work)
 
 1. **`create_ellipsoid_polydata` (and `create_cylinder_polydata`) rotation convention bug.** Should use `Rx @ Ry @ Rz` (intrinsic XYZ) to match OpenSim's interpretation. For large rotations the rendered mesh doesn't match what OpenSim simulates. Fix: replace pyvista's `rotate_x().rotate_y().rotate_z()` chain with an explicit `scipy.spatial.transform.Rotation.from_euler('XYZ', ...).as_matrix() @ points`.
