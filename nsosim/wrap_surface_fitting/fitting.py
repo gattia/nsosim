@@ -423,8 +423,11 @@ class BaseShapeFitter(ABC):
         if len(inside) < 3:
             warnings.warn(f"Very few inside points ({len(inside)}) for robust fitting")
 
-        # Check initialization requirements
-        if self.initialization == "geometric":
+        # Check initialization requirements. If anchor_params is set, the
+        # anchor path short-circuits the geometric path so the mesh check
+        # doesn't apply.
+        anchor_set = getattr(self, "anchor_params", None) is not None
+        if self.initialization == "geometric" and not anchor_set:
             if mesh is None or surface_name is None:
                 warnings.warn(
                     "Geometric initialization requires mesh and surface_name. Falling back to PCA."
@@ -730,6 +733,9 @@ class CylinderFitter(BaseShapeFitter):
         center_transform="linear",
         fix_height=False,
         random_axis_degrees=0.0,
+        lambda_center_reg=0.0,
+        lambda_axis_reg=0.0,
+        anchor_params=None,
         **kwargs,
     ):
         """
@@ -745,6 +751,17 @@ class CylinderFitter(BaseShapeFitter):
                        If False, allows oversized cylinders but may help alignment optimization.
             random_axis_degrees: Optional random rotation to apply to initialized axis vector (in degrees).
                                Useful for testing robustness or escaping local minima. Default: 0.0 (no perturbation)
+            lambda_center_reg: Weight for ``λ * ||log_center - log_center_init||²`` regularizer
+                — pins the cylinder center to its initialization in flat directions of the
+                loss landscape. The cylinder's axial direction is often flat (sliding the
+                cylinder along its long axis doesn't change which bone points are inside it).
+                For ``center_transform='linear'`` (the default) the regularizer is in linear
+                meters. Default 0 (off).
+            lambda_axis_reg: Weight for ``λ * ||axis - axis_init||²`` regularizer. Default 0 (off).
+            anchor_params: Optional ``wrap_surface`` used as BOTH the L-BFGS init and
+                the regularizer target. When provided, overrides the algebraic-fit
+                initialization with a Procrustes-from-Smith2019 anchor — the trusted
+                reference geometry. Default None.
         """
         super().__init__(*args, **kwargs)
         self.center_offset = center_offset
@@ -752,6 +769,11 @@ class CylinderFitter(BaseShapeFitter):
         self.center_scale = 100.0  # Scale small meter values (0.06-0.1) to reasonable range (6-10)
         self.fix_height = fix_height
         self.random_axis_degrees = random_axis_degrees
+        self.lambda_center_reg = lambda_center_reg
+        self.lambda_axis_reg = lambda_axis_reg
+        self.anchor_params = anchor_params
+        self._init_log_center = None
+        self._init_axis = None
 
     def _apply_random_axis_rotation(self, axis_vector):
         """Apply random rotation to axis vector if random_axis_degrees > 0.
@@ -827,12 +849,35 @@ class CylinderFitter(BaseShapeFitter):
         return c0, radius0, half_len0, axis  # Return axis vector instead of rotation matrix
 
     def _initialize_parameters(self, points_inside, mesh=None, surface_name=None):
-        """Route to appropriate initialization method based on self.initialization."""
+        """Route to appropriate initialization method.
+
+        Order of preference:
+          1. ``anchor_params`` (Procrustes-from-Smith2019 anchor) if provided.
+          2. ``self.initialization`` ('geometric' or 'pca').
+        """
+        if self.anchor_params is not None:
+            logger.info(f"Initializing cylinder from Procrustes anchor for {surface_name}")
+            return self._initialize_parameters_from_anchor()
         if self.initialization == "geometric":
             logger.info(f"Initializing cylinder using geometric method for {surface_name}")
             return self._initialize_parameters_geometric(mesh, surface_name)
         else:  # 'pca' or fallback
             return self._initialize_parameters_pca(points_inside)
+
+    def _initialize_parameters_from_anchor(self):
+        """Build (center, radius, half_length, axis_vector) from the ``wrap_surface`` anchor."""
+        from scipy.spatial.transform import Rotation as _ScipyRotation
+
+        a = self.anchor_params
+        center = torch.as_tensor(np.asarray(a.translation), dtype=torch.float32, device=self.device)
+        radius = torch.as_tensor(float(a.radius), dtype=torch.float32, device=self.device)
+        half_length = torch.as_tensor(
+            float(a.length) / 2.0, dtype=torch.float32, device=self.device
+        )
+        R_np = _ScipyRotation.from_euler("XYZ", np.asarray(a.xyz_body_rotation)).as_matrix()
+        axis_vector = torch.as_tensor(R_np[:, 2].copy(), dtype=torch.float32, device=self.device)
+        axis_vector = self._apply_random_axis_rotation(axis_vector)
+        return center, radius, half_length, axis_vector
 
     def _initialize_parameters_geometric(self, mesh, surface_name):
         """Initialize parameters using geometric surface analysis method."""
@@ -955,7 +1000,7 @@ class CylinderFitter(BaseShapeFitter):
             log_center = torch.nn.Parameter(torch.clamp(center_scaled, min=1e-6).log())
         elif self.center_transform == "linear":
             # No transformation - original behavior
-            log_center = torch.nn.Parameter(center0)
+            log_center = torch.nn.Parameter(center0.clone())
         else:
             raise ValueError(f"Unknown center_transform: {self.center_transform}")
 
@@ -963,7 +1008,11 @@ class CylinderFitter(BaseShapeFitter):
         log_h = torch.nn.Parameter(torch.clamp(half_len0, min=1e-6).log())
 
         # Axis vector parameterization (no constraints needed - normalization handled in forward pass)
-        axis_vector = torch.nn.Parameter(axis0)
+        axis_vector = torch.nn.Parameter(axis0.clone())
+
+        # Snapshot initial values for the regularizer anchor.
+        self._init_log_center = log_center.detach().clone()
+        self._init_axis = axis_vector.detach().clone()
 
         return [log_center, log_r, log_h, axis_vector]
 
@@ -1041,14 +1090,38 @@ class CylinderFitter(BaseShapeFitter):
         else:
             surface_points_loss = torch.tensor(0.0, device=self.device)
 
+        # Parameter regularizers — pin flat directions of the loss landscape to
+        # the (stable) initialization. The cylinder axial direction is often
+        # flat (a long cylinder slides along its axis without changing in/out
+        # classification of bone points by much).
+        reg_loss = torch.tensor(0.0, device=self.device)
+        if self.lambda_center_reg > 0 or self.lambda_axis_reg > 0:
+            if self.lambda_center_reg > 0 and self._init_log_center is not None:
+                reg_loss = (
+                    reg_loss
+                    + self.lambda_center_reg * ((log_center - self._init_log_center) ** 2).sum()
+                )
+            if self.lambda_axis_reg > 0 and self._init_axis is not None:
+                # Account for the axis-vector sign ambiguity: regularize toward
+                # whichever sign of init is closer.
+                a = axis_vector
+                a_init = self._init_axis
+                d_pos = ((a - a_init) ** 2).sum()
+                d_neg = ((a + a_init) ** 2).sum()
+                reg_loss = reg_loss + self.lambda_axis_reg * torch.minimum(d_pos, d_neg)
+
         logger.info(
             f"Epoch {epoch}: Margin={margin_decayed:.6f} (decay={margin_decayed/margin:.3f}), "
-            f"MarginLoss={margin_loss:.6f}, DistLoss={distance_loss:.6f}, SurfLoss={surface_points_loss:.6f}"
+            f"MarginLoss={margin_loss:.6f}, DistLoss={distance_loss:.6f}, "
+            f"SurfLoss={surface_points_loss:.6f}, RegLoss={reg_loss.item():.6e}"
         )
 
-        # Hybrid loss: alpha * margin_loss + beta * distance_loss + gamma * surface_points_loss
+        # Hybrid loss: alpha * margin_loss + beta * distance_loss + gamma * surface_points_loss + reg
         return (
-            self.alpha * margin_loss + self.beta * distance_loss + self.gamma * surface_points_loss
+            self.alpha * margin_loss
+            + self.beta * distance_loss
+            + self.gamma * surface_points_loss
+            + reg_loss
         )
 
     def _extract_results(self, parameters):
@@ -1121,7 +1194,17 @@ class CylinderFitter(BaseShapeFitter):
 class EllipsoidFitter(BaseShapeFitter):
     """Ellipsoid fitting using PCA initialization and PyTorch optimization."""
 
-    def __init__(self, *args, center_offset=0.3, center_transform="linear", **kwargs):
+    def __init__(
+        self,
+        *args,
+        center_offset=0.3,
+        center_transform="linear",
+        lambda_center_reg=0.0,
+        lambda_axes_reg=0.0,
+        lambda_quat_reg=0.0,
+        anchor_params=None,
+        **kwargs,
+    ):
         """
         Args:
             center_offset: Offset added to center coordinates before log transformation
@@ -1131,11 +1214,34 @@ class EllipsoidFitter(BaseShapeFitter):
                             - 'log_offset': log(center + offset)
                             - 'scale': log(center * scale + 1) for small values
                             - 'linear': no transformation (original behavior)
+            lambda_center_reg: Weight for ``λ * ||center - center_init||²`` regularizer
+                (units: 1/m²). Pins the fit center to its (stable) initialization in
+                flat directions of the loss landscape; the geometric loss dominates
+                wherever the landscape has real curvature. Default 0 (off).
+            lambda_axes_reg: Weight for ``λ * ||log_axes - log_axes_init||²``
+                regularizer. Pins axes magnitudes in flat directions. Default 0 (off).
+            lambda_quat_reg: Weight for ``λ * ||quat - quat_init||²`` regularizer
+                (in unit-quaternion space — ||q - q_init|| ≈ angle/2 for small angles).
+                Pins rotation in flat directions. Default 0 (off).
+            anchor_params: Optional ``wrap_surface`` (from ``procrustes_anchor``)
+                used as BOTH the L-BFGS init and the regularizer target. When
+                provided, overrides the algebraic-fit initialization with a
+                Procrustes-from-Smith2019 anchor — the trusted reference geometry
+                rather than whatever biased estimate the algebraic fit produces
+                on the subject bone. Default None (use algebraic / PCA init).
         """
         super().__init__(*args, **kwargs)
         self.center_offset = center_offset
         self.center_transform = center_transform
         self.center_scale = 100.0  # Scale small meter values (0.06-0.1) to reasonable range (6-10)
+        self.lambda_center_reg = lambda_center_reg
+        self.lambda_axes_reg = lambda_axes_reg
+        self.lambda_quat_reg = lambda_quat_reg
+        self.anchor_params = anchor_params
+        # Initialization snapshot used as regularizer anchor; set by _create_parameters.
+        self._init_center = None
+        self._init_log_axes = None
+        self._init_quat = None
 
     def _initialize_parameters_pca(self, points_inside):
         """Ellipsoid-specific PCA: all 3 components become ellipsoid semi-axes."""
@@ -1165,12 +1271,31 @@ class EllipsoidFitter(BaseShapeFitter):
         return c0, a0, R0
 
     def _initialize_parameters(self, points_inside, mesh=None, surface_name=None):
-        """Route to appropriate initialization method based on self.initialization."""
+        """Route to appropriate initialization method.
+
+        Order of preference:
+          1. ``anchor_params`` (Procrustes-from-Smith2019 anchor) if provided.
+          2. ``self.initialization`` ('geometric' or 'pca').
+        """
+        if self.anchor_params is not None:
+            logger.info(f"Initializing ellipsoid from Procrustes anchor for {surface_name}")
+            return self._initialize_parameters_from_anchor()
         if self.initialization == "geometric":
             logger.info(f"Initializing ellipsoid using geometric method for {surface_name}")
             return self._initialize_parameters_geometric(mesh, surface_name)
         else:  # 'pca' or fallback
             return self._initialize_parameters_pca(points_inside)
+
+    def _initialize_parameters_from_anchor(self):
+        """Build (center, axes, R) tensors from the ``wrap_surface`` anchor."""
+        from scipy.spatial.transform import Rotation as _ScipyRotation
+
+        a = self.anchor_params
+        center = torch.as_tensor(np.asarray(a.translation), dtype=torch.float32, device=self.device)
+        axes = torch.as_tensor(np.asarray(a.dimensions), dtype=torch.float32, device=self.device)
+        R_np = _ScipyRotation.from_euler("XYZ", np.asarray(a.xyz_body_rotation)).as_matrix()
+        rotation = torch.as_tensor(R_np, dtype=torch.float32, device=self.device)
+        return center, axes, rotation
 
     def _initialize_parameters_geometric(self, mesh, surface_name):
         """Initialize parameters using geometric surface analysis method."""
@@ -1233,13 +1358,20 @@ class EllipsoidFitter(BaseShapeFitter):
     def _create_parameters(self, initial_params):
         center0, axes0, R0 = initial_params
         center = torch.nn.Parameter(center0)
-        log_axes = torch.nn.Parameter(torch.clamp(axes0, min=1e-6).log())
+        log_axes_init = torch.clamp(axes0, min=1e-6).log()
+        log_axes = torch.nn.Parameter(log_axes_init.clone())
 
         # 4. Rotation (quaternion parameterization)
         initial_quat = RotationUtils.quat_from_rot(R0)
         # Ensure initial quaternion is normalized
         initial_quat /= torch.norm(initial_quat) + 1e-8
-        quat = torch.nn.Parameter(initial_quat)
+        quat = torch.nn.Parameter(initial_quat.clone())
+
+        # Snapshot initial parameter values for the regularizer anchor. These
+        # detach from the computation graph and are not optimized.
+        self._init_center = center0.detach().clone()
+        self._init_log_axes = log_axes_init.detach().clone()
+        self._init_quat = initial_quat.detach().clone()
 
         return [center, log_axes, quat]
 
@@ -1312,14 +1444,42 @@ class EllipsoidFitter(BaseShapeFitter):
         else:
             surface_points_loss = torch.tensor(0.0, device=self.device)
 
+        # Parameter regularizers — pull the fit toward its (stable) init in flat
+        # directions of the loss landscape. Geometric loss dominates wherever
+        # the landscape has real curvature. See lambda_*_reg docstrings.
+        reg_loss = torch.tensor(0.0, device=self.device)
+        if self.lambda_center_reg > 0 or self.lambda_axes_reg > 0 or self.lambda_quat_reg > 0:
+            center, log_axes, quat = self._current_parameters
+            if self.lambda_center_reg > 0 and self._init_center is not None:
+                reg_loss = (
+                    reg_loss + self.lambda_center_reg * ((center - self._init_center) ** 2).sum()
+                )
+            if self.lambda_axes_reg > 0 and self._init_log_axes is not None:
+                reg_loss = (
+                    reg_loss + self.lambda_axes_reg * ((log_axes - self._init_log_axes) ** 2).sum()
+                )
+            if self.lambda_quat_reg > 0 and self._init_quat is not None:
+                # Account for the quaternion double cover (q and -q encode the
+                # same rotation): regularize toward whichever sign of init is
+                # closer in L2.
+                q = quat
+                q_init = self._init_quat
+                d_pos = ((q - q_init) ** 2).sum()
+                d_neg = ((q + q_init) ** 2).sum()
+                reg_loss = reg_loss + self.lambda_quat_reg * torch.minimum(d_pos, d_neg)
+
         logger.info(
             f"Epoch {epoch}: Margin={margin_decayed:.6f} (decay={margin_decayed/margin:.3f}), "
-            f"MarginLoss={margin_loss:.6f}, DistLoss={distance_loss:.6f}, SurfLoss={surface_points_loss:.6f}"
+            f"MarginLoss={margin_loss:.6f}, DistLoss={distance_loss:.6f}, "
+            f"SurfLoss={surface_points_loss:.6f}, RegLoss={reg_loss.item():.6e}"
         )
 
-        # Hybrid loss: alpha * margin_loss + beta * distance_loss + gamma * surface_points_loss
+        # Hybrid loss: alpha * margin_loss + beta * distance_loss + gamma * surface_points_loss + reg
         return (
-            self.alpha * margin_loss + self.beta * distance_loss + self.gamma * surface_points_loss
+            self.alpha * margin_loss
+            + self.beta * distance_loss
+            + self.gamma * surface_points_loss
+            + reg_loss
         )
 
     def _setup_plotting(self, plot):
@@ -1395,8 +1555,13 @@ class EllipsoidFitter(BaseShapeFitter):
         axes = axes.detach().cpu().numpy()
         rot_matrix = rot_matrix.detach().cpu().numpy()
 
-        # Apply sign convention fix to ensure deterministic Euler angles
-        rot_matrix_fixed = RotationUtils.enforce_sign_convention(rot_matrix)
+        # Canonicalize (R, axes) for an ellipsoid: sort axes descending and
+        # apply sign convention keyed on each column's dominant component.
+        # This is stable near gimbal lock — the previous enforce_sign_convention
+        # keyed on R[0,0]/R[1,1] which approach zero there, so micron-scale
+        # input drift would flip columns and swing the Euler representation
+        # by several degrees. See `canonical_ellipsoid_pose` docstring.
+        rot_matrix_fixed, axes = RotationUtils.canonical_ellipsoid_pose(rot_matrix, axes)
 
         # convert rot_matrix to xyz euler angles
         xyz_body_rotation = RotationUtils.rot_to_euler_xyz_body(rot_matrix_fixed)

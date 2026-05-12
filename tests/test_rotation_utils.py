@@ -168,3 +168,92 @@ class TestEnforceSignConventionIdempotency:
         assert torch.allclose(
             R1, R2, atol=1e-10
         ), f"enforce_sign_convention is not idempotent for seed={seed}"
+
+
+# ---------------------------------------------------------------------------
+# canonical_ellipsoid_pose
+# ---------------------------------------------------------------------------
+
+
+def _ellipsoid_matrix(R, axes):
+    """Reconstruct the ellipsoid's quadratic-form matrix Q = R diag(a²) R^T."""
+    R = np.asarray(R, dtype=np.float64)
+    axes = np.asarray(axes, dtype=np.float64)
+    return R @ np.diag(axes**2) @ R.T
+
+
+class TestCanonicalEllipsoidPose:
+    """canonical_ellipsoid_pose must preserve geometry and be stable to perturbation."""
+
+    @pytest.mark.parametrize("seed", [0, 1, 2, 3, 4])
+    def test_geometric_invariance(self, seed):
+        # Random rotation + random distinct axes — canonicalization must return
+        # the same geometric ellipsoid.
+        rng = np.random.default_rng(seed)
+        R = ScipyR.random(random_state=seed).as_matrix()
+        axes = rng.uniform(0.005, 0.05, size=3)
+        R2, axes2 = RotationUtils.canonical_ellipsoid_pose(R, axes)
+        np.testing.assert_allclose(
+            _ellipsoid_matrix(R, axes), _ellipsoid_matrix(R2, axes2), atol=1e-14
+        )
+
+    def test_idempotent(self):
+        # Applying canonicalization twice should produce the same result.
+        R = ScipyR.random(random_state=42).as_matrix()
+        axes = np.array([0.012, 0.017, 0.032])
+        R1, a1 = RotationUtils.canonical_ellipsoid_pose(R, axes)
+        R2, a2 = RotationUtils.canonical_ellipsoid_pose(R1, a1)
+        np.testing.assert_allclose(R1, R2, atol=1e-14)
+        np.testing.assert_allclose(a1, a2, atol=1e-14)
+
+    def test_axes_sorted_descending(self):
+        R = ScipyR.random(random_state=7).as_matrix()
+        axes = np.array([0.012, 0.017, 0.032])
+        _, axes_canon = RotationUtils.canonical_ellipsoid_pose(R, axes)
+        assert axes_canon[0] >= axes_canon[1] >= axes_canon[2]
+
+    def test_right_handed(self):
+        R = ScipyR.random(random_state=11).as_matrix()
+        R[:, 1] *= -1  # make left-handed
+        axes = np.array([0.01, 0.02, 0.03])
+        R2, _ = RotationUtils.canonical_ellipsoid_pose(R, axes)
+        assert np.linalg.det(R2) > 0
+
+    def test_stable_near_gimbal_lock(self):
+        """The whole point: small perturbations of a near-gimbal-lock R give
+        a small canonical-pose change in Euler-angle output."""
+        # Med_Lig_r-like: middle Euler ~ 83° (near gimbal lock at 90°)
+        euler_A = np.array([-0.681942, 1.451605, 0.692665])
+        euler_B = np.array([-0.800769, 1.437294, 0.816801])
+        axes_A = np.array([0.012032, 0.017258, 0.032061])
+        axes_B = np.array([0.012010, 0.017308, 0.032030])
+        RA = ScipyR.from_euler("XYZ", euler_A).as_matrix()
+        RB = ScipyR.from_euler("XYZ", euler_B).as_matrix()
+        # The geodesic angle between RA and RB is ~1.24°
+        geodesic_deg = np.degrees(np.arccos(np.clip((np.trace(RA.T @ RB) - 1) / 2, -1, 1)))
+        assert geodesic_deg < 1.5, f"setup sanity: geodesic should be ~1.24°, got {geodesic_deg}"
+
+        RA_c, _ = RotationUtils.canonical_ellipsoid_pose(RA, axes_A)
+        RB_c, _ = RotationUtils.canonical_ellipsoid_pose(RB, axes_B)
+        eA = RotationUtils.rot_to_euler_xyz_body(RA_c)
+        eB = RotationUtils.rot_to_euler_xyz_body(RB_c)
+        max_euler_diff_deg = np.max(np.abs(np.degrees(eB - eA)))
+        # Old enforce_sign_convention gave 7.1° here; new canonical should be ≤ 2× geodesic.
+        assert max_euler_diff_deg < 2.0, (
+            f"Canonical pose Euler drift should be near geodesic ({geodesic_deg:.2f}°), "
+            f"got {max_euler_diff_deg:.2f}°"
+        )
+
+    def test_numpy_input_returns_numpy(self):
+        R = np.eye(3)
+        axes = np.array([0.01, 0.02, 0.03])
+        R2, a2 = RotationUtils.canonical_ellipsoid_pose(R, axes)
+        assert isinstance(R2, np.ndarray)
+        assert isinstance(a2, np.ndarray)
+
+    def test_torch_input_returns_torch(self):
+        R = torch.eye(3, dtype=torch.float64)
+        axes = torch.tensor([0.01, 0.02, 0.03], dtype=torch.float64)
+        R2, a2 = RotationUtils.canonical_ellipsoid_pose(R, axes)
+        assert isinstance(R2, torch.Tensor)
+        assert isinstance(a2, torch.Tensor)
