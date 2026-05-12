@@ -124,3 +124,10 @@ scripts/phase6_rajagopal_audit/forsim_results/
 scripts/phase6_rajagopal_audit/*_audit.json
 scripts/phase6_rajagopal_audit/model_mapping.json
 scripts/phase6_rajagopal_audit/*.xml
+
+# Scratch SLURM outputs from wrap-fitter robustness work — diagnostic
+# scripts in scratch/iter*/ are tracked individually, but the regeneratable
+# mesh/osim outputs and SLURM logs are ignored.
+scratch/iter*/build_isolation_*/
+scratch/iter*/slurm_outputs/
+scratch/iter*/last_job_id
