@@ -113,7 +113,11 @@ DEFAULT_FITTING_CONFIG = {
             # much). Tuned down 20x from the iter3 default (1.0) once the
             # anchor became Smith2019-derived.
             "lambda_center_reg": 0.05,  # in meters (linear center_transform)
-            "lambda_axis_reg": 0.0,  # axis direction handled by initialization already
+            # iter8: a mild axis pin keeps rotation tight under bone-mesh
+            # noise. Iter7 saw KnExt_at_fem_r drift ~0.056° between runs A
+            # and B with axis reg disabled; the anchor's axis direction is
+            # trusted (Smith2019-derived) so binding to it is appropriate.
+            "lambda_axis_reg": 0.1,
         },
         # fit() method parameters
         "fit": {
