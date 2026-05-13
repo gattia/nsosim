@@ -957,6 +957,22 @@ def build_joint_model(
     if folder_save_bones is None:
         folder_save_bones = save_dir
 
+    # Wrap-fit mode selector. Three options:
+    #   'lbfgs_smith2019_anchor' (default): Smith2019 wrap params used as
+    #     LBFGS init + regularizer target. Per-wrap opt-out via
+    #     ``wraps_to_skip_anchor`` for known bad-basin wraps (Med_Lig_r).
+    #   'lbfgs_algebraic': pre-anchor behavior — no Smith2019 reference,
+    #     algebraic init from the labels, LBFGS optimizes from there.
+    #   'label_correspondence': subject-adapted wrap surfaces computed
+    #     directly from per-wrap label correspondence (Procrustes on
+    #     ref-near-surface → subject-near-surface bone vertices), applied
+    #     to Smith2019 wrap params. Used as the final fitted result; no
+    #     LBFGS. Beats LBFGS-with-Smith2019-anchor on every fittable wrap
+    #     in 10-subject validation, with A↔B reproducibility < 16 µm.
+    #     Patella (PatTen_r) still uses PatellaFitter — outside this mode's
+    #     scope.
+    wrap_fit_mode = cfg("wrap_fit_mode", "lbfgs_smith2019_anchor")
+
     # Build Procrustes-from-Smith2019 anchors once if a reference osim is
     # supplied via config['smith2019_osim_path']. The anchors get passed to
     # each fit_bone_wrap_surfaces call as the init + regularizer target,
@@ -969,9 +985,12 @@ def build_joint_model(
     # minimum near the Smith2019 anchor than near the algebraic init; the
     # algebraic init recovers 99.4 % vs the anchor's 97 % on subject 9018389.
     # The default skip-list is hard-coded but overridable via config.
+    # NB: under wrap_fit_mode='label_correspondence' this opt-out is
+    # unnecessary because the anchor is in the data-optimum basin by
+    # construction — the skip list is ignored in that mode.
     wraps_to_skip_anchor = set(cfg("wraps_to_skip_anchor", ["Med_Lig_r"]))
     anchors_by_bone = {}
-    if smith2019_osim_path is not None:
+    if wrap_fit_mode == "lbfgs_smith2019_anchor" and smith2019_osim_path is not None:
         from nsosim.wrap_surface_fitting.procrustes_anchor import (
             procrustes_anchors_from_smith2019,
         )
@@ -984,6 +1003,15 @@ def build_joint_model(
                         for name in list(stype_d.keys()):
                             if name in wraps_to_skip_anchor:
                                 del stype_d[name]
+
+    # In label_correspondence mode we need smith2019_osim_path to read the
+    # reference wrap parameters that get transformed per subject.
+    if wrap_fit_mode == "label_correspondence" and smith2019_osim_path is None:
+        raise ValueError(
+            "wrap_fit_mode='label_correspondence' requires "
+            "config['smith2019_osim_path'] to be set (source of reference "
+            "wrap parameters to transform)."
+        )
 
     fitted_wrap_parameters = {}
 
@@ -1035,15 +1063,29 @@ def build_joint_model(
 
     # Wrap surface fitting
     print("  Fitting wrap surfaces...")
-    fitted_wrap_parameters["femur"] = fit_bone_wrap_surfaces(
-        bone_name="femur",
-        labeled_mesh=fem_labeled_mesh,
-        labeled_mesh_points=fem_labeled_points,
-        fitter_configs=fitter_configs,
-        n_restarts=wrap_n_restarts,
-        jitter_scale=wrap_jitter_scale,
-        anchors=anchors_by_bone.get("femur"),
-    )
+    if wrap_fit_mode == "label_correspondence":
+        from nsosim.wrap_surface_fitting.label_correspondence_transform import (
+            label_correspondence_transforms_for_bone,
+        )
+        import pyvista as _pv  # local import; keeps top-of-file unchanged
+
+        ref_femur = _pv.read(dict_bones["femur"]["wrap"]["path_labeled_bone"])
+        fitted_wrap_parameters["femur"] = label_correspondence_transforms_for_bone(
+            smith2019_osim_path=smith2019_osim_path,
+            bone_name="femur",
+            ref_labeled_mesh=ref_femur,
+            subj_labeled_mesh=fem_labeled_mesh.mesh,  # pymskt.Mesh → underlying PolyData
+        )
+    else:
+        fitted_wrap_parameters["femur"] = fit_bone_wrap_surfaces(
+            bone_name="femur",
+            labeled_mesh=fem_labeled_mesh,
+            labeled_mesh_points=fem_labeled_points,
+            fitter_configs=fitter_configs,
+            n_restarts=wrap_n_restarts,
+            jitter_scale=wrap_jitter_scale,
+            anchors=anchors_by_bone.get("femur"),
+        )
 
     # Apply ligament updates after wrap fitting (matches original order)
     _apply_ligament_updates(dict_lig_musc_attach_params, fem_lig_updated, fem_lig_idx)
@@ -1094,15 +1136,29 @@ def build_joint_model(
 
     # Wrap surface fitting
     print("  Fitting wrap surfaces...")
-    fitted_wrap_parameters["tibia"] = fit_bone_wrap_surfaces(
-        bone_name="tibia",
-        labeled_mesh=tib_labeled_mesh,
-        labeled_mesh_points=tib_labeled_points,
-        fitter_configs=fitter_configs,
-        n_restarts=wrap_n_restarts,
-        jitter_scale=wrap_jitter_scale,
-        anchors=anchors_by_bone.get("tibia"),
-    )
+    if wrap_fit_mode == "label_correspondence":
+        from nsosim.wrap_surface_fitting.label_correspondence_transform import (
+            label_correspondence_transforms_for_bone,
+        )
+        import pyvista as _pv
+
+        ref_tibia = _pv.read(dict_bones["tibia"]["wrap"]["path_labeled_bone"])
+        fitted_wrap_parameters["tibia"] = label_correspondence_transforms_for_bone(
+            smith2019_osim_path=smith2019_osim_path,
+            bone_name="tibia",
+            ref_labeled_mesh=ref_tibia,
+            subj_labeled_mesh=tib_labeled_mesh.mesh,
+        )
+    else:
+        fitted_wrap_parameters["tibia"] = fit_bone_wrap_surfaces(
+            bone_name="tibia",
+            labeled_mesh=tib_labeled_mesh,
+            labeled_mesh_points=tib_labeled_points,
+            fitter_configs=fitter_configs,
+            n_restarts=wrap_n_restarts,
+            jitter_scale=wrap_jitter_scale,
+            anchors=anchors_by_bone.get("tibia"),
+        )
 
     # Apply ligament updates
     _apply_ligament_updates(dict_lig_musc_attach_params, tib_lig_updated, tib_lig_idx)
