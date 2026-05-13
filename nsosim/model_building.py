@@ -989,6 +989,18 @@ def build_joint_model(
     # unnecessary because the anchor is in the data-optimum basin by
     # construction — the skip list is ignored in that mode.
     wraps_to_skip_anchor = set(cfg("wraps_to_skip_anchor", ["Med_Lig_r"]))
+
+    # Sub-option for label_correspondence: which Procrustes flavor maps the
+    # reference-bone near-surface points to the subject's. Default 'auto'
+    # uses affine (12 DOF) for ellipsoids (which transforms cleanly to
+    # another ellipsoid) and similarity (7 DOF, rigid+isotropic-scale) for
+    # cylinders (where affine produces an elliptic cylinder that the
+    # circular-cylinder refit can only approximate). Override to 'affine'
+    # or 'similarity' to force one for both wrap types.
+    label_correspondence_transform_kind = cfg(
+        "label_correspondence_transform_kind", "auto"
+    )
+
     anchors_by_bone = {}
     if wrap_fit_mode == "lbfgs_smith2019_anchor" and smith2019_osim_path is not None:
         from nsosim.wrap_surface_fitting.procrustes_anchor import (
@@ -1075,6 +1087,7 @@ def build_joint_model(
             bone_name="femur",
             ref_labeled_mesh=ref_femur,
             subj_labeled_mesh=fem_labeled_mesh.mesh,  # pymskt.Mesh → underlying PolyData
+            transform_kind=label_correspondence_transform_kind,
         )
     else:
         fitted_wrap_parameters["femur"] = fit_bone_wrap_surfaces(
@@ -1148,6 +1161,7 @@ def build_joint_model(
             bone_name="tibia",
             ref_labeled_mesh=ref_tibia,
             subj_labeled_mesh=tib_labeled_mesh.mesh,
+            transform_kind=label_correspondence_transform_kind,
         )
     else:
         fitted_wrap_parameters["tibia"] = fit_bone_wrap_surfaces(

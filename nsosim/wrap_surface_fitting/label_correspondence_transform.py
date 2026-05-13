@@ -57,36 +57,79 @@ from .procrustes_anchor import procrustes_anchor_for_wrap, umeyama_similarity
 _NEAR_SURFACE_MIN_POINTS = 20
 
 
-def _per_wrap_similarity_from_labels(
+def affine_lstsq(src: np.ndarray, dst: np.ndarray) -> np.ndarray:
+    """Least-squares affine transform from ``src`` (N, 3) to ``dst`` (N, 3).
+
+    Returns a 4×4 homogeneous transform ``T`` minimising
+    ``||T @ [src_i; 1] − [dst_i; 1]||²`` over the N correspondences.
+    Unlike Umeyama similarity (3 rot + 3 trans + 1 isotropic scale =
+    7 DOF), this is the full 12-DOF affine — independent scale per axis
+    plus shear. Applying it to an ellipsoid surface yields another
+    ellipsoid (so the parametric refit downstream recovers it cleanly);
+    applying it to a cylinder yields an elliptic cylinder, which the
+    circular-cylinder refit approximates.
+    """
+    src = np.asarray(src, dtype=np.float64)
+    dst = np.asarray(dst, dtype=np.float64)
+    if src.shape != dst.shape or src.ndim != 2 or src.shape[1] != 3:
+        raise ValueError(f"src and dst must both be (N, 3); got {src.shape} vs {dst.shape}")
+    if src.shape[0] < 4:
+        raise ValueError(f"Need at least 4 correspondences for affine, got {src.shape[0]}")
+
+    mu_s = src.mean(axis=0)
+    mu_d = dst.mean(axis=0)
+    src_c = src - mu_s
+    dst_c = dst - mu_d
+
+    # Closed-form: dst_c = src_c @ A.T  ⇒  A.T = pinv(src_c) @ dst_c
+    A_T, *_ = np.linalg.lstsq(src_c, dst_c, rcond=None)
+    A = A_T.T
+    t = mu_d - A @ mu_s
+
+    T = np.eye(4)
+    T[:3, :3] = A
+    T[:3, 3] = t
+    return T
+
+
+def _per_wrap_transform_from_labels(
     ref_labeled_mesh: Any,
     subj_labeled_mesh: Any,
     wrap_name: str,
+    wrap_type: str,
+    transform_kind: str = "auto",
 ) -> Optional[np.ndarray]:
-    """Compute the 4×4 similarity that aligns reference near-surface points
+    """Compute the 4×4 transform that aligns reference near-surface points
     to subject near-surface points for one wrap.
 
     Returns None if the wrap's ``_near_surface`` array is missing or has too
-    few points (< 20). The reference and subject meshes must have matching
-    vertex indices (NSM correspondence).
+    few points. The reference and subject meshes must have matching vertex
+    indices (NSM correspondence).
 
     Args:
-        ref_labeled_mesh: PyVista PolyData for the reference (mean) bone
-            with ``{wrap}_near_surface`` int/bool point data arrays.
-        subj_labeled_mesh: PyVista PolyData for the subject's NSM-adapted
-            bone with the same point count and vertex correspondence.
+        ref_labeled_mesh: PyVista PolyData for the reference (mean) bone.
+        subj_labeled_mesh: PyVista PolyData for the subject's NSM-adapted bone
+            (same point count + index correspondence).
         wrap_name: e.g. ``"Med_LigP_r"``.
+        wrap_type: ``"WrapEllipsoid"`` or ``"WrapCylinder"``.
+        transform_kind: one of:
+            - ``"affine"``: full 12-DOF affine for every wrap. Ellipsoids
+              transform cleanly; cylinders become elliptic and the circular
+              refit downstream is a best-fit approximation.
+            - ``"similarity"``: 7-DOF rigid+isotropic-scale Procrustes for
+              every wrap. Aspect ratio preserved by construction.
+            - ``"auto"`` (default): affine for ellipsoids, similarity for
+              cylinders. Best of both worlds for the standard wrap set.
 
     Returns:
-        4×4 homogeneous similarity transform, or None if not computable.
+        4×4 homogeneous transform, or None if not computable.
     """
     key = f"{wrap_name}_near_surface"
     if key not in ref_labeled_mesh.point_data:
         return None
-
     mask = np.asarray(ref_labeled_mesh.point_data[key]).astype(bool)
     if int(mask.sum()) < _NEAR_SURFACE_MIN_POINTS:
         return None
-
     ref_pts = np.asarray(ref_labeled_mesh.points)[mask]
     subj_pts = np.asarray(subj_labeled_mesh.points)[mask]
     if ref_pts.shape != subj_pts.shape:
@@ -96,7 +139,15 @@ def _per_wrap_similarity_from_labels(
             "Reference and subject labeled meshes must share NSM correspondence."
         )
 
-    return umeyama_similarity(ref_pts, subj_pts)
+    if transform_kind == "affine":
+        return affine_lstsq(ref_pts, subj_pts)
+    if transform_kind == "similarity":
+        return umeyama_similarity(ref_pts, subj_pts)
+    if transform_kind == "auto":
+        if wrap_type == "WrapEllipsoid":
+            return affine_lstsq(ref_pts, subj_pts)
+        return umeyama_similarity(ref_pts, subj_pts)
+    raise ValueError(f"Unknown transform_kind: {transform_kind!r}")
 
 
 def label_correspondence_transforms_for_bone(
@@ -104,6 +155,7 @@ def label_correspondence_transforms_for_bone(
     bone_name: str,
     ref_labeled_mesh: Any,
     subj_labeled_mesh: Any,
+    transform_kind: str = "auto",
 ) -> Dict[str, Dict[str, Dict[str, wrap_surface]]]:
     """Build subject-adapted wrap surfaces for every wrap on one bone.
 
@@ -129,8 +181,10 @@ def label_correspondence_transforms_for_bone(
     out: Dict[str, Dict[str, Dict[str, wrap_surface]]] = {}
     for body_name, body_data in bone_params.items():
         for wrap_name, wrap_p in body_data.items():
-            T = _per_wrap_similarity_from_labels(
-                ref_labeled_mesh, subj_labeled_mesh, wrap_name
+            T = _per_wrap_transform_from_labels(
+                ref_labeled_mesh, subj_labeled_mesh, wrap_name,
+                wrap_type=wrap_p.get("type", ""),
+                transform_kind=transform_kind,
             )
             if T is None:
                 continue
