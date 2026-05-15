@@ -532,14 +532,16 @@ class TestTopologyPerturbationWithRefinement:
     """B2: Same as B1 but with full pipeline including radial envelope refinement."""
 
     @pytest.mark.slow
-    @pytest.mark.xfail(
-        reason="ACVD resampling is the primary instability source; "
-        "radial envelope and extraction method cannot fully compensate",
-        strict=False,
-    )
     def test_perturbed_pipeline_refined(self):
-        """Full pipeline with refinement should stabilize extraction across
-        perturbed inputs (simulating different NSM reconstruction runs)."""
+        """Full pipeline with refinement stabilizes extraction across perturbed
+        inputs (simulating different NSM reconstruction runs).
+
+        Was previously xfail. Verified 2026-05-15: radial-envelope refinement
+        collapses inter-perturbation ASSD from ~0.14 mm (no refinement — see the
+        sibling xfail test test_perturbed_remeshings_give_similar_extraction) to
+        ~0.011 mm. 12/12 perturbation seeds pass with a ~9x margin, deterministic
+        across reps. The refinement does compensate; the no-refinement test
+        remains xfail."""
         scale = 0.001  # mm -> m
         ring = _make_half_ring(
             outer_radius=15.0, inner_radius=8.0, height=5.0, n_theta=80, n_r=20, n_y=6
