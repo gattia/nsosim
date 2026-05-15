@@ -483,9 +483,24 @@ class TestTopologyPerturbationStability:
     should produce stable extraction results after ACVD + ray-casting."""
 
     @pytest.mark.slow
+    # NOTE (2026-05-15): this no-refinement path stays unstable. A 12-seed sweep
+    # gives ~0.14 mm ASSD between two perturbed inputs (the sibling *refined*
+    # test, test_perturbed_pipeline_refined, drops this to ~0.011 mm — refinement
+    # is what stabilizes it).
+    #
+    # On ACVD / pyacvd determinism (the nuance behind the old reason text):
+    # pyacvd clustering is deterministic ONLY when the global RNG seed is pinned
+    # — nsosim's pipeline does this via set_global_seed. Unseeded, the cluster
+    # initialization is random and adds genuine run-to-run non-determinism on
+    # top. So "ACVD non-determinism" is seed-conditional: true unseeded, false
+    # in the seeded production pipeline. Either way this test still fails: even
+    # with ACVD fully deterministic, the two inputs here are genuinely different
+    # meshes and ray-casting amplifies that difference at the extraction boundary.
     @pytest.mark.xfail(
-        reason="ACVD resampling amplifies tiny vertex perturbations (~0.005mm) "
-        "into ~0.28mm ASSD; extraction method is not the bottleneck",
+        reason="No-refinement extraction is unstable to input perturbations "
+        "(~0.14mm ASSD between two perturbed inputs). ACVD determinism is "
+        "seed-conditional (see comment above); the instability here is ray-cast "
+        "boundary sensitivity, not the extraction method per se.",
         strict=False,
     )
     def test_perturbed_remeshings_give_similar_extraction(self):
