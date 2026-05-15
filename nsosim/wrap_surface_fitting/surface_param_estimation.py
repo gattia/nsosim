@@ -227,7 +227,7 @@ def fit_cylinder_geometric(near_surface_points, num_slices=20):
 
         # Compute half-length: half of the extent along the axis direction
         proj_lengths = torch.sum(point_to_center * axis_3d, dim=1)
-        half_length = proj_lengths.max() - proj_lengths.min()
+        half_length = (proj_lengths.max() - proj_lengths.min()) / 2.0
 
         logger.debug(f"Half-length: {half_length:.6f} (half of axis extent)")
 
