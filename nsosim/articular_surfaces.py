@@ -82,10 +82,17 @@ def label_meniscus_regions_with_sdf(
     Label meniscus points based on SDF distance to lower and upper surfaces.
 
     regions:
-      0 = neither
-      1 = near lower_surface (dist_lower < threshold)
-      2 = near upper_surface (dist_upper < threshold)
-      3 = near both
+      0 = neither — mid-height of the tall peripheral wall, far from both
+          articular patches.
+      1 = near lower_surface only (dist_lower < threshold) — the
+          tibia-facing (inferior) articular face.
+      2 = near upper_surface only (dist_upper < threshold) — the
+          femur-facing (superior) articular face.
+      3 = near BOTH surfaces. The extracted upper and lower patches only
+          come within ~2x threshold of each other where the meniscus is
+          thinnest: the inner free edge (the apex of the wedge cross-section,
+          pointing into the joint centre). Region 3 therefore marks the thin
+          inner edge — NOT the tall outer peripheral wall (which is region 0).
 
     Args:
         meniscus_mesh: Full meniscus mesh
@@ -168,11 +175,23 @@ def compute_region_radial_percentiles(
                 r_p.append(np.percentile(r_region[bin_mask], percentile))
                 bin_centers.append(0.5 * (theta_bins[i - 1] + theta_bins[i]))
 
+        n_region_pts = int(np.count_nonzero(region_mask))
         if bin_centers:
             region_percentiles[region_label] = {
                 "bin_centers": np.asarray(bin_centers),
                 "r_percentile": np.asarray(r_p),
             }
+            theta_span_deg = float(np.degrees(theta_region.max() - theta_region.min()))
+            logger.info(
+                f"  meniscus region {int(region_label)}: {n_region_pts} pts, "
+                f"{len(bin_centers)}/{n_theta_bins} theta bins occupied, "
+                f"theta span {theta_span_deg:.1f} deg"
+            )
+        else:
+            logger.warning(
+                f"  meniscus region {int(region_label)}: {n_region_pts} pts but "
+                f"0 theta bins occupied"
+            )
 
     return region_percentiles, theta_bins
 
@@ -238,6 +257,19 @@ def build_min_radial_envelope(
     for region_label, pdata in region_percentiles.items():
         bc = pdata["bin_centers"]
         rp = pdata["r_percentile"]
+
+        # A healthy meniscus region fills tens-to-~100 theta bins. Fewer bins
+        # than the smoothing window means the region has collapsed (degenerate
+        # upstream extraction) — smoothing/interpolating it would be invalid.
+        # Refuse rather than silently produce a bad envelope.
+        if len(bc) < smooth_window:
+            raise ValueError(
+                f"build_min_radial_envelope: region {int(region_label)} has only "
+                f"{len(bc)} occupied theta bins, fewer than smooth_window="
+                f"{smooth_window}. A healthy region should populate most of the "
+                f"theta range. This indicates a collapsed region from a degenerate "
+                f"upstream articular-surface extraction."
+            )
 
         rp_smooth = smooth_1d(rp, window_size=smooth_window)
         r_interp = np.interp(theta_grid, bc, rp_smooth, left=np.nan, right=np.nan)
@@ -385,6 +417,45 @@ def refine_meniscus_articular_surfaces(
         percentile=percentile,
         n_theta_bins=n_theta_bins,
     )
+
+    # 3b. Validate region coverage before building the envelope. Regions 1
+    # (near tibia) and 2 (near femur) must each be present and populate many
+    # theta bins. An absent or collapsed region means the upstream articular-
+    # surface extraction produced a degenerate surface — fail loudly with the
+    # context needed to debug it, rather than crash cryptically or silently
+    # build a bad envelope.
+    regions = np.asarray(meniscus_mesh["regions_label"])
+    region_counts = {r: int(np.count_nonzero(regions == r)) for r in (0, 1, 2, 3)}
+    n_bins_by_region = {
+        int(rl): len(pd["bin_centers"]) for rl, pd in region_percentiles.items()
+    }
+    diag_ctx = (
+        f"meniscus n_points={meniscus_mesh.n_points}, "
+        f"region point counts (0=none,1=tibia,2=femur,3=both)={region_counts}, "
+        f"occupied theta bins per region={n_bins_by_region}, "
+        f"distance_thresh={distance_thresh} mm, n_theta_bins={n_theta_bins}, "
+        f"smooth_window={smooth_window}, theta_offset={theta_offset:.4f} rad"
+    )
+    for required_region in (1, 2):
+        if required_region not in region_percentiles:
+            raise ValueError(
+                f"Meniscus radial-envelope refinement: region {required_region} "
+                f"({'near tibia' if required_region == 1 else 'near femur'}) is "
+                f"entirely absent — no meniscus points fell within distance_thresh "
+                f"of that articular surface. The upstream surface extraction for "
+                f"that side almost certainly failed (degenerate/empty surface). "
+                f"{diag_ctx}"
+            )
+    for region_label, pdata in region_percentiles.items():
+        n_bins = len(pdata["bin_centers"])
+        if n_bins < smooth_window:
+            raise ValueError(
+                f"Meniscus radial-envelope refinement: region {int(region_label)} "
+                f"occupies only {n_bins} theta bins (need >= smooth_window="
+                f"{smooth_window}; a healthy region fills tens-to-~100 bins). The "
+                f"region has collapsed — the upstream articular-surface extraction "
+                f"produced a degenerate surface. {diag_ctx}"
+            )
 
     # 4. Combined min envelope
     theta_grid, r_min_grid = build_min_radial_envelope(
