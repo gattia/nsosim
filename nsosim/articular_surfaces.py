@@ -410,13 +410,31 @@ def refine_meniscus_articular_surfaces(
         array_name="regions_label",
     )
 
-    # 3. Percentile envelopes per region
-    region_percentiles, _ = compute_region_radial_percentiles(
+    # 3. Percentile envelopes per region. compute_region_radial_percentiles
+    #    returns regions 1, 2, and (when populated) 3 — region 3 is kept in
+    #    this dict only so its coverage is logged/diagnosed below.
+    region_percentiles_all, _ = compute_region_radial_percentiles(
         meniscus_mesh,
         regions_array="regions_label",
         percentile=percentile,
         n_theta_bins=n_theta_bins,
     )
+
+    # 3a. The radial envelope is built ONLY from region 1 (near tibia) and
+    #     region 2 (near femur) — the two articular faces. Region 3 ("near
+    #     BOTH surfaces" = the thin inner free edge) is intentionally excluded:
+    #       - it is a coincidence-defined sliver: usually empty, but on some
+    #         NSM reconstructions it collapses to 1-6 scattered points, which
+    #         crashed build_min_radial_envelope's np.interp ("fp and xp are
+    #         not of the same length");
+    #       - being at the smallest radius, if it WERE populated it would drag
+    #         the elementwise-min envelope inward and over-trim both articular
+    #         faces.
+    #     See .claude/reports/meniscus_radial_envelope_crash.md in the
+    #     comak_gait_simulation repo for the full root-cause investigation.
+    region_percentiles = {
+        rl: pd for rl, pd in region_percentiles_all.items() if int(rl) in (1, 2)
+    }
 
     # 3b. Validate region coverage before building the envelope. Regions 1
     # (near tibia) and 2 (near femur) must each be present and populate many
@@ -427,7 +445,7 @@ def refine_meniscus_articular_surfaces(
     regions = np.asarray(meniscus_mesh["regions_label"])
     region_counts = {r: int(np.count_nonzero(regions == r)) for r in (0, 1, 2, 3)}
     n_bins_by_region = {
-        int(rl): len(pd["bin_centers"]) for rl, pd in region_percentiles.items()
+        int(rl): len(pd["bin_centers"]) for rl, pd in region_percentiles_all.items()
     }
     diag_ctx = (
         f"meniscus n_points={meniscus_mesh.n_points}, "

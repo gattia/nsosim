@@ -330,6 +330,13 @@ refined_upper, refined_lower = refine_meniscus_articular_surfaces(
 )
 ```
 
+The radial envelope is built from **regions 1 & 2 only** (the tibia- and
+femur-facing articular faces). SDF region 3 ("near both surfaces" = thin inner
+free edge) is intentionally excluded — it is a coincidence-defined sliver that
+is usually empty but occasionally collapses to 1–6 points, which used to crash
+`build_min_radial_envelope`'s `np.interp`. Full root-cause investigation:
+`comak_gait_simulation/.claude/reports/meniscus_radial_envelope_crash.md`.
+
 ### Stage 4: Prefemoral Fat Pad
 ```python
 prefemoral_fat_pad = create_prefemoral_fatpad_noboolean(

@@ -308,6 +308,96 @@ class TestRefineEndToEnd:
         assert len(r_min_grid) == 200
 
 
+class TestRegionThreeExcludedFromEnvelope:
+    """A3b: Regression — region 3 must not crash the radial-envelope refinement.
+
+    Region 3 ("near BOTH articular surfaces" = the thin inner free edge) is a
+    coincidence-defined sliver: usually empty, but on some NSM reconstructions
+    it collapses to 1-6 scattered points. That used to crash
+    build_min_radial_envelope's np.interp ("fp and xp are not of the same
+    length"). refine_meniscus_articular_surfaces now builds the envelope from
+    regions 1 & 2 only. See the comak_gait_simulation repo,
+    .claude/reports/meniscus_radial_envelope_crash.md.
+    """
+
+    @staticmethod
+    def _half_ring_with_surfaces():
+        ring = _make_half_ring(n_theta=60, n_r=15, n_y=5)
+        top = ring.extract_points(ring["region"] == 0, adjacent_cells=True).extract_surface()
+        bottom = ring.extract_points(ring["region"] == 1, adjacent_cells=True).extract_surface()
+        return ring, top, bottom
+
+    @staticmethod
+    def _percentiles(n_bins, theta_lo=-1.0, theta_hi=1.0, r=20.0):
+        """A region-percentile entry spanning n_bins theta bins."""
+        return {
+            "bin_centers": np.linspace(theta_lo, theta_hi, n_bins),
+            "r_percentile": np.full(n_bins, r, dtype=float),
+        }
+
+    def test_collapsed_region_3_does_not_crash(self, monkeypatch):
+        """Healthy regions 1 & 2 + a collapsed region 3 (1 bin): refinement succeeds.
+
+        Region 3 must be filtered out before build_min_radial_envelope, so the
+        1-bin region never reaches np.interp.
+        """
+        ring, top, bottom = self._half_ring_with_surfaces()
+
+        def fake_percentiles(mesh, regions_array="regions_label", percentile=95.0,
+                             n_theta_bins=100):
+            return (
+                {
+                    1.0: self._percentiles(100),  # healthy tibia-facing face
+                    2.0: self._percentiles(100),  # healthy femur-facing face
+                    3.0: self._percentiles(1),    # COLLAPSED inner free edge
+                },
+                np.linspace(-np.pi, np.pi, n_theta_bins),
+            )
+
+        monkeypatch.setattr(
+            "nsosim.articular_surfaces.compute_region_radial_percentiles",
+            fake_percentiles,
+        )
+
+        lower, upper, (theta_grid, r_min_grid) = refine_meniscus_articular_surfaces(
+            meniscus_mesh=ring.copy(),
+            lower_surface=bottom.copy(),
+            upper_surface=top.copy(),
+            distance_thresh=2.0,
+            theta_offset=0.0,
+        )
+        assert lower is not None and upper is not None
+        assert len(theta_grid) == 200 and len(r_min_grid) == 200
+
+    def test_collapsed_region_1_still_raises(self, monkeypatch):
+        """A genuine region-1/2 collapse must STILL fail loudly (fix unchanged)."""
+        ring, top, bottom = self._half_ring_with_surfaces()
+
+        def fake_percentiles(mesh, regions_array="regions_label", percentile=95.0,
+                             n_theta_bins=100):
+            return (
+                {
+                    1.0: self._percentiles(2),    # COLLAPSED tibia-facing face
+                    2.0: self._percentiles(100),  # healthy femur-facing face
+                },
+                np.linspace(-np.pi, np.pi, n_theta_bins),
+            )
+
+        monkeypatch.setattr(
+            "nsosim.articular_surfaces.compute_region_radial_percentiles",
+            fake_percentiles,
+        )
+
+        with pytest.raises(ValueError, match="collapsed"):
+            refine_meniscus_articular_surfaces(
+                meniscus_mesh=ring.copy(),
+                lower_surface=bottom.copy(),
+                upper_surface=top.copy(),
+                distance_thresh=2.0,
+                theta_offset=0.0,
+            )
+
+
 class TestFullPipelineWithRefinement:
     """A4: Full pipeline smoke test with radial envelope refinement enabled."""
 
