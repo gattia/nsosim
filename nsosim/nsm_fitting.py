@@ -465,6 +465,7 @@ def interpolate_ref_points_nsm_space(
     subject_latent,
     surface_idx=0,
     n_steps=100,
+    interpolate_kwargs=None,
 ):
     """
     Interpolates points from a reference mesh to a subject's NSM latent space.
@@ -542,6 +543,14 @@ def interpolate_ref_points_nsm_space(
     if len(subject_latent.shape) == 2:
         subject_latent = subject_latent[0, :]
 
+    extra = dict(interpolate_kwargs) if interpolate_kwargs else {}
+    # Defensive auto-populate: the NSM mesh-interpolation-trim API requires
+    # `faces` whenever `tangent_laplacian=True` (raises ValueError otherwise).
+    # ref_mesh is already normalised to a PolyData/pymskt.Mesh above, so we
+    # have the connectivity at hand — fill it in if the caller forgot.
+    if extra.get("tangent_laplacian", False) and "faces" not in extra:
+        rm_for_faces = ref_mesh.mesh if hasattr(ref_mesh, "mesh") else ref_mesh
+        extra["faces"] = rm_for_faces.regular_faces.astype(np.int64)
     interpolated_points = interpolate_points(
         model,
         latent_ref[0, :],
@@ -551,6 +560,7 @@ def interpolate_ref_points_nsm_space(
         surface_idx=surface_idx,
         verbose=False,
         spherical=True,
+        **extra,
     )
 
     dict_results = {
@@ -571,6 +581,7 @@ def interp_ref_to_subject_to_osim(
     folder_nsm_files,
     surface_idx=0,
     n_steps=100,
+    interpolate_kwargs=None,
 ):
     """
     Interpolates reference points to a subject's NSM space and then to OSIM space.
@@ -610,6 +621,7 @@ def interp_ref_to_subject_to_osim(
         subject_latent=dict_bones[surface_name]["subject"]["recon_latent"],
         surface_idx=surface_idx,
         n_steps=n_steps,
+        interpolate_kwargs=interpolate_kwargs,
     )
 
     # convert interpolated points to OSIM space
