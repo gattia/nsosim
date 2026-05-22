@@ -131,6 +131,20 @@ def save_mesh_as_obj(mesh, filepath):
 # ---------------------------------------------------------------------------
 
 
+# Default mesh-interpolation recipe for bone-ligament warping. NSM
+# mesh-interpolation-trim API (2026-05-22): Newton magnitude is unconditional,
+# the dihedral pin is always on with tangent_laplacian. We keep theta=60 deg
+# (bone optimum from the NSM-team sweep: fold-over -90%, ASSD -22%) rather than
+# the library default of 45 deg. Cart wants theta=30 deg but cart vertices are
+# not warped through this function. Same shape as
+# _MENISCUS_INTERPOLATE_RECIPE_DEFAULTS but named separately so bone vs menisci
+# can be tuned independently if needed.
+_BONE_INTERPOLATE_RECIPE_DEFAULTS = {
+    "tangent_laplacian": True,
+    "tangent_laplacian_feature_angle": 60.0,
+}
+
+
 def interpolate_bone_ligaments(
     bone_name,
     labeled_mesh_path,
@@ -139,15 +153,27 @@ def interpolate_bone_ligaments(
     fem_ref_center,
     folder_ref_recons,
     surface_idx=0,
+    interpolate_kwargs=None,
+    snap_warn_mm=8.0,
 ):
-    """Interpolate labeled mesh and ligament attachment points from reference to subject.
+    """Interpolate labeled bone mesh + ligament attachments from reference to subject.
 
-    Source: comak_1_nsm_fitting.py lines 408–449 (femur), 541–582 (tibia), 825–856 (patella).
+    **Vertex-identity warp** (2026-05-22). Snap each ligament attachment to its
+    nearest vertex on the labeled bone mesh, then warp the full mesh through
+    the NSM with the mesh-interpolation-improvements recipe (newton step +
+    tangent-Laplacian + dihedral pin at θ=60°). Each attachment's warped
+    position is the warped vertex at its snapped index. The mesh portion
+    benefits from the full recipe (which prior bare-points concatenation
+    delivered for the mesh but only Newton magnitude for the attachments).
+
+    Source: comak_1_nsm_fitting.py lines 408–449 (femur), 541–582 (tibia),
+    825–856 (patella).
 
     Parameters
     ----------
     bone_name : str
-        Bone name ('femur', 'tibia', 'patella') used to match parent_frame in ligament dicts.
+        Bone name ('femur', 'tibia', 'patella') used to match parent_frame in
+        ligament dicts.
     labeled_mesh_path : str
         Path to the labeled bone VTK file with wrap surface classifications.
     dict_lig_musc_attach_params : dict
@@ -160,54 +186,74 @@ def interpolate_bone_ligaments(
         Path to folder containing reference reconstruction data.
     surface_idx : int
         Surface index for NSM interpolation (0=bone).
+    interpolate_kwargs : dict, optional
+        Forwarded to ``interp_ref_to_subject_to_osim`` (merged on top of
+        ``_BONE_INTERPOLATE_RECIPE_DEFAULTS``; ``faces`` always injected
+        from the loaded labeled mesh).
+    snap_warn_mm : float
+        Warn when a bone attachment's reference ``xyz_mesh`` is farther than
+        this from its nearest labeled-bone-mesh vertex.
 
     Returns
     -------
     labeled_mesh : Mesh
-        Labeled mesh with updated (interpolated) point coordinates.
+        Labeled mesh with updated (warped) point coordinates.
     labeled_mesh_points : np.ndarray
         Copy of the updated labeled mesh point coordinates.
     lig_xyz_points_updated : np.ndarray
-        Updated ligament attachment point coordinates (n_lig_pts, 3).
+        Warped ligament attachment point coordinates (n_lig_pts, 3).
     list_lig_name_pt_idx : list of [str, int]
-        List of [force_name, point_index] pairs identifying which ligament points were updated.
+        [force_name, point_index] pairs identifying which ligament points were
+        updated.
     """
-    labeled_mesh = Mesh(labeled_mesh_path)
+    from scipy.spatial import cKDTree
 
-    # Collect ligament attachment points that belong to this bone
-    list_lig_musc_xyz_to_update = []
+    labeled_mesh = Mesh(labeled_mesh_path)
+    ref_pts = labeled_mesh.point_coords
+    tree = cKDTree(ref_pts)
+
+    # Collect bone-side attachments and snap each to nearest mesh vertex
     list_lig_musc_name_pt_idx = []
+    snap_indices = []
     for key, dict_ in dict_lig_musc_attach_params.items():
         for pt_idx, point_dict in enumerate(dict_["points"]):
-            if bone_name in point_dict["parent_frame"]:
-                list_lig_musc_xyz_to_update.append(point_dict["xyz_mesh"])
-                list_lig_musc_name_pt_idx.append([key, pt_idx])
+            if bone_name not in point_dict["parent_frame"]:
+                continue
+            xyz = np.asarray(point_dict["xyz_mesh"], dtype=float)
+            d, vtx = tree.query(xyz)
+            list_lig_musc_name_pt_idx.append([key, pt_idx])
+            snap_indices.append(int(vtx))
+            if d * 1000 > snap_warn_mm:
+                print(
+                    f"  WARN interpolate_bone_ligaments ({bone_name}): {key} "
+                    f"point {pt_idx} snapped {d*1000:.2f} mm to mesh vertex {vtx}"
+                )
 
-    lig_xyz_points = np.array(list_lig_musc_xyz_to_update)
+    # Warp the labeled mesh alone (no concatenation) with the recipe.
+    user_kwargs = dict(interpolate_kwargs) if interpolate_kwargs else {}
+    kwargs = dict(_BONE_INTERPOLATE_RECIPE_DEFAULTS)
+    kwargs.update(user_kwargs)
+    # pymskt Mesh wraps a pyvista PolyData on `.mesh`
+    kwargs["faces"] = labeled_mesh.mesh.regular_faces.astype(np.int64)
 
-    # Append ligament points to labeled mesh for joint interpolation
-    n_orig_pts = labeled_mesh.point_coords.shape[0]
-    labeled_mesh_copy = labeled_mesh.copy()
-    labeled_mesh_copy.point_coords = np.concatenate(
-        [labeled_mesh_copy.point_coords, lig_xyz_points], axis=0
-    )
-
-    # Interpolate all points (mesh + ligament) together
     interpolated_pts_osim = interp_ref_to_subject_to_osim(
-        ref_mesh=labeled_mesh_copy,
+        ref_mesh=labeled_mesh,
         surface_name=bone_name,
         ref_center=fem_ref_center,
         dict_bones=dict_bones,
         folder_nsm_files=folder_ref_recons,
         surface_idx=surface_idx,
+        interpolate_kwargs=kwargs,
     )
 
-    # Split back into mesh points and ligament points
-    labeled_mesh_points_updated = interpolated_pts_osim[:n_orig_pts, :]
-    lig_xyz_points_updated = interpolated_pts_osim[n_orig_pts:, :]
+    # Attachment warped positions = warped vertex at the snapped index.
+    if snap_indices:
+        lig_xyz_points_updated = interpolated_pts_osim[np.asarray(snap_indices, dtype=int), :]
+    else:
+        lig_xyz_points_updated = np.zeros((0, 3))
 
-    # Update labeled mesh with interpolated coordinates
-    labeled_mesh.point_coords = labeled_mesh_points_updated
+    # Update labeled mesh with warped points
+    labeled_mesh.point_coords = interpolated_pts_osim
     labeled_mesh_points = labeled_mesh.point_coords.copy()
 
     return labeled_mesh, labeled_mesh_points, lig_xyz_points_updated, list_lig_musc_name_pt_idx
@@ -442,56 +488,130 @@ def fit_bone_wrap_surfaces(
 # ---------------------------------------------------------------------------
 
 
+# Default interpolation recipe for the meniscus warp — NSM
+# mesh-interpolation-trim API (2026-05-22). Newton magnitude is unconditional
+# in the new API; the dihedral pin is always on when tangent_laplacian is set.
+# We keep theta=60 deg (the menisci/bone optimum per the NSM-team sweep:
+# lat_men fold -53%, ASSD -7%; med_men fold -48%, ASSD -12%) rather than the
+# library default of 45 deg. The closed meniscus shell has an empty
+# topological boundary, so the dihedral pin is what anchors the geometric seam
+# between upper and lower shells. Requires `faces` (added per-side from the
+# loaded reference meniscus mesh).
+_MENISCUS_INTERPOLATE_RECIPE_DEFAULTS = {
+    "tangent_laplacian": True,
+    "tangent_laplacian_feature_angle": 60.0,
+}
+
+# Per-side meniscus reference-mesh filenames inside <folder_ref_recons>/femur/.
+# These are the femur multi-surface NSM's decoded reference menisci in OSIM
+# space (5476/5440 pts; lie exactly on surface_idx=2/3).
+_MENISCUS_REF_MESH = {
+    "medial":  ("nsm_recon_ref_femur_med_men_osim_space.vtk", 2),
+    "lateral": ("nsm_recon_ref_femur_lat_men_osim_space.vtk", 3),
+}
+
+
 def interpolate_meniscus_ligaments(
     dict_lig_musc_attach_params,
     dict_bones,
     fem_ref_center,
     folder_ref_recons,
+    interpolate_kwargs=None,
+    snap_warn_mm=8.0,
 ):
     """Interpolate meniscal ligament attachment points using the femur NSM model.
 
-    Source: comak_1_nsm_fitting.py lines 692–719.
+    **Vertex-identity warp** (2026-05-22). For each side (medial / lateral):
 
-    Meniscus ligaments are interpolated via the femur model with surface_idx=2 (medial)
-    or surface_idx=3 (lateral).
+    1. Load the femur-NSM decoded reference meniscus mesh
+       (``nsm_recon_ref_femur_{med,lat}_men_osim_space.vtk``).
+    2. Snap each attachment's reference ``xyz_mesh`` to the nearest vertex on
+       that mesh — the attachment's *identity* is then that vertex.
+    3. Warp the **full reference mesh** through the femur NSM (surface_idx
+       2 = medial, 3 = lateral) with the mesh-interpolation-improvements
+       recipe (Fix 2 newton magnitude + Fix 4b/4c tangent-Laplacian with
+       dihedral pin at θ=60°). Attachments ride *on* the mesh, so they
+       inherit the full benefit of the recipe (tangent regularization plus
+       Newton projection) — not just the Newton projection an appended
+       isolated node would get.
+    4. ``xyz_mesh_updated`` = warped mesh point at the snapped vertex index.
+
+    Snap distance is logged per attachment; distances > ``snap_warn_mm``
+    (default 8 mm) trigger a warning — those flag attachments whose
+    reference ``xyz_mesh`` is far off the femur-model meniscus surface
+    (e.g. the medial horns whose original seeds were 3–7 mm off; the
+    lateral horns set manually from the labeling workflow are at exact
+    vertices, snap = 0).
 
     Parameters
     ----------
     dict_lig_musc_attach_params : dict
-        Ligament/muscle attachment parameters. Modified in-place with 'xyz_mesh_updated'.
+        Ligament/muscle attachment parameters. Modified in-place with
+        ``xyz_mesh_updated``.
     dict_bones : dict
         dict_bones structure (needs femur entry with recon_dict + recon_latent).
     fem_ref_center : np.ndarray
         Femur reference center.
     folder_ref_recons : str
         Path to reference reconstruction data.
+    interpolate_kwargs : dict, optional
+        Forwarded to ``interp_ref_to_subject_to_osim`` (merged on top of
+        ``_MENISCUS_INTERPOLATE_RECIPE_DEFAULTS``; ``faces`` always injected
+        from the loaded reference mesh).
+    snap_warn_mm : float
+        Warn when an attachment's reference ``xyz_mesh`` is farther than this
+        from the nearest reference-mesh vertex.
     """
-    for side_idx, men_side in enumerate(["medial", "lateral"]):
-        list_lig_musc_xyz_to_update = []
-        list_lig_musc_name_pt_idx = []
+    from scipy.spatial import cKDTree
+
+    user_kwargs = dict(interpolate_kwargs) if interpolate_kwargs else {}
+
+    for men_side, (ref_fname, surface_idx) in _MENISCUS_REF_MESH.items():
+        # Load the per-side reference mesh + build vertex KDTree
+        ref_mesh_path = os.path.join(folder_ref_recons, "femur", ref_fname)
+        ref_mesh = pv.read(ref_mesh_path)
+        tree = cKDTree(ref_mesh.points)
+
+        # Snap each attachment to its nearest reference-mesh vertex
+        attachments = []  # list of (force_name, pt_idx, vtx_idx, snap_dist_m, snap_xyz_ref)
         for key, dict_ in dict_lig_musc_attach_params.items():
             for pt_idx, point_dict in enumerate(dict_["points"]):
-                if f"meniscus_{men_side}" in point_dict["parent_frame"]:
-                    list_lig_musc_xyz_to_update.append(point_dict["xyz_mesh"])
-                    list_lig_musc_name_pt_idx.append([key, pt_idx])
+                if f"meniscus_{men_side}" not in point_dict["parent_frame"]:
+                    continue
+                xyz = np.asarray(point_dict["xyz_mesh"], dtype=float)
+                d, vtx = tree.query(xyz)
+                attachments.append([key, pt_idx, int(vtx), float(d), xyz])
+                if d * 1000 > snap_warn_mm:
+                    print(
+                        f"  WARN interpolate_meniscus_ligaments: {key} "
+                        f"point {pt_idx} ({men_side}-side) snapped {d*1000:.2f} mm "
+                        f"to ref vertex {vtx} (xyz_mesh was off the femur-model "
+                        f"meniscus surface)"
+                    )
 
-        lig_xyz_points = np.array(list_lig_musc_xyz_to_update)
-        men_ligs_xyz = pv.PolyData(lig_xyz_points)
+        if not attachments:
+            continue
 
-        men_ligs_xyz_interpolated = interp_ref_to_subject_to_osim(
-            ref_mesh=men_ligs_xyz,
+        # Warp the full reference mesh with the recipe.
+        kwargs = dict(_MENISCUS_INTERPOLATE_RECIPE_DEFAULTS)
+        kwargs.update(user_kwargs)
+        kwargs["faces"] = ref_mesh.regular_faces.astype(np.int64)
+
+        warped_pts = interp_ref_to_subject_to_osim(
+            ref_mesh=ref_mesh,
             surface_name="femur",
             ref_center=fem_ref_center,
             dict_bones=dict_bones,
             folder_nsm_files=folder_ref_recons,
-            surface_idx=2 + side_idx,  # 0=bone, 1=cart, 2=med_men, 3=lat_men
+            surface_idx=surface_idx,
+            interpolate_kwargs=kwargs,
         )
 
-        for idx, (force_name, pt_idx) in enumerate(list_lig_musc_name_pt_idx):
-            new_pt_xyz = men_ligs_xyz_interpolated[idx, :]
+        # Each attachment's warped position is the warped vertex.
+        for force_name, pt_idx, vtx_idx, _snap_d, _snap_xyz in attachments:
             dict_lig_musc_attach_params[force_name]["points"][pt_idx][
                 "xyz_mesh_updated"
-            ] = new_pt_xyz
+            ] = warped_pts[vtx_idx, :]
 
 
 def update_coronary_ligament_tibia_attachments(

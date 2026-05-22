@@ -16,7 +16,15 @@ logger = logging.getLogger(__name__)
 
 # Meniscal ligament name prefixes (P1 on tibia, P2 on meniscus)
 _MENISCAL_PREFIXES = ("meniscus_medial_", "meniscus_lateral_")
-_EXCLUDE_PATTERNS = ("TRANSVLIG",)
+# Exclude TRANSVLIG (both points on menisci, no tibia attachment) AND the horn
+# roots AHORN/PHORN. The horn roots MUST stay oblique: their in-plane component
+# is what restrains radial meniscus extrusion. Verticalizing them was the
+# diagnosed root cause of the 9063823 lateral-meniscus divergence. Coronary
+# ligaments (COR) are designed-vertical and are the only meniscal-tibia
+# ligaments this projector touches. See
+# comak_gait_simulation/tests/meniscus_inertia/analyze_ligament_line_of_action.py
+# and .claude/plans/MENISCUS_LIGAMENT_ATTACHMENT_FIX.md §1.
+_EXCLUDE_PATTERNS = ("TRANSVLIG", "AHORN", "PHORN")
 
 # Parent frame names for tibia vs meniscus bodies
 _TIBIA_FRAMES = ("tibia_proximal_r",)
@@ -24,7 +32,11 @@ _MENISCUS_FRAMES = ("meniscus_medial_r", "meniscus_lateral_r")
 
 
 def _is_meniscal_tibia_ligament(name):
-    """Check if a ligament name is a meniscal-tibia ligament (not transverse)."""
+    """Check if a ligament name is a coronary meniscal-tibia ligament.
+
+    Only COR ligaments are eligible for vertical projection — horns (AHORN /
+    PHORN) and the transverse ligament (TRANSVLIG) are explicitly excluded.
+    """
     if not any(name.startswith(prefix) for prefix in _MENISCAL_PREFIXES):
         return False
     if any(pattern in name for pattern in _EXCLUDE_PATTERNS):
