@@ -9,7 +9,7 @@
 
 **Not the problem:** The wrap fitter is already deterministic given fixed input + fixed seed. Verified 2026-05-11: running `build_joint_model` twice on identical bone meshes produced 1 differing line in 15623 (a model-level bookkeeping diff, not numeric). The seed pinning (`set_global_seed`) and `_fit_with_restarts` deterministic-jitter logic in `model_building.py` work correctly.
 
-**The problem (sensitivity, not determinism):** When the input bone mesh changes by ~1e-4 mm at vertex level (the CUDA gradient reproducibility floor of NSM fitting on GPU — accepted as fundamental in the parent plan `DETERMINISTIC_REPRODUCIBILITY.md`), the wrap fitter produces output drift of up to 1.45 mm because some wraps sit near flat directions in the loss landscape (long ellipsoid sliding along its long axis, near-gimbal-lock Euler angles, etc.).
+**The problem (sensitivity, not determinism):** When the input bone mesh changes by ~1e-4 mm at vertex level (the CUDA gradient reproducibility floor of NSM fitting on GPU — accepted as fundamental in the parent plan `DETERMINISTIC_REPRODUCIBILITY_COMPLETED.md`), the wrap fitter produces output drift of up to 1.45 mm because some wraps sit near flat directions in the loss landscape (long ellipsoid sliding along its long axis, near-gimbal-lock Euler angles, etc.).
 
 **This is a sensitivity problem.** The fix is to reduce `∂(wrap_params) / ∂(input_mesh)` in flat directions of the loss landscape — without introducing bias away from the trusted Smith2019 reference geometry.
 
@@ -132,7 +132,7 @@ Same format as iter 1–3. Update `NOTES.md` with each iter. Final commit messag
 - [`comak_gait_simulation/.claude/plans/NSOSIM_WRAP_FITTER_MIGRATION.md`](file:///dataNAS/people/aagatti/projects/comak_gait_simulation/.claude/plans/NSOSIM_WRAP_FITTER_MIGRATION.md) — downstream integration plan
 - [`comak_gait_simulation/tests/swap_experiments/CLAUDE.md`](file:///dataNAS/people/aagatti/projects/comak_gait_simulation/tests/swap_experiments/CLAUDE.md) — diagnosis chain
 - [`comak_gait_simulation/.claude/plans/VERIFICATION_PHASES_BC_PLAN.md`](file:///dataNAS/people/aagatti/projects/comak_gait_simulation/.claude/plans/VERIFICATION_PHASES_BC_PLAN.md) — parent verification work
-- [`nsosim/.claude/plans/DETERMINISTIC_REPRODUCIBILITY.md`](DETERMINISTIC_REPRODUCIBILITY.md) — parent plan
+- [`nsosim/.claude/plans/completed/DETERMINISTIC_REPRODUCIBILITY_COMPLETED.md`](DETERMINISTIC_REPRODUCIBILITY_COMPLETED.md) — parent plan
 
 ## Completion Notes (2026-05-12)
 
