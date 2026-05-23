@@ -1,6 +1,6 @@
 # Plan: COMAK Weld-Joint Collapse (Stage Z)
 
-**Status:** Implemented + tested. End-to-end COMAK validation in flight.
+**Status:** Complete (2026-05-23) — code lands and is bit-exact; cohort timing test rejects the COMAK-speedup motivation. Module retained for AB-scaling workflows; not adopted in COMAK pipeline.
 **Created:** 2026-05-15.
 **Parent:** Pathway B of [`comak_gait_simulation/.claude/plans/PAPER1_MULTIGAIT.md`](../../../comak_gait_simulation/.claude/plans/PAPER1_MULTIGAIT.md).
 **Sibling:** [`comak-body-scaling.md`](comak-body-scaling.md) — Stage Z is the "Future Stage Z" sketched at the end of that plan, now fully specified.
@@ -23,6 +23,61 @@
 The slowdown is consistent with the pre-cohort micro-benchmark: COMAK is contact-bound (~78% of per-frame cost is contact evaluation), so there's no multibody savings to capture; and the offset-frame indirection on the two `Smith2018ContactMesh` sockets costs ~3 ms/frame which accumulates to a net slowdown. Simbody's "slow gradient algorithm" path that the AddBiomechanics warning flags is real for AB but does not measurably affect generic Simbody operations (`calcSystemJacobian`) on this model, and therefore not COMAK.
 
 **Decision:** Stage Z code and tests are kept in `nsosim/weld_collapse/` and remain available for AB-scaling workflows where the intermediate-weld warning matters. **Stage Z is not adopted in the COMAK pipeline** — welded models stay the production default. If a meaningful COMAK runtime win is the goal, the lever is the contact evaluation (mesh resolution, OBB-tree tuning), not the multibody tree.
+
+## Completion Notes
+
+**Date completed:** 2026-05-23.
+
+**Summary.** Stage Z (`nsosim.weld_collapse`) was designed, implemented, unit + sweep-equivalence tested, and end-to-end validated on a 20-subject COMAK cohort. The implementation is bit-exact (machine-precision agreement on all physics quantities). The motivating COMAK-speedup hypothesis was rejected — collapsed runs are ~10 % slower on the median across the cohort. The module is retained for AB-scaling workflows where the intermediate-weld warning matters; it is **not** adopted in the COMAK pipeline.
+
+**Changes made.**
+
+*nsosim* — commit `0714d07` "Add Stage Z weld-collapse module (nsosim.weld_collapse)":
+- New `nsosim/weld_collapse/`: `inertia.py`, `topology.py`, `collapse.py`, `report.py`, `__init__.py` (orchestrator + public API `collapse_welds(input, output)`).
+- New `tests/weld_collapse/`: `conftest.py` + 5 test files (42 tests).
+- `CLAUDE.md`: added `weld_collapse/` to the Core Modules table with the COMAK-not-adopted note.
+- This plan file.
+
+*comak_gait_simulation* — commit `bf926af` "Add cohort_timing c20wc cell …":
+- `tests/comak_cohort_timing/collapse_cohort20_models.py` — Stage Z over the 20 patched models (idempotent).
+- `tests/comak_cohort_timing/submit_cohort20_weld_collapse.sh` — 20-job c20wc cell submit script.
+- `tests/comak_cohort_timing/compare_c20wc_vs_c20noCOR.py` — total wall-clock + median speedup.
+- `tests/comak_cohort_timing/per_stage_c20wc_vs_c20noCOR.py` — settle / sweep / comak / post breakdown.
+- `tests/comak_cohort_timing/CLAUDE.md` — folder hub doc, now also documenting the closed c20wc cell.
+- `.claude/reports/weld_collapse_c20wc_results.md` — full result write-up.
+
+*pycomak* — commit `1731354` "forsim: list both welded and Stage-Z body names in ATTACHED_GEOMETRY_BODIES":
+- `pycomak/forsim.py`: `ATTACHED_GEOMETRY_BODIES` now lists both placeholder and main-body paths so the existing `_filter_paths_to_model` selects the right ones for either topology. Welded baselines unaffected; collapsed outputs no longer noisily skip femur/tibia geometry VTPs.
+
+**Tests.** `tests/weld_collapse/` — 42 tests, all passing in the `comak` conda env. Coverage:
+- `test_inertia.py` (10): parallel-axis combination against analytic point-mass / dumbbell / asymmetric cases.
+- `test_topology.py` (8): weld discovery, sub-vs-main identification (incl. root-weld and equal-mass edge cases).
+- `test_structure.py` (11): collapsed-model body/joint counts, weld removal, joint reparenting, coordinate-set preservation.
+- `test_loads_and_initializes.py` (3): the collapsed `.osim` reloads and `initSystem()`/`realizeAcceleration` cleanly with JAM.
+- `test_sweep_equivalence.py` (10, marked `@slow`): the central correctness test — across a knee-flexion sweep with non-default secondary coordinates, every shared body's `getTransformInGround`, every marker `getLocationInGround`, every `GeometryPath` length, every knee moment arm, and total mass + whole-model COM agree with the welded baseline at `atol = 1e-10` (measured residual ~1e-15, i.e. bit-exact). One-pose stance contact-force agreement at `rtol = 1e-6`.
+
+No nsosim regressions; the new module is self-contained.
+
+**Additional issues resolved.**
+- `pycomak.forsim.ATTACHED_GEOMETRY_BODIES`: was hard-coded to welded body names only. Made model-agnostic (union list, filtered per loaded model).
+
+**Challenges / Design decisions** (the things the plan flagged as TBD and how they resolved in practice):
+
+- **Mutation strategy: `finalizeFromProperties()` only, never `finalizeConnections()` mid-surgery.** `finalizeConnections` resolves sockets and rebuilds the multibody tree, and segfaults on an intermediate model (stale transient `PathWrapPoint`s dangle; a sub-body that is the weld parent briefly leaves the main body with two inboard joints). The orchestrator calls `finalizeConnections()` exactly once, after every weld is collapsed and the structure is final and valid. See `collapse.py` module docstring.
+- **`d` is precomputed on a throwaway initialized model; surgery runs on a fresh `finalizeFromProperties`-only copy.** `initSystem()` populates transient state that doesn't survive the structural edits; loading a fresh model for the actual collapse avoids it.
+- **Retarget by absolute connectee-path string** (not via `getConnecteeAsObject`). Every reference to a placeholder sub-body in the COMAK model is the absolute path `/bodyset/<sub>`; string compare needs no resolved connections and works with the property-only mutation strategy.
+- **Wrap-object hosting on a `PhysicalOffsetFrame` works.** Both `Body` and `PhysicalOffsetFrame` are `PhysicalFrame`s and carry a `WrapObjectSet`. `PathWrap` references its wrap object by *bare name*, so a moved-but-same-named wrap still resolves with no `PathWrap` edit. This is the path the implementation took (the plan's "Offset-frame host" option, which a colleague reported was used elsewhere).
+- **Attached geometry: `append_attached_geometry(sub.get_attached_geometry(i))` with the live reference, NOT a Python-owned `.clone()`.** Cloning + appending double-frees and segfaults; OpenSim's list property deep-copies the value passed in.
+- **The 20-subject cohort COMAK test was the right end-to-end probe.** The earlier 3-subject test on the pre-cohort_timing stack pointed in the same direction but was noisy; the cohort confirmed the verdict cleanly.
+
+**Things to note for future work.**
+
+- **Stage Z is NOT a COMAK speedup.** Do not re-test this without changing the COMAK pipeline meaningfully (e.g., contact mesh resampling, OBB-tree tuning — anything that changes contact from ~78 % of per-frame cost). The contact-bound nature of COMAK is the real ceiling.
+- **The Simbody "slow gradient algorithm" the AB warning describes is gradient-specific.** `calcSystemJacobian` showed no measurable welded-vs-collapsed difference on this model — generic Simbody multibody operations do not pay the welded penalty here. The penalty (if any) is in AB's own analytic-gradient code path; Stage Z would still be the right tool for an AB-side benchmark.
+- **The collapsed model has 2 fewer bodies + 2 fewer joints + 2 new `PhysicalOffsetFrame`s.** Anything downstream that enumerates bodies by name and assumes `femur_distal_r` / `tibia_proximal_r` exist will break. The pycomak fix above is the one concrete consumer; grep `comak_gait_simulation` for other refs before adopting elsewhere.
+- **`pycomak/forsim.py` change** does not affect welded production runs (filter still keeps the placeholder body names when present). Safe to leave in place even though Stage Z is not adopted.
+- **The 9741448 outlier** (welded 19 min, collapsed 32 min — 0.61×) was the slowest welded baseline and the slowest c20wc. No deep-dive done — could be cluster-node variance or a real subject-specific interaction with the offset-frame indirection. Investigate only if Stage Z is ever revisited.
+- **The deprecated 3-subject harness** at `nsosim/untracked/weld_collapse_comak_test/` is intentionally NOT committed (working-tree only, marked SUPERSEDED in its README). The numbers it produced are summarized in this plan + the cohort report; the cohort cell is the canonical test going forward.
 
 ---
 
