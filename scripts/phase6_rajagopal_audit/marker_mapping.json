@@ -9,7 +9,7 @@
     "L.PSIS":     {"rajagopal": "LPSI",  "body": "pelvis",    "action": "rename"},
     "R.Shoulder": {"rajagopal": "RACR",  "body": "torso",     "action": "rename"},
     "L.Shoulder": {"rajagopal": "LACR",  "body": "torso",     "action": "rename"},
-    "R.Clavicle": {"rajagopal": "CLAV",  "body": "torso",     "action": "rename"},
+    "R.Clavicle": {"rajagopal": null,    "body": "torso",     "action": "create", "note": "placed at CLAV height, +Z half-spacing from midline (from static1.trc R/L Clavicle spacing)"},
     "R.Bicep":    {"rajagopal": "RUA1",  "body": "humerus_r", "action": "rename"},
     "R.Elbow":    {"rajagopal": "RLEL",  "body": "humerus_r", "action": "rename"},
     "R.Forearm":  {"rajagopal": "RFAsuperior", "body": "ulna_r", "action": "rename"},
@@ -48,7 +48,7 @@
     "L.MT0":      {"rajagopal": "LTOE",  "body": "calcn_l",   "action": "rename"},
     "R.GTR":      {"rajagopal": null,    "body": "femur_r",   "action": "create", "note": "greater trochanter: lateral from HJC, ~5% wider than ASIS on each side"},
     "L.GTR":      {"rajagopal": null,    "body": "femur_l",   "action": "create", "note": "greater trochanter: lateral from HJC, ~5% wider than ASIS on each side"},
-    "L.Clavicle": {"rajagopal": null,    "body": "torso",     "action": "create", "note": "average of R/L Clavicle positions from Smith2019"}
+    "L.Clavicle": {"rajagopal": null,    "body": "torso",     "action": "create", "note": "placed at CLAV height, -Z half-spacing from midline (from static1.trc R/L Clavicle spacing)"}
   },
   "dropped_trc_markers": {
     "S2": "sacrum marker, not needed for scaling",
@@ -56,9 +56,9 @@
     "L.TH4": "4th thigh marker, only 3 available in Rajagopal"
   },
   "notes": [
-    "45 of 50 TRC markers mapped, 3 dropped, 3 need to be created",
+    "43 of 50 TRC markers mapped (42 rename + 4 create + 1 CLAV kept), 3 dropped",
     "R.GTR/L.GTR: place at greater trochanter, straight lateral from HJC, ~5% wider than ASIS spacing",
-    "L.Clavicle: create at average of Smith2019 R.Clavicle and L.Clavicle positions",
+    "R.Clavicle/L.Clavicle: placed symmetric around CLAV midline using half-spacing from static1.trc (~28.6mm)",
     "Dropped markers (S2, R.SH4, L.TH4) should be removed from TRC before AB upload",
     "All 'rename' actions: add new marker with TRC name at Rajagopal marker location"
   ]

@@ -1,0 +1,250 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<MarkerSet name="smith2019">
+	<objects>
+		<Marker name="R.Shoulder">
+			<socket_parent_frame>/bodyset/torso</socket_parent_frame>
+			<location>-0.0026918340000000002 0.38134315000000002 0.11664614000000001</location>
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="L.Shoulder">
+			<socket_parent_frame>/bodyset/torso</socket_parent_frame>
+			<location>-0.0026918340000000002 0.38134315000000002 -0.11664614000000001</location>
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="R.Bicep">
+			<socket_parent_frame>/bodyset/humerus_r</socket_parent_frame>
+			<location>0 -0.045979100000000002 0.018391640000000001</location>
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="R.Elbow">
+			<socket_parent_frame>/bodyset/humerus_r</socket_parent_frame>
+			<location>0.013793729999999999 -0.25748296000000004 0.036783280000000002</location>
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="R.Melb">
+			<socket_parent_frame>/bodyset/humerus_r</socket_parent_frame>
+			<location>0.0020690595 -0.263000452 -0.042300772</location>
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="R.Forearm">
+			<socket_parent_frame>/bodyset/ulna_r</socket_parent_frame>
+			<location>0.0038673309334099999 -0.067240390036300002 0.038063796081200002</location>
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="R.Wrist">
+			<socket_parent_frame>/bodyset/radius_r</socket_parent_frame>
+			<location>0.00041994850000000002 -0.18897682500000001 0.04199485</location>
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="L.Bicep">
+			<socket_parent_frame>/bodyset/humerus_l</socket_parent_frame>
+			<location>0 -0.045979100000000002 -0.018391640000000001</location>
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="L.Elbow">
+			<socket_parent_frame>/bodyset/humerus_l</socket_parent_frame>
+			<location>0.013793729999999999 -0.25748296000000004 -0.036783280000000002</location>
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="L.Melb">
+			<socket_parent_frame>/bodyset/humerus_l</socket_parent_frame>
+			<location>0.0020691054791 -0.263000452 0.042300772</location>
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="L.Forearm">
+			<socket_parent_frame>/bodyset/ulna_l</socket_parent_frame>
+			<location>0.0038673309334099999 -0.067240390036300002 -0.038063796081200002</location>
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="L.Wrist">
+			<socket_parent_frame>/bodyset/radius_l</socket_parent_frame>
+			<location>0.00041994850000000002 -0.18897682500000001 -0.04199485</location>
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="R.ASIS">
+			<socket_parent_frame>/bodyset/pelvis</socket_parent_frame>
+			<location>0.011397041140909999 0.019176187737599999 0.153624059792</location>
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="L.ASIS">
+			<socket_parent_frame>/bodyset/pelvis</socket_parent_frame>
+			<location>0.011397041140909999 0.019176187737599999 -0.153624059792</location>
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="R.PSIS">
+			<socket_parent_frame>/bodyset/pelvis</socket_parent_frame>
+			<location>-0.18535721500000002 0.037118760000000001 0.053813384999999998</location>
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="L.PSIS">
+			<socket_parent_frame>/bodyset/pelvis</socket_parent_frame>
+			<location>-0.18535721500000002 0.037118760000000001 -0.053813384999999998</location>
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="R.TH1">
+			<socket_parent_frame>/bodyset/femur_r</socket_parent_frame>
+			<location>0.016443521999999999 -0.13702934999999999 0.058465856000000004</location>
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="R.TH2">
+			<socket_parent_frame>/bodyset/femur_r</socket_parent_frame>
+			<location>0.073082320000000006 -0.21011167000000003 0.0042935862999999999</location>
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="R.TH3">
+			<socket_parent_frame>/bodyset/femur_r</socket_parent_frame>
+			<location>0.0091352900000000008 -0.27405869999999999 0.054811739999999998</location>
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="R.Knee">
+			<socket_parent_frame>/bodyset/femur_r</socket_parent_frame>
+			<location>0 -0.36906571600000004 0.045676450000000007</location>
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="R.Mkn">
+			<socket_parent_frame>/bodyset/femur_r</socket_parent_frame>
+			<location>0 -0.36906571600000004 -0.045676450000000007</location>
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="R.SH1">
+			<socket_parent_frame>/bodyset/tibia_r</socket_parent_frame>
+			<location>-0.00169045567568 -0.15918835692799999 0.050089075086400002</location>
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="R.SH2">
+			<socket_parent_frame>/bodyset/tibia_r</socket_parent_frame>
+			<location>0.037602155960799993 -0.234077726392 -0.0039845815794400004</location>
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="R.SH3">
+			<socket_parent_frame>/bodyset/tibia_r</socket_parent_frame>
+			<location>0.011575661200799999 -0.30033059241599996 0.0563092903496</location>
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="R.Ankle">
+			<socket_parent_frame>/bodyset/tibia_r</socket_parent_frame>
+			<location>-0.0050862799999999994 -0.39550913279999994 0.053914567999999996</location>
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="R.Man">
+			<socket_parent_frame>/bodyset/tibia_r</socket_parent_frame>
+			<location>0.0061035359999999997 -0.39550913279999994 -0.038655727999999993</location>
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="R.Heel">
+			<socket_parent_frame>/bodyset/calcn_r</socket_parent_frame>
+			<location>-0.025206675000000001 0.02016534 -0.0050413350000000001</location>
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="R.MT0">
+			<socket_parent_frame>/bodyset/calcn_r</socket_parent_frame>
+			<location>0.20669473499999999 0.029976584523600001 -0.030248009999999999</location>
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="R.MT5">
+			<socket_parent_frame>/bodyset/calcn_r</socket_parent_frame>
+			<location>0.14619871500000001 0.025115930970000002 0.059487752999999997</location>
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="L.TH1">
+			<socket_parent_frame>/bodyset/femur_l</socket_parent_frame>
+			<location>0.016443521999999999 -0.13702934999999999 -0.058465856000000004</location>
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="L.TH2">
+			<socket_parent_frame>/bodyset/femur_l</socket_parent_frame>
+			<location>0.073082320000000006 -0.21011167000000003 -0.0042935862999999999</location>
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="L.TH3">
+			<socket_parent_frame>/bodyset/femur_l</socket_parent_frame>
+			<location>0.0091352900000000008 -0.27405869999999999 -0.054811739999999998</location>
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="L.Knee">
+			<socket_parent_frame>/bodyset/femur_l</socket_parent_frame>
+			<location>0 -0.36906571600000004 -0.045676450000000007</location>
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="L.Mkn">
+			<socket_parent_frame>/bodyset/femur_l</socket_parent_frame>
+			<location>0 -0.36906571600000004 0.045676450000000007</location>
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="L.SH1">
+			<socket_parent_frame>/bodyset/tibia_l</socket_parent_frame>
+			<location>-0.00169045567568 -0.15918835692799999 -0.050089075086400002</location>
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="L.SH2">
+			<socket_parent_frame>/bodyset/tibia_l</socket_parent_frame>
+			<location>0.037602155960799993 -0.234077726392 0.0039845815794400004</location>
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="L.SH3">
+			<socket_parent_frame>/bodyset/tibia_l</socket_parent_frame>
+			<location>0.011575661200799999 -0.30033059241599996 -0.0563092903496</location>
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="L.Ankle">
+			<socket_parent_frame>/bodyset/tibia_l</socket_parent_frame>
+			<location>-0.0050862799999999994 -0.39550913279999994 -0.053914567999999996</location>
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="L.Man">
+			<socket_parent_frame>/bodyset/tibia_l</socket_parent_frame>
+			<location>0.0061035359999999997 -0.39550913279999994 0.038655727999999993</location>
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="L.Heel">
+			<socket_parent_frame>/bodyset/calcn_l</socket_parent_frame>
+			<location>-0.025206675000000001 0.02016534 0.0050413350000000001</location>
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="L.MT0">
+			<socket_parent_frame>/bodyset/calcn_l</socket_parent_frame>
+			<location>0.20669473499999999 0.029975777910000001 0.030248009999999999</location>
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="L.MT5">
+			<socket_parent_frame>/bodyset/calcn_l</socket_parent_frame>
+			<location>0.14619871500000001 0.025114922703 -0.059487752999999997</location>
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="R.Clavicle">
+			<!--Path to a Component that satisfies the Socket 'parent_frame' of type PhysicalFrame (description: The frame to which this station is fixed.).-->
+			<socket_parent_frame>/bodyset/torso</socket_parent_frame>
+			<!--The fixed location of the station expressed in its parent frame.-->
+			<location>0.03589112 0.34096564 0.02858</location>
+			<!--Flag (true or false) specifying whether the marker is fixed in its parent frame during the marker placement step of scaling.  If false, the marker is free to move within its parent Frame to match its experimental counterpart.-->
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="R.GTR">
+			<!--Path to a Component that satisfies the Socket 'parent_frame' of type PhysicalFrame (description: The frame to which this station is fixed.).-->
+			<socket_parent_frame>/bodyset/femur_r</socket_parent_frame>
+			<!--The fixed location of the station expressed in its parent frame.-->
+			<location>0.0 0.0 0.07275426149639999</location>
+			<!--Flag (true or false) specifying whether the marker is fixed in its parent frame during the marker placement step of scaling.  If false, the marker is free to move within its parent Frame to match its experimental counterpart.-->
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="L.GTR">
+			<!--Path to a Component that satisfies the Socket 'parent_frame' of type PhysicalFrame (description: The frame to which this station is fixed.).-->
+			<socket_parent_frame>/bodyset/femur_l</socket_parent_frame>
+			<!--The fixed location of the station expressed in its parent frame.-->
+			<location>0.0 0.0 -0.07275426149639999</location>
+			<!--Flag (true or false) specifying whether the marker is fixed in its parent frame during the marker placement step of scaling.  If false, the marker is free to move within its parent Frame to match its experimental counterpart.-->
+			<fixed>false</fixed>
+		</Marker>
+		<Marker name="L.Clavicle">
+			<!--Path to a Component that satisfies the Socket 'parent_frame' of type PhysicalFrame (description: The frame to which this station is fixed.).-->
+			<socket_parent_frame>/bodyset/torso</socket_parent_frame>
+			<!--The fixed location of the station expressed in its parent frame.-->
+			<location>0.03589112 0.34096564 -0.02858</location>
+			<!--Flag (true or false) specifying whether the marker is fixed in its parent frame during the marker placement step of scaling.  If false, the marker is free to move within its parent Frame to match its experimental counterpart.-->
+			<fixed>false</fixed>
+		</Marker>
+	</objects>
+	<groups />
+</MarkerSet>
+		
+		

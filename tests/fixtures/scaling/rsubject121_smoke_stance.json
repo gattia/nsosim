@@ -1,0 +1,19 @@
+{
+  "subject": "RSubject_121",
+  "trial": "baseline_TM1",
+  "segment": "segment_1",
+  "segment_time_range_s": [
+    20.0,
+    39.9884
+  ],
+  "right_heel_strike_s": 20.47,
+  "right_toe_off_s": 21.1999,
+  "stance_duration_ms": 729.9,
+  "grf_threshold_N": 10.0,
+  "sample_rate_Hz": 100,
+  "grf_mot_relpath": "subject_data/ID/baseline_TM1_segment_1_grf.mot",
+  "ik_mot_relpath": "subject_data/IK/baseline_TM1_segment_1_ik.mot",
+  "external_forces_xml_relpath": "subject_data/ID/baseline_TM1_segment_1_external_forces.xml",
+  "selection_rule": "First complete right-foot stance in segment_1 (chunk 20-40s): Fy>10N onset to next Fy<10N offset, 300ms<=dur<=1000ms, hs more than 50ms past segment start.",
+  "peak_fy_during_stance_N": 927.1
+}
