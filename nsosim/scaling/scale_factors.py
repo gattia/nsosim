@@ -45,6 +45,33 @@ def build_scale_set(
 
     s_wa is the isotropic weighted-average knee factor — used downstream by
     bake_knee_geometry to scale the knee STLs on disk.
+
+    Modes
+    -----
+    "WA" (weighted-average, implemented):
+        Every knee subbody (femur_distal_r, tibia_proximal_r, patella_r, the
+        two menisci) is scaled isotropically by ``s_wa = mean(femur_r.z,
+        tibia_r.z)``. AB-provided bodies pass their per-axis factors through
+        unchanged, except patella_r (AB returns identity → use s_wa).
+
+    "LA" (long-axis, NOT IMPLEMENTED):
+        Each knee subbody would receive ``(s_long, s_long, s_long)`` from its
+        own parent bone's long-axis factor — i.e. femur subbodies use
+        femur_r.z, tibia subbodies use tibia_r.z, patella uses its own (or
+        the femur's). To add: branch in this function on ``mode == "LA"`` and
+        build per-body isotropic Scales from the appropriate long-axis index
+        in ``ab_factors``.
+
+    "AB" (anisotropic pass-through, NOT IMPLEMENTED):
+        AB's per-axis factors would propagate to knee subbodies — e.g.
+        femur_distal_r inherits femur_r's full ``(sx, sy, sz)``. To add: pull
+        the parent bone's full triplet from ``ab_factors`` and apply
+        anisotropically. Note: bake_knee_geometry currently assumes a single
+        scalar; supporting AB requires generalising it to per-axis scaling
+        (the STL bake would also need to be anisotropic).
+
+    LA and AB are documented for future resurrection only; the current
+    pipeline targets WA exclusively.
     """
     if mode != "WA":
         raise NotImplementedError(f"Scaling mode {mode!r} not yet implemented")

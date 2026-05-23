@@ -33,7 +33,7 @@ def scale_comak_model(
     preserve_mass_distribution: bool = True,
     report_json: Optional[Path] = None,
     backup_markerset_xml: Optional[Path] = None,
-) -> None:
+) -> Path:
     """Produce a scaled COMAK model from a base + AB output.
 
     Pipeline:
@@ -45,11 +45,17 @@ def scale_comak_model(
          visual scale_factors reset to 1).
       6. Swap MarkerSet for AB's static-trial-placed markers.
       7. Apply permanent model fix-ups (ITB1 reparent).
-      8. Optionally write the JSON report.
+      8. Write the JSON report (always — see below).
 
     The output `.osim` is at `output_osim`; the orchestrator requires
     `output_geometry_dir == output_osim.parent / "Geometry"` so OpenSim's default
     relative-path resolution finds the meshes.
+
+    The report is always written so the WA scale and per-body factors are
+    recoverable from disk — the baked STLs and the model's reset
+    ``scale_factors = [1, 1, 1]`` would otherwise hide how much the knee was
+    scaled. If ``report_json`` is None, it defaults to
+    ``output_osim.with_suffix(".scaling.json")``. Returns the report path.
     """
     base_osim = Path(base_osim)
     ab_scaled_osim = Path(ab_scaled_osim)
@@ -95,26 +101,29 @@ def scale_comak_model(
 
     fix_status = fix_in_place(output_osim)
 
-    if report_json is not None:
-        scale_set_dump = {}
-        for i in range(scale_set.getSize()):
-            s = scale_set.get(i)
-            sf = s.getScaleFactors()
-            scale_set_dump[s.getSegmentName()] = (float(sf[0]), float(sf[1]), float(sf[2]))
-        write_report(
-            Path(report_json),
-            mode=mode,
-            ab_scaled_osim=str(ab_scaled_osim),
-            base_osim=str(base_osim),
-            output_osim=str(output_osim),
-            output_geometry_dir=str(output_geometry_dir),
-            preserve_mass_distribution=preserve_mass_distribution,
-            ab_factors={k: list(v) for k, v in factors.items()},
-            scale_set=scale_set_dump,
-            wa_scale=s_wa,
-            knee_geometry_baked={k: str(v) for k, v in baked_geometry.items()},
-            marker_added=n_added,
-            marker_dropped=n_dropped,
-            backup_markerset_xml=str(backup_markerset_xml) if backup_markerset_xml else None,
-            **fix_status,
-        )
+    report_path = Path(report_json) if report_json is not None else output_osim.with_suffix(
+        ".scaling.json"
+    )
+    scale_set_dump = {}
+    for i in range(scale_set.getSize()):
+        s = scale_set.get(i)
+        sf = s.getScaleFactors()
+        scale_set_dump[s.getSegmentName()] = (float(sf[0]), float(sf[1]), float(sf[2]))
+    write_report(
+        report_path,
+        mode=mode,
+        ab_scaled_osim=str(ab_scaled_osim),
+        base_osim=str(base_osim),
+        output_osim=str(output_osim),
+        output_geometry_dir=str(output_geometry_dir),
+        preserve_mass_distribution=preserve_mass_distribution,
+        ab_factors={k: list(v) for k, v in factors.items()},
+        scale_set=scale_set_dump,
+        wa_scale=s_wa,
+        knee_geometry_baked={k: str(v) for k, v in baked_geometry.items()},
+        marker_added=n_added,
+        marker_dropped=n_dropped,
+        backup_markerset_xml=str(backup_markerset_xml) if backup_markerset_xml else None,
+        **fix_status,
+    )
+    return report_path
