@@ -506,7 +506,7 @@ _MENISCUS_INTERPOLATE_RECIPE_DEFAULTS = {
 # These are the femur multi-surface NSM's decoded reference menisci in OSIM
 # space (5476/5440 pts; lie exactly on surface_idx=2/3).
 _MENISCUS_REF_MESH = {
-    "medial":  ("nsm_recon_ref_femur_med_men_osim_space.vtk", 2),
+    "medial": ("nsm_recon_ref_femur_med_men_osim_space.vtk", 2),
     "lateral": ("nsm_recon_ref_femur_lat_men_osim_space.vtk", 3),
 }
 
@@ -609,9 +609,9 @@ def interpolate_meniscus_ligaments(
 
         # Each attachment's warped position is the warped vertex.
         for force_name, pt_idx, vtx_idx, _snap_d, _snap_xyz in attachments:
-            dict_lig_musc_attach_params[force_name]["points"][pt_idx][
-                "xyz_mesh_updated"
-            ] = warped_pts[vtx_idx, :]
+            dict_lig_musc_attach_params[force_name]["points"][pt_idx]["xyz_mesh_updated"] = (
+                warped_pts[vtx_idx, :]
+            )
 
 
 def update_coronary_ligament_tibia_attachments(
@@ -1117,9 +1117,7 @@ def build_joint_model(
     # cylinders (where affine produces an elliptic cylinder that the
     # circular-cylinder refit can only approximate). Override to 'affine'
     # or 'similarity' to force one for both wrap types.
-    label_correspondence_transform_kind = cfg(
-        "label_correspondence_transform_kind", "auto"
-    )
+    label_correspondence_transform_kind = cfg("label_correspondence_transform_kind", "auto")
 
     anchors_by_bone = {}
     if wrap_fit_mode == "lbfgs_smith2019_anchor" and smith2019_osim_path is not None:
@@ -1196,10 +1194,11 @@ def build_joint_model(
     # Wrap surface fitting
     print("  Fitting wrap surfaces...")
     if wrap_fit_mode == "label_correspondence":
+        import pyvista as _pv  # local import; keeps top-of-file unchanged
+
         from nsosim.wrap_surface_fitting.label_correspondence_transform import (
             label_correspondence_transforms_for_bone,
         )
-        import pyvista as _pv  # local import; keeps top-of-file unchanged
 
         ref_femur = _pv.read(dict_bones["femur"]["wrap"]["path_labeled_bone"])
         fitted_wrap_parameters["femur"] = label_correspondence_transforms_for_bone(
@@ -1270,10 +1269,11 @@ def build_joint_model(
     # Wrap surface fitting
     print("  Fitting wrap surfaces...")
     if wrap_fit_mode == "label_correspondence":
+        import pyvista as _pv
+
         from nsosim.wrap_surface_fitting.label_correspondence_transform import (
             label_correspondence_transforms_for_bone,
         )
-        import pyvista as _pv
 
         ref_tibia = _pv.read(dict_bones["tibia"]["wrap"]["path_labeled_bone"])
         fitted_wrap_parameters["tibia"] = label_correspondence_transforms_for_bone(

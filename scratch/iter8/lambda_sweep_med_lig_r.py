@@ -23,13 +23,13 @@ import pyvista as pv
 import torch
 from scipy.spatial.transform import Rotation as ScipyR
 
+from nsosim._determinism import set_global_seed
 from nsosim.wrap_surface_fitting.fitting import EllipsoidFitter
 from nsosim.wrap_surface_fitting.parameter_extraction import (
     extract_wrap_parameters_from_osim,
 )
 from nsosim.wrap_surface_fitting.procrustes_anchor import procrustes_anchor_for_wrap
 from nsosim.wrap_surface_fitting.wrap_signed_distances import sd_ellipsoid_improved
-from nsosim._determinism import set_global_seed
 
 ITER7 = Path("scratch/iter7/build_isolation_20260512_124021")
 SMITH2019 = (
@@ -88,7 +88,10 @@ def main():
     smith_params = extract_wrap_parameters_from_osim(SMITH2019)
     smith_med_lig = smith_params["tibia"]["tibia_proximal_r"][WRAP_NAME]
     anchor = procrustes_anchor_for_wrap(
-        WRAP_NAME, smith_med_lig, bone_transform=None, n_points=4000,
+        WRAP_NAME,
+        smith_med_lig,
+        bone_transform=None,
+        n_points=4000,
         body="tibia_proximal_r",
     )
     smith_center = np.asarray(smith_med_lig["translation"])
@@ -98,21 +101,23 @@ def main():
 
     settings = [
         ("iter7 default", anchor, 0.05, 0.005, 0.005),
-        ("10x lower",    anchor, 0.005, 0.0005, 0.0005),
-        ("100x lower",   anchor, 0.0005, 0.00005, 0.00005),
-        ("zero",         anchor, 0.0,   0.0,    0.0),
+        ("10x lower", anchor, 0.005, 0.0005, 0.0005),
+        ("100x lower", anchor, 0.0005, 0.00005, 0.00005),
+        ("zero", anchor, 0.0, 0.0, 0.0),
         # Control: no anchor (algebraic init) at iter3-level lambdas — should
         # reproduce iter3's 99.4% accuracy on Med_Lig_r if the multi-minima
         # hypothesis is right.
         ("algebraic iter3-λ", None, 1.0, 0.1, 0.1),
-        ("algebraic λ=0",    None, 0.0, 0.0, 0.0),
+        ("algebraic λ=0", None, 0.0, 0.0, 0.0),
     ]
 
     print(f"\n{'setting':<22}{'acc(A)':>10}{'A↔B center µm':>18}{'A-to-Smith mm':>17}")
     for name, anc, lc, la, lq in settings:
         wp_a, acc_a = fit_one(label_a, anc, lam_c=lc, lam_a=la, lam_q=lq)
         wp_b, acc_b = fit_one(label_b, anc, lam_c=lc, lam_a=la, lam_q=lq)
-        ab_drift_um = 1e6 * float(np.linalg.norm(np.asarray(wp_a.translation) - np.asarray(wp_b.translation)))
+        ab_drift_um = 1e6 * float(
+            np.linalg.norm(np.asarray(wp_a.translation) - np.asarray(wp_b.translation))
+        )
         d_smith_mm = 1000 * float(np.linalg.norm(np.asarray(wp_a.translation) - smith_center))
         print(f"  {name:<20}{acc_a:>10.5f}{ab_drift_um:>18.2f}{d_smith_mm:>17.4f}")
 

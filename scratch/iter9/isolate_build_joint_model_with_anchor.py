@@ -46,19 +46,18 @@ def print_report(label, r):
         print(f"  STATUS: {r.get('status')}")
         return
     print(f"  Total differing lines: {r['n_diff_lines']} / {r['n_total_lines']}")
-    for owner_type, info in sorted(
-        r["by_owner_type"].items(), key=lambda x: -x[1]["max_abs"]
-    ):
+    for owner_type, info in sorted(r["by_owner_type"].items(), key=lambda x: -x[1]["max_abs"]):
         print(
             f"  {owner_type:<30}  count={info['count']:>3}  "
             f"max_abs={info['max_abs']:.4g}  max_rel={info['max_rel']:.2%}"
         )
+
+
 from verify_model_building import (  # noqa: E402
     BASE_COMAK_SIMULATION_PARMS_FOLDER,
     build_dict_bones_from_production,
     load_production_meshes,
 )
-
 
 SMITH2019_OSIM = (
     "/dataNAS/people/aagatti/projects/comak_gait_simulation/COMAK_SIMULATION_REQUIREMENTS/"
@@ -66,7 +65,9 @@ SMITH2019_OSIM = (
 )
 
 
-def run_build_joint_model(run_dir: Path, subject_name: str, output_dir: Path, seed: int = 0) -> Path:
+def run_build_joint_model(
+    run_dir: Path, subject_name: str, output_dir: Path, seed: int = 0
+) -> Path:
     """Run build_joint_model with Procrustes anchors from Smith2019."""
     from nsosim.model_building import build_joint_model
 

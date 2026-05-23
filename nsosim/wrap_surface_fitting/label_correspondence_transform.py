@@ -53,7 +53,6 @@ from .main import wrap_surface
 from .parameter_extraction import extract_wrap_parameters_from_osim
 from .procrustes_anchor import procrustes_anchor_for_wrap, umeyama_similarity
 
-
 _NEAR_SURFACE_MIN_POINTS = 20
 
 
@@ -182,7 +181,9 @@ def label_correspondence_transforms_for_bone(
     for body_name, body_data in bone_params.items():
         for wrap_name, wrap_p in body_data.items():
             T = _per_wrap_transform_from_labels(
-                ref_labeled_mesh, subj_labeled_mesh, wrap_name,
+                ref_labeled_mesh,
+                subj_labeled_mesh,
+                wrap_name,
                 wrap_type=wrap_p.get("type", ""),
                 transform_kind=transform_kind,
             )

@@ -35,7 +35,6 @@ from nsosim.wrap_surface_fitting.parameter_extraction import (
 from nsosim.wrap_surface_fitting.utils import ADDITIONAL_OFFSETS
 from nsosim.wrap_surface_fitting.wrap_signed_distances import sd_ellipsoid_improved
 
-
 # Map osim bone names → labeled-mesh path inside an iter SLURM output
 BONE_PATHS = {
     "femur": "A_v1/bones/femur/femur_labeled_mesh_updated.vtk",
@@ -130,7 +129,7 @@ def evaluate_fit_quality(osim_path: Path, labeled_mesh_root: Path) -> dict:
                 pred_inside = sdf < 0.0
 
                 # Classification accuracy + per-class breakdown
-                correct = (pred_inside == inside_truth)
+                correct = pred_inside == inside_truth
                 n_inside_truth = int(inside_truth.sum())
                 n_outside_truth = int((~inside_truth).sum())
                 n_inside_correct = int((pred_inside & inside_truth).sum())
@@ -151,10 +150,10 @@ def evaluate_fit_quality(osim_path: Path, labeled_mesh_root: Path) -> dict:
                     "n_inside_truth": n_inside_truth,
                     "n_outside_truth": n_outside_truth,
                     "accuracy": float(correct.mean()),
-                    "recall_inside": (n_inside_correct / n_inside_truth)
-                                      if n_inside_truth else 1.0,
-                    "specificity_outside": (n_outside_correct / n_outside_truth)
-                                            if n_outside_truth else 1.0,
+                    "recall_inside": (n_inside_correct / n_inside_truth) if n_inside_truth else 1.0,
+                    "specificity_outside": (
+                        (n_outside_correct / n_outside_truth) if n_outside_truth else 1.0
+                    ),
                     "mean_margin_violation_mm": margin_violation_mm,
                     "max_margin_violation_mm": max_violation_mm,
                 }
@@ -162,18 +161,26 @@ def evaluate_fit_quality(osim_path: Path, labeled_mesh_root: Path) -> dict:
 
 
 def main():
-    iter3_osim = Path("scratch/iter3/build_isolation_20260511_234741/A_v1/"
-                       "custom_nsm_full_body_healthy_knee_model/isolation_test_A_v1/"
-                       "isolation_test_A_v1.osim")
-    iter7_osim = Path("scratch/iter7/build_isolation_20260512_124021/A_v1/"
-                       "custom_nsm_full_body_healthy_knee_model/isolation_test_A_v1/"
-                       "isolation_test_A_v1.osim")
-    iter9_osim = Path("scratch/iter9/build_isolation_20260512_144421/A_v1/"
-                       "custom_nsm_full_body_healthy_knee_model/isolation_test_A_v1/"
-                       "isolation_test_A_v1.osim")
-    iter10_osim = Path("scratch/iter10/build_isolation_20260512_153622/A_v1/"
-                        "custom_nsm_full_body_healthy_knee_model/isolation_test_A_v1/"
-                        "isolation_test_A_v1.osim")
+    iter3_osim = Path(
+        "scratch/iter3/build_isolation_20260511_234741/A_v1/"
+        "custom_nsm_full_body_healthy_knee_model/isolation_test_A_v1/"
+        "isolation_test_A_v1.osim"
+    )
+    iter7_osim = Path(
+        "scratch/iter7/build_isolation_20260512_124021/A_v1/"
+        "custom_nsm_full_body_healthy_knee_model/isolation_test_A_v1/"
+        "isolation_test_A_v1.osim"
+    )
+    iter9_osim = Path(
+        "scratch/iter9/build_isolation_20260512_144421/A_v1/"
+        "custom_nsm_full_body_healthy_knee_model/isolation_test_A_v1/"
+        "isolation_test_A_v1.osim"
+    )
+    iter10_osim = Path(
+        "scratch/iter10/build_isolation_20260512_153622/A_v1/"
+        "custom_nsm_full_body_healthy_knee_model/isolation_test_A_v1/"
+        "isolation_test_A_v1.osim"
+    )
     # Use iter7's labelled meshes for evaluation — they're geometrically the
     # same A-run input meshes for both iters.
     labeled_root = Path("scratch/iter7/build_isolation_20260512_124021")
@@ -183,25 +190,34 @@ def main():
     iter9 = evaluate_fit_quality(iter9_osim, labeled_root)
     iter10 = evaluate_fit_quality(iter10_osim, labeled_root)
 
-    print(f"\n{'Wrap':<26}{'type':<5}{'iter3':>9}{'iter7':>9}{'iter9':>9}{'iter10':>9}"
-          f"{'Δ(10-3)':>10}")
+    print(
+        f"\n{'Wrap':<26}{'type':<5}{'iter3':>9}{'iter7':>9}{'iter9':>9}{'iter10':>9}"
+        f"{'Δ(10-3)':>10}"
+    )
     for wn in sorted(iter3.keys()):
-        a3 = iter3.get(wn); a7 = iter7.get(wn); a9 = iter9.get(wn); a10 = iter10.get(wn)
+        a3 = iter3.get(wn)
+        a7 = iter7.get(wn)
+        a9 = iter9.get(wn)
+        a10 = iter10.get(wn)
         if not (a3 and a7 and a9 and a10):
             continue
-        kind = 'ell' if a3['type'] == 'WrapEllipsoid' else 'cyl'
-        delta = a10['accuracy'] - a3['accuracy']
-        sign = '↑' if delta > 0 else ('↓' if delta < 0 else '·')
-        print(f"  {wn:<24}{kind:<5}"
-              f"{a3['accuracy']:>9.4f}{a7['accuracy']:>9.4f}{a9['accuracy']:>9.4f}{a10['accuracy']:>9.4f}"
-              f"{delta:>+9.5f}{sign}")
+        kind = "ell" if a3["type"] == "WrapEllipsoid" else "cyl"
+        delta = a10["accuracy"] - a3["accuracy"]
+        sign = "↑" if delta > 0 else ("↓" if delta < 0 else "·")
+        print(
+            f"  {wn:<24}{kind:<5}"
+            f"{a3['accuracy']:>9.4f}{a7['accuracy']:>9.4f}{a9['accuracy']:>9.4f}{a10['accuracy']:>9.4f}"
+            f"{delta:>+9.5f}{sign}"
+        )
 
     m3 = np.mean([v["accuracy"] for v in iter3.values()])
     m7 = np.mean([v["accuracy"] for v in iter7.values()])
     m9 = np.mean([v["accuracy"] for v in iter9.values()])
     m10 = np.mean([v["accuracy"] for v in iter10.values()])
-    print(f"\nMean accuracy across {len(iter3)} wraps: "
-          f"iter3={m3:.4f}  iter7={m7:.4f}  iter9={m9:.4f}  iter10={m10:.4f}  Δ(10-3)={m10-m3:+.4f}")
+    print(
+        f"\nMean accuracy across {len(iter3)} wraps: "
+        f"iter3={m3:.4f}  iter7={m7:.4f}  iter9={m9:.4f}  iter10={m10:.4f}  Δ(10-3)={m10-m3:+.4f}"
+    )
 
 
 if __name__ == "__main__":

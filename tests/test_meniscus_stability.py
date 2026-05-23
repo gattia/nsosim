@@ -343,13 +343,14 @@ class TestRegionThreeExcludedFromEnvelope:
         """
         ring, top, bottom = self._half_ring_with_surfaces()
 
-        def fake_percentiles(mesh, regions_array="regions_label", percentile=95.0,
-                             n_theta_bins=100):
+        def fake_percentiles(
+            mesh, regions_array="regions_label", percentile=95.0, n_theta_bins=100
+        ):
             return (
                 {
                     1.0: self._percentiles(100),  # healthy tibia-facing face
                     2.0: self._percentiles(100),  # healthy femur-facing face
-                    3.0: self._percentiles(1),    # COLLAPSED inner free edge
+                    3.0: self._percentiles(1),  # COLLAPSED inner free edge
                 },
                 np.linspace(-np.pi, np.pi, n_theta_bins),
             )
@@ -373,11 +374,12 @@ class TestRegionThreeExcludedFromEnvelope:
         """A genuine region-1/2 collapse must STILL fail loudly (fix unchanged)."""
         ring, top, bottom = self._half_ring_with_surfaces()
 
-        def fake_percentiles(mesh, regions_array="regions_label", percentile=95.0,
-                             n_theta_bins=100):
+        def fake_percentiles(
+            mesh, regions_array="regions_label", percentile=95.0, n_theta_bins=100
+        ):
             return (
                 {
-                    1.0: self._percentiles(2),    # COLLAPSED tibia-facing face
+                    1.0: self._percentiles(2),  # COLLAPSED tibia-facing face
                     2.0: self._percentiles(100),  # healthy femur-facing face
                 },
                 np.linspace(-np.pi, np.pi, n_theta_bins),

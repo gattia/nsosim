@@ -57,8 +57,7 @@ def compare_surfaces(mesh_a_path: Path, mesh_b_path: Path) -> dict:
     }
 
 
-def label_transfer_test(labeled_a_path: Path, labeled_b_path: Path,
-                         n_closest: int = 3) -> dict:
+def label_transfer_test(labeled_a_path: Path, labeled_b_path: Path, n_closest: int = 3) -> dict:
     """Transfer A's labels onto B's vertices spatially (pymskt weighted-NN)
     and compare to B's own labels."""
     # Load B twice: one keeps its own labels (the truth), one receives A's.
@@ -93,8 +92,11 @@ def label_transfer_test(labeled_a_path: Path, labeled_b_path: Path,
 
         unique = np.unique(b_truth)
         is_binary = (unique.size <= 2) and set(unique.tolist()).issubset({0.0, 1.0})
-        info = {"is_binary": is_binary, "n_vertices": b_truth.size,
-                "frac_positive_native": float(b_truth.mean())}
+        info = {
+            "is_binary": is_binary,
+            "n_vertices": b_truth.size,
+            "frac_positive_native": float(b_truth.mean()),
+        }
         if is_binary:
             n_flipped = int(np.sum(np.abs(diff) > 0.5))
             info["n_flipped"] = n_flipped
@@ -107,8 +109,9 @@ def label_transfer_test(labeled_a_path: Path, labeled_b_path: Path,
     return report
 
 
-def boundary_jitter_distance(labeled_a_path: Path, labeled_b_path: Path,
-                              n_closest: int = 3) -> dict:
+def boundary_jitter_distance(
+    labeled_a_path: Path, labeled_b_path: Path, n_closest: int = 3
+) -> dict:
     """For each binary field, locate B-vertices where the spatially-transferred
     A label disagrees with B's own label, then find the spatial distance to
     the nearest B-vertex whose own label matches the transferred A value.
@@ -124,8 +127,11 @@ def boundary_jitter_distance(labeled_a_path: Path, labeled_b_path: Path,
     incoming = list(b_native.point_data.keys())
     renamed = [f"{n}__fromA" for n in incoming]
     b_target.copy_scalars_from_other_mesh_to_current(
-        a, orig_scalars_name=incoming, new_scalars_name=renamed,
-        weighted_avg=True, n_closest=n_closest,
+        a,
+        orig_scalars_name=incoming,
+        new_scalars_name=renamed,
+        weighted_avg=True,
+        n_closest=n_closest,
     )
 
     b_points = np.asarray(b_native.point_coords)
@@ -147,7 +153,7 @@ def boundary_jitter_distance(labeled_a_path: Path, labeled_b_path: Path,
 
         # Discretize the transferred (averaged) value back to {0, 1}.
         a_label_at_b = (b_from_a > 0.5).astype(np.float64)
-        flip_mask = (a_label_at_b != b_truth)
+        flip_mask = a_label_at_b != b_truth
         if not flip_mask.any():
             out["by_array"][arr] = {"n_flipped": 0}
             continue
@@ -203,8 +209,7 @@ def fmt_surface(label: str, r: dict) -> str:
 
 
 def fmt_labels(label: str, r: dict) -> str:
-    lines = [f"\n=== {label} ===",
-             f"  arrays compared: {r.get('n_arrays', 0)}"]
+    lines = [f"\n=== {label} ===", f"  arrays compared: {r.get('n_arrays', 0)}"]
     if "by_array" not in r:
         return "\n".join(lines)
     for arr in sorted(r["by_array"]):
@@ -242,18 +247,21 @@ def main():
     print(f"  A surface: {surf_a}")
     print(f"  B surface: {surf_b}")
 
-    print(fmt_surface("TEST 1: point-to-surface ASSD (A vs B)",
-                       compare_surfaces(surf_a, surf_b)))
+    print(fmt_surface("TEST 1: point-to-surface ASSD (A vs B)", compare_surfaces(surf_a, surf_b)))
 
-    print(fmt_labels(
-        "TEST 2: spatial label-transfer A→B vs independent B labels",
-        label_transfer_test(labeled_a, labeled_b, n_closest=args.n_closest),
-    ))
+    print(
+        fmt_labels(
+            "TEST 2: spatial label-transfer A→B vs independent B labels",
+            label_transfer_test(labeled_a, labeled_b, n_closest=args.n_closest),
+        )
+    )
 
-    print(fmt_boundary(
-        "TEST 3: surface distance from each flipped B-vertex to nearest B-vertex matching A's label",
-        boundary_jitter_distance(labeled_a, labeled_b, n_closest=args.n_closest),
-    ))
+    print(
+        fmt_boundary(
+            "TEST 3: surface distance from each flipped B-vertex to nearest B-vertex matching A's label",
+            boundary_jitter_distance(labeled_a, labeled_b, n_closest=args.n_closest),
+        )
+    )
 
 
 if __name__ == "__main__":

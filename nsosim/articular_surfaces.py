@@ -432,9 +432,7 @@ def refine_meniscus_articular_surfaces(
     #         faces.
     #     See .claude/reports/meniscus_radial_envelope_crash.md in the
     #     comak_gait_simulation repo for the full root-cause investigation.
-    region_percentiles = {
-        rl: pd for rl, pd in region_percentiles_all.items() if int(rl) in (1, 2)
-    }
+    region_percentiles = {rl: pd for rl, pd in region_percentiles_all.items() if int(rl) in (1, 2)}
 
     # 3b. Validate region coverage before building the envelope. Regions 1
     # (near tibia) and 2 (near femur) must each be present and populate many

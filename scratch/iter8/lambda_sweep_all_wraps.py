@@ -46,12 +46,12 @@ SMITH2019 = (
 # wraps we subtract the ADDITIONAL_OFFSETS shift the labeling pipeline
 # applies symmetrically.
 WRAPS = [
-    ("Gastroc_at_Condyles_r", "femur", "femur_r",        "ellipsoid"),
-    ("KnExt_at_fem_r",        "femur", "femur_r",        "cylinder"),
-    ("KnExt_vasint_at_fem_r", "femur", "femur_r",        "cylinder"),
-    ("Capsule_r",             "femur", "femur_distal_r", "cylinder"),
-    ("Med_Lig_r",             "tibia", "tibia_proximal_r","ellipsoid"),
-    ("Med_LigP_r",            "tibia", "tibia_proximal_r","ellipsoid"),
+    ("Gastroc_at_Condyles_r", "femur", "femur_r", "ellipsoid"),
+    ("KnExt_at_fem_r", "femur", "femur_r", "cylinder"),
+    ("KnExt_vasint_at_fem_r", "femur", "femur_r", "cylinder"),
+    ("Capsule_r", "femur", "femur_distal_r", "cylinder"),
+    ("Med_Lig_r", "tibia", "tibia_proximal_r", "ellipsoid"),
+    ("Med_LigP_r", "tibia", "tibia_proximal_r", "ellipsoid"),
 ]
 
 
@@ -65,11 +65,20 @@ def _fit_ellipsoid(labeled_mesh_path, wrap_name, anchor, lam_c, lam_a, lam_q, se
     labels = np.asarray(m.point_data[f"{wrap_name}_binary"], dtype=np.float32)
     sdf = np.asarray(m.point_data[f"{wrap_name}_sdf"], dtype=np.float32)
     fitter = EllipsoidFitter(
-        lr=1e-2, epochs=10, use_lbfgs=True, lbfgs_epochs=100,
-        alpha=1.0, beta=0.0, gamma=0.0, margin_decay_type="linear",
-        initialization="geometric", center_transform="linear",
+        lr=1e-2,
+        epochs=10,
+        use_lbfgs=True,
+        lbfgs_epochs=100,
+        alpha=1.0,
+        beta=0.0,
+        gamma=0.0,
+        margin_decay_type="linear",
+        initialization="geometric",
+        center_transform="linear",
         anchor_params=anchor,
-        lambda_center_reg=lam_c, lambda_axes_reg=lam_a, lambda_quat_reg=lam_q,
+        lambda_center_reg=lam_c,
+        lambda_axes_reg=lam_a,
+        lambda_quat_reg=lam_q,
     )
     fitter.fit(points=pts, labels=labels, sdf=sdf, mesh=m, surface_name=wrap_name, margin=0.0002)
     wp = fitter.wrap_params
@@ -87,35 +96,60 @@ def _fit_cylinder(labeled_mesh_path, wrap_name, anchor, lam_c, lam_axis, seed=0)
     near_labels = labels_all[near_bool]
     near_sdf = sdf_all[near_bool]
     fitter = CylinderFitter(
-        lr=0.0, epochs=0, use_lbfgs=True, lbfgs_epochs=100,
-        alpha=1.0, beta=0.0, gamma=0.0, margin_decay_type=None,
-        initialization="geometric", center_transform="linear",
+        lr=0.0,
+        epochs=0,
+        use_lbfgs=True,
+        lbfgs_epochs=100,
+        alpha=1.0,
+        beta=0.0,
+        gamma=0.0,
+        margin_decay_type=None,
+        initialization="geometric",
+        center_transform="linear",
         anchor_params=anchor,
-        lambda_center_reg=lam_c, lambda_axis_reg=lam_axis,
+        lambda_center_reg=lam_c,
+        lambda_axis_reg=lam_axis,
     )
-    fitter.fit(points=near_pts, labels=near_labels, sdf=near_sdf, mesh=m,
-                surface_name=wrap_name, near_surface_points=near_pts, margin=1e-10)
+    fitter.fit(
+        points=near_pts,
+        labels=near_labels,
+        sdf=near_sdf,
+        mesh=m,
+        surface_name=wrap_name,
+        near_surface_points=near_pts,
+        margin=1e-10,
+    )
     wp = fitter.wrap_params
     return wp, _accuracy_cylinder(wp, pts_all, labels_all)
 
 
 def _accuracy_ellipsoid(wp, pts, labels):
-    R = torch.as_tensor(ScipyR.from_euler("XYZ", wp.xyz_body_rotation).as_matrix(), dtype=torch.float32)
+    R = torch.as_tensor(
+        ScipyR.from_euler("XYZ", wp.xyz_body_rotation).as_matrix(), dtype=torch.float32
+    )
     c = torch.as_tensor(wp.translation, dtype=torch.float32)
     a = torch.as_tensor(wp.dimensions, dtype=torch.float32)
     with torch.no_grad():
-        sdf_fitted = sd_ellipsoid_improved(torch.as_tensor(pts, dtype=torch.float32), c, a, R).cpu().numpy()
+        sdf_fitted = (
+            sd_ellipsoid_improved(torch.as_tensor(pts, dtype=torch.float32), c, a, R).cpu().numpy()
+        )
     return float(((sdf_fitted < 0) == (labels > 0.5)).mean())
 
 
 def _accuracy_cylinder(wp, pts, labels):
-    R = torch.as_tensor(ScipyR.from_euler("XYZ", wp.xyz_body_rotation).as_matrix(), dtype=torch.float32)
+    R = torch.as_tensor(
+        ScipyR.from_euler("XYZ", wp.xyz_body_rotation).as_matrix(), dtype=torch.float32
+    )
     c = torch.as_tensor(wp.translation, dtype=torch.float32)
     r = torch.as_tensor(wp.radius, dtype=torch.float32)
     h = torch.as_tensor(wp.length / 2.0, dtype=torch.float32)
     axis = R[:, 2]
     with torch.no_grad():
-        sdf_fitted = sd_cylinder_with_axis(torch.as_tensor(pts, dtype=torch.float32), c, r, h, axis).cpu().numpy()
+        sdf_fitted = (
+            sd_cylinder_with_axis(torch.as_tensor(pts, dtype=torch.float32), c, r, h, axis)
+            .cpu()
+            .numpy()
+        )
     return float(((sdf_fitted < 0) == (labels > 0.5)).mean())
 
 
@@ -130,19 +164,19 @@ def main():
     # Ellipsoid settings:
     ellipsoid_settings = [
         ("iter9-default", "anchor", 0.05, 0.005, 0.005),
-        ("10x lower",     "anchor", 0.005, 0.0005, 0.0005),
-        ("100x lower",    "anchor", 0.0005, 0.00005, 0.00005),
-        ("zero",          "anchor", 0.0,   0.0,    0.0),
-        ("algebraic iter3-λ", None, 1.0,  0.1,    0.1),
-        ("algebraic λ=0",     None, 0.0,  0.0,    0.0),
+        ("10x lower", "anchor", 0.005, 0.0005, 0.0005),
+        ("100x lower", "anchor", 0.0005, 0.00005, 0.00005),
+        ("zero", "anchor", 0.0, 0.0, 0.0),
+        ("algebraic iter3-λ", None, 1.0, 0.1, 0.1),
+        ("algebraic λ=0", None, 0.0, 0.0, 0.0),
     ]
     cylinder_settings = [
         ("iter9-default", "anchor", 0.05, 0.1),
-        ("10x lower",     "anchor", 0.005, 0.01),
-        ("100x lower",    "anchor", 0.0005, 0.001),
-        ("zero",          "anchor", 0.0,   0.0),
-        ("algebraic iter3-λ", None, 1.0,  0.0),  # iter3 had lambda_axis=0
-        ("algebraic λ=0",     None, 0.0,  0.0),
+        ("10x lower", "anchor", 0.005, 0.01),
+        ("100x lower", "anchor", 0.0005, 0.001),
+        ("zero", "anchor", 0.0, 0.0),
+        ("algebraic iter3-λ", None, 1.0, 0.0),  # iter3 had lambda_axis=0
+        ("algebraic λ=0", None, 0.0, 0.0),
     ]
 
     for wrap_name, bone, body, kind in WRAPS:
@@ -159,17 +193,21 @@ def main():
 
         settings = ellipsoid_settings if kind == "ellipsoid" else cylinder_settings
         for row in settings:
-            name = row[0]; init = row[1]; args = row[2:]
+            name = row[0]
+            init = row[1]
+            args = row[2:]
             anc = anchor if init == "anchor" else None
             if kind == "ellipsoid":
                 lc, la, lq = args
                 wp_a, acc_a = _fit_ellipsoid(label_a, wrap_name, anc, lc, la, lq)
-                wp_b, _      = _fit_ellipsoid(label_b, wrap_name, anc, lc, la, lq)
+                wp_b, _ = _fit_ellipsoid(label_b, wrap_name, anc, lc, la, lq)
             else:
                 lc, la = args
                 wp_a, acc_a = _fit_cylinder(label_a, wrap_name, anc, lc, la)
-                wp_b, _      = _fit_cylinder(label_b, wrap_name, anc, lc, la)
-            ab_um = 1e6 * float(np.linalg.norm(np.asarray(wp_a.translation) - np.asarray(wp_b.translation)))
+                wp_b, _ = _fit_cylinder(label_b, wrap_name, anc, lc, la)
+            ab_um = 1e6 * float(
+                np.linalg.norm(np.asarray(wp_a.translation) - np.asarray(wp_b.translation))
+            )
             d_smith = 1000 * float(np.linalg.norm(np.asarray(wp_a.translation) - smith_center))
             print(f"  {name:<22}{acc_a:>10.5f}{ab_um:>14.2f}{d_smith:>14.4f}")
 

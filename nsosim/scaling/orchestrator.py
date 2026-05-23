@@ -101,8 +101,8 @@ def scale_comak_model(
 
     fix_status = fix_in_place(output_osim)
 
-    report_path = Path(report_json) if report_json is not None else output_osim.with_suffix(
-        ".scaling.json"
+    report_path = (
+        Path(report_json) if report_json is not None else output_osim.with_suffix(".scaling.json")
     )
     scale_set_dump = {}
     for i in range(scale_set.getSize()):
