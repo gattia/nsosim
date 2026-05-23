@@ -139,6 +139,7 @@ class TestCylinderFitterRotated:
 | `meniscal_ligaments.py` | Post-interpolation projection of meniscal ligament tibia attachments onto tibia surface |
 | `osim_utils.py` | Low-level OpenSim XML manipulation via Python API |
 | `utils.py` | NSM model loading, mesh I/O, anatomical coordinate system (ACS) alignment utilities |
+| `weld_collapse/` | "Stage Z" — collapse the intermediate `WeldJoint`s out of a final COMAK model. Bit-exact structural flatten via `nsosim.weld_collapse.collapse_welds(input, output)`. Built to silence the AddBiomechanics intermediate-weld warning and as a potential COMAK speedup; cohort_timing test confirmed it does NOT speed COMAK (median 0.905× welded — contact-dominated pipeline). Kept for AB-scaling workflows. Plan: [`.claude/plans/completed/comak-weld-collapse_COMPLETED.md`](.claude/plans/completed/comak-weld-collapse_COMPLETED.md) |
 
 ### Module Organization Principles
 
