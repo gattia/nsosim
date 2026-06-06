@@ -5,6 +5,7 @@ the in-memory scale path crashes on JAM Smith2018ContactMesh init.
 """
 
 from pathlib import Path
+from typing import Optional
 
 import opensim as osim
 
@@ -20,6 +21,12 @@ def apply_scaletool(
     JAM components (Blankevoort1991Ligament, Smith2018ContactMesh, all wraps
     and muscles) are handled by ScaleTool's extendPostScale hooks. MarkerPlacer
     is disabled — markers are transplanted from the AB model in a later step.
+
+    Note: mass distribution and the target subject mass are NOT set here —
+    the orchestrator does that as a post-ScaleTool pass so it can transfer
+    AB's per-body physics-tuned masses (rather than uniformly scaling all
+    bodies by total_subject_mass / total_base_mass, which is what
+    ScaleTool.setSubjectMass + preserveMassDist=True does).
     """
     base_osim = Path(base_osim)
     out_osim = Path(out_osim)
