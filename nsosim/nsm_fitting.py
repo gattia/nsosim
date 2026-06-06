@@ -1,4 +1,12 @@
-"""NSM fitting pipeline: align meshes, fit Neural Shape Models, and convert to OpenSim coordinates."""
+"""NSM fitting pipeline: align meshes, fit Neural Shape Models, convert to OpenSim coords.
+
+Also home to the coordinate-conversion functions (``convert_nsm_recon_to_OSIM[_]``,
+``convert_OSIM_to_nsm[_]``, ``apply_transform``/``undo_transform``). The four coordinate
+spaces (MRI / REFALIGN / NSMcanon / OSIM), the full transform chain, and how Stage X body
+scaling (``s_wa``) meets the knee build are documented in
+``nsosim/docs/SCALING_AND_SPACES.md``; pipeline-wiring deviations live in
+``nsosim/docs/SCALING_DEVIATIONS.md``.
+"""
 
 import json
 import logging
@@ -64,6 +72,30 @@ def align_bone_osim_fit_nsm(
     6. Fits a Neural Shape Model (NSM) to the aligned bone and cartilage meshes.
     7. Stores the NSM reconstruction results (latent vector, meshes, parameters)
        in the input dictionary `dict_bone`.
+
+    Coordinate spaces & scale identity:
+        Input subject meshes are MRI space (mm, subject-physical — the subject's
+        true anatomical size). The femur is registered onto the fixed smith2019
+        reference bone with ``reg_mode=rigid_reg_type``:
+
+        - ``'similarity'``: rigid + **isotropic scale** — the subject's true
+          scale is divided out, so the aligned mesh is at **reference size**
+          (this is the REFALIGN space used downstream).
+        - ``'rigid'``: rotation + translation only — subject true size is
+          preserved.
+
+        Tibia and patella are **not** independently registered: they have the
+        femur's transform applied directly (``apply_transform_to_mesh``), placing
+        them in the same femur-aligned space as the femur. The NSM reconstruction
+        stored back into ``dict_bone`` (``*_mesh_nsm``) is in REFALIGN — femur-
+        aligned mm, reference size when ``'similarity'`` is used (the NSM decoder
+        undoes only its training normalization, not the registration scale).
+
+    Place in the pipeline:
+        Stage 1 of the MRI/fitting pipeline, driven by
+        :func:`align_knee_osim_fit_nsm` (which passes the femur's transform to
+        the tibia/patella calls). The ``*_mesh_nsm`` outputs feed
+        :func:`nsm_recon_to_osim`.
 
     Args:
         bone (str): The name of the bone (e.g., 'femur', 'tibia', 'patella').
@@ -316,6 +348,24 @@ def align_knee_osim_fit_nsm(
     - The alignment transformation parameters (linear transform, scale, center) as a JSON file.
     - The NSM latent vector as a .npy file.
     - The NSM-reconstructed bone and cartilage meshes in VTK format (in mm).
+
+    Coordinate spaces & scale identity:
+        Subject inputs are MRI space (mm, subject-physical). Outputs (the
+        ``*_mesh_nsm`` meshes and the ``*_nsm_recon_mm.vtk`` files) are REFALIGN
+        — femur-aligned mm. Their scale identity follows ``rigid_reg_type``: with
+        ``'similarity'`` they are reference size (subject true scale divided out);
+        with ``'rigid'`` they keep subject size. The function default here is
+        ``'rigid'``; the production MRI pipeline
+        (``comak_1_nsm_fitting.align_knee_osim_fit_nsm`` call) passes
+        ``'similarity'``, so production reconstructions are reference size. The
+        per-bone ``*_alignment.json`` stores ``linear_transform`` (REFALIGN ->
+        NSMcanon similarity), ``scale``, and ``center``.
+
+    Place in the pipeline:
+        Stage 1 (NSM model fitting) of the MRI/fitting pipeline; the entry point
+        a subject build calls first. Processes the femur first so its transform
+        can be reused for tibia/patella, then hands the REFALIGN reconstructions
+        to :func:`nsm_recon_to_osim` (Stage 2).
 
     Args:
         dict_bones (dict): Dictionary mapping bone names (e.g., 'femur', 'tibia', 'patella')
@@ -642,25 +692,34 @@ def apply_transform(
     scale,
     center,
 ):
-    """
-    Applies a transformation (ICP, scaling, centering) to a set of points.
+    """Low-level alignment primitive: ``p_out = (p_in @ icp_transform.T - center) / scale``.
 
-    This is typically used to transform points from a canonical/normalized space
-    (e.g., NSM space) to a subject-specific or original mesh space.
+    Applies a 4x4 transform, then removes a center offset and an isotropic scale.
+    It is the algebraic inverse of :func:`undo_transform`.
 
-    The transformation sequence is:
-    1. Apply the ICP transformation (a 4x4 matrix).
-    2. Undo centering (subtract the center vector).
-    3. Undo scaling (divide by the scale factor).
+    Place in the transform chain:
+        This is the final leg of :func:`convert_OSIM_to_nsm`. In the nsosim
+        pipeline it is called with the per-bone ``linear_transform`` (the
+        similarity that maps REFALIGN -> NSMcanon; stored in the bone's
+        ``*_alignment.json``) and ``scale=1, center=[0, 0, 0]`` — so it maps
+        **REFALIGN (femur-aligned mm, reference size) -> NSMcanon
+        (dimensionless ~[-1, 1], per-bone canonical)**. The ``scale``/``center``
+        arguments exist for generality; the production chain leaves them at the
+        identity values above.
 
     Args:
-        points (numpy.ndarray): Nx3 array of points to transform.
-        icp_transform (numpy.ndarray): 4x4 ICP transformation matrix.
-        scale (float or numpy.ndarray): Scaling factor.
-        center (numpy.ndarray): 3D centering vector.
+        points (numpy.ndarray): Nx3 input points. In the production chain these
+            are REFALIGN (femur-aligned mm, reference size).
+        icp_transform (numpy.ndarray): 4x4 matrix. Production chain passes the
+            per-bone ``linear_transform`` (REFALIGN -> NSMcanon).
+        scale (float or numpy.ndarray): Isotropic divisor applied after the
+            transform. Production chain passes ``1``.
+        center (numpy.ndarray): 3D offset subtracted after the transform.
+            Production chain passes ``[0, 0, 0]``.
 
     Returns:
-        numpy.ndarray: Nx3 array of transformed points.
+        numpy.ndarray: Nx3 transformed points. In the production chain these are
+            NSMcanon (dimensionless ~[-1, 1], per-bone canonical).
     """
     points_ = points.copy()
 
@@ -685,25 +744,35 @@ def undo_transform(
     scale,
     center,
 ):
-    """
-    Reverses a transformation (ICP, scaling, centering) applied to a set of points.
+    """Low-level alignment primitive: ``p_out = (p_in * scale + center) @ inv(icp_transform).T``.
 
-    This is typically used to transform points from a subject-specific or original
-    mesh space back to a canonical/normalized space (e.g., NSM space).
+    Re-applies an isotropic scale and a center offset, then applies the inverse
+    of the 4x4 transform. It is the algebraic inverse of :func:`apply_transform`.
 
-    The inverse transformation sequence is:
-    1. Apply scaling (multiply by the scale factor).
-    2. Apply centering (add the center vector).
-    3. Apply the inverse of the ICP transformation.
+    Place in the transform chain:
+        This is the first leg of :func:`convert_nsm_recon_to_OSIM` (the
+        non-underscore converter on the synthetic-decode path). In the nsosim
+        pipeline it is called with the per-bone ``linear_transform`` (the
+        similarity that maps REFALIGN -> NSMcanon; stored in ``*_alignment.json``)
+        and ``scale=1, center=[0, 0, 0]`` — so it maps **NSMcanon (dimensionless
+        ~[-1, 1], per-bone canonical) -> REFALIGN (femur-aligned mm, reference
+        size)**. A non-unit ``scale`` here is the hook that could re-introduce a
+        subject (true-size) scaling; the production chain passes ``1``.
 
     Args:
-        points (numpy.ndarray): Nx3 array of points to transform.
-        icp_transform (numpy.ndarray): 4x4 ICP transformation matrix.
-        scale (float or numpy.ndarray): Scaling factor.
-        center (numpy.ndarray): 3D centering vector.
+        points (numpy.ndarray): Nx3 input points. In the production chain these
+            are NSMcanon (dimensionless ~[-1, 1], per-bone canonical).
+        icp_transform (numpy.ndarray): 4x4 matrix. Production chain passes the
+            per-bone ``linear_transform`` (REFALIGN -> NSMcanon); its inverse is
+            applied here.
+        scale (float or numpy.ndarray): Isotropic multiplier applied before the
+            transform. Production chain passes ``1``.
+        center (numpy.ndarray): 3D offset added before the transform. Production
+            chain passes ``[0, 0, 0]``.
 
     Returns:
-        numpy.ndarray: Nx3 array of transformed points.
+        numpy.ndarray: Nx3 transformed points. In the production chain these are
+            REFALIGN (femur-aligned mm, reference size).
     """
     points_ = points.copy()
     # apple inverse scaling
@@ -725,24 +794,39 @@ def convert_nsm_recon_to_OSIM_(
     points_,
     ref_mesh_orig_center,
 ):
-    """
-    Converts points from a (typically NSM-reconstructed) space to OpenSim (OSIM) coordinates.
+    """Convert REFALIGN points to OpenSim (OSIM) coordinates. **REFALIGN -> OSIM.**
 
-    This specific version of the conversion involves:
-    1. Adding back an original reference mesh centering bias.
-    2. Scaling from millimeters to meters.
-    3. Applying a combined coordinate transformation and rotation to OSIM space.
+    The three fixed operations:
+    1. Add back the reference mesh centering bias (``ref_mesh_orig_center``),
+       un-centering into NSM-oriented mm.
+    2. Scale mm -> m (``/= 1000``).
+    3. Rotate/axis-swap NSM orientation -> OpenSim orientation
+       (``@ OSIM_TO_NSM_TRANSFORM.T``).
 
-    Note: Mutates ``points_`` in-place (via ``+=`` and ``/=``). Pass ``.copy()`` if
-    you need to preserve the original array.
+    Crucially, this converter applies **no subject-scale factor**: it carries the
+    reference-size REFALIGN mesh straight to OSIM, so the output is at reference
+    size, not the subject's true anatomical size. (Restoring true size would
+    require a scale step, which lives only in the non-underscore
+    :func:`convert_nsm_recon_to_OSIM` via :func:`undo_transform`.)
+
+    This is the converter on the **MRI/fitting path** (called by
+    :func:`_nsm_recon_to_osim_single_surface`). The same fixed
+    ``ref_mesh_orig_center`` (the reference femur's ``mean_orig``) is used for
+    all three bones so their spatial relationship is preserved.
+
+    Note: Mutates ``points_`` in-place (via ``+=`` and ``/=``). Pass ``.copy()``
+    to preserve the original array.
 
     Args:
-        points_ (numpy.ndarray): Nx3 array of points in the source space (e.g., mm, NSM-aligned).
-        ref_mesh_orig_center (numpy.ndarray): The original centering vector that was
-            subtracted from the reference mesh before NSM processing.
+        points_ (numpy.ndarray): Nx3 points in REFALIGN (femur-aligned mm,
+            reference size).
+        ref_mesh_orig_center (numpy.ndarray): 3-vector (mm) — the reference
+            femur centroid in NSM-oriented mm before centering
+            (``fem_ref_center`` = ``ref_femur_alignment.json['mean_orig']``).
 
     Returns:
-        numpy.ndarray: Nx3 array of points in OSIM coordinates (meters).
+        numpy.ndarray: Nx3 points in OSIM (meters, reference size, OpenSim
+            orientation).
     """
     # add back bias from reference mesh
     points_ += ref_mesh_orig_center
@@ -759,24 +843,28 @@ def convert_OSIM_to_nsm_(
     points_,
     ref_mesh_orig_center,
 ):
-    """
-    Converts points from OpenSim (OSIM) coordinates back to an NSM-reconstructable space.
+    """Convert OpenSim (OSIM) points back to REFALIGN. **OSIM -> REFALIGN.**
 
-    This is the inverse of `convert_nsm_recon_to_OSIM_`. It involves:
-    1. Applying the inverse combined coordinate transformation and rotation.
-    2. Scaling from meters to millimeters.
-    3. Subtracting the original reference mesh centering bias.
+    Exact inverse of :func:`convert_nsm_recon_to_OSIM_`:
+    1. Rotate/axis-swap OpenSim orientation -> NSM orientation
+       (``@ OSIM_TO_NSM_TRANSFORM``).
+    2. Scale m -> mm (``*= 1000``).
+    3. Subtract the reference mesh centering bias (``ref_mesh_orig_center``).
 
-    Note: Mutates ``points_`` in-place (via ``*=`` and ``-=``). Pass ``.copy()`` if
-    you need to preserve the original array.
+    No subject-scale factor is applied (symmetric with the forward converter),
+    so reference-size in OSIM stays reference-size in REFALIGN.
+
+    Note: Mutates ``points_`` in-place (via ``*=`` and ``-=``). Pass ``.copy()``
+    to preserve the original array.
 
     Args:
-        points_ (numpy.ndarray): Nx3 array of points in OSIM coordinates (meters).
-        ref_mesh_orig_center (numpy.ndarray): The original centering vector that was
-            subtracted from the reference mesh before NSM processing.
+        points_ (numpy.ndarray): Nx3 points in OSIM (meters, reference size,
+            OpenSim orientation).
+        ref_mesh_orig_center (numpy.ndarray): 3-vector (mm) — the reference
+            femur centroid in NSM-oriented mm (``fem_ref_center``).
 
     Returns:
-        numpy.ndarray: Nx3 array of points in the source space (e.g., mm, NSM-aligned).
+        numpy.ndarray: Nx3 points in REFALIGN (femur-aligned mm, reference size).
     """
     # Inverse of the combined transformation matrix
     # This is the inverse of the combined coordinate swapping + MRI to OSIM rotation
@@ -817,25 +905,39 @@ def convert_nsm_recon_to_OSIM(
     center,
     ref_mesh_orig_center,
 ):
-    """
-    Converts NSM-reconstructed points to the OpenSim (OSIM) coordinate system.
+    """Convert NSMcanon points to OpenSim (OSIM) coordinates. **NSMcanon -> OSIM.**
 
-    This function combines `undo_transform` (to go from canonical NSM space to
-    the subject's aligned physical space in mm) and then `convert_nsm_recon_to_OSIM_`
-    (to go from that physical space to OSIM coordinates in meters).
+    Two-leg converter for the **synthetic-decode path** (output of
+    :func:`create_mesh`, which is in NSMcanon):
+    1. :func:`undo_transform` (``icp_transform``, ``scale``, ``center``):
+       NSMcanon -> REFALIGN (femur-aligned mm).
+    2. :func:`convert_nsm_recon_to_OSIM_` (``ref_mesh_orig_center``):
+       REFALIGN -> OSIM (meters).
+
+    The ``scale`` argument flows into :func:`undo_transform` and is the only
+    place a subject (true-size) scaling could be re-introduced. Callers on the
+    synthetic-decode path (:mod:`nsosim.decode`) pass ``scale=1, center=[0, 0, 0]``
+    and the per-bone ``linear_transform``, so the output lands at reference size.
+    The MRI/fitting path does not call this function — it uses the underscore
+    :func:`convert_nsm_recon_to_OSIM_` directly (the recon is already in REFALIGN).
 
     Args:
-        points (numpy.ndarray): Nx3 array of points in the canonical NSM space.
+        points (numpy.ndarray): Nx3 points in NSMcanon (dimensionless ~[-1, 1],
+            per-bone canonical).
         icp_transform (vtk.vtkIterativeClosestPointTransform or numpy.ndarray):
-            The ICP transformation applied during NSM fitting. Can be a VTK object
-            or a 4x4 numpy array.
-        scale (float or numpy.ndarray): Scaling factor from NSM fitting.
-        center (numpy.ndarray): Centering vector from NSM fitting.
-        ref_mesh_orig_center (numpy.ndarray): The original centering vector of the
-            reference mesh before it was transformed to the NSM reference space.
+            The per-bone alignment transform (4x4 or VTK), normalized via
+            :func:`check_icp_transform`. Maps REFALIGN -> NSMcanon; its inverse
+            is applied here.
+        scale (float or numpy.ndarray): Isotropic scale fed to
+            :func:`undo_transform`. ``1`` on the synthetic-decode path.
+        center (numpy.ndarray): Center offset fed to :func:`undo_transform`.
+            ``[0, 0, 0]`` on the synthetic-decode path.
+        ref_mesh_orig_center (numpy.ndarray): 3-vector (mm) — the reference femur
+            ``mean_orig`` (``fem_ref_center``).
 
     Returns:
-        numpy.ndarray: Nx3 array of points in OSIM coordinates (meters).
+        numpy.ndarray: Nx3 points in OSIM (meters, OpenSim orientation; reference
+            size unless a non-unit ``scale`` was supplied).
 
     Raises:
         ValueError: If `icp_transform` is not a valid type.
@@ -856,26 +958,29 @@ def convert_OSIM_to_nsm(
     center,
     ref_mesh_orig_center,
 ):
-    """
-    Converts points from OpenSim (OSIM) coordinate system to NSM space.
+    """Convert OpenSim (OSIM) points to NSMcanon. **OSIM -> NSMcanon.**
 
-    This function is the inverse of `convert_nsm_recon_to_OSIM`. It combines
-    `convert_OSIM_to_nsm_` (to go from OSIM coordinates to the subject's aligned
-    physical space in mm) and then `apply_transform` (to go from that physical
-    space to the canonical NSM space).
+    Exact inverse of :func:`convert_nsm_recon_to_OSIM`, two legs:
+    1. :func:`convert_OSIM_to_nsm_` (``ref_mesh_orig_center``):
+       OSIM (meters) -> REFALIGN (femur-aligned mm).
+    2. :func:`apply_transform` (``icp_transform``, ``scale``, ``center``):
+       REFALIGN -> NSMcanon.
 
     Args:
-        points (numpy.ndarray): Nx3 array of points in OSIM coordinates (meters).
+        points (numpy.ndarray): Nx3 points in OSIM (meters, OpenSim orientation).
         icp_transform (vtk.vtkIterativeClosestPointTransform or numpy.ndarray):
-            The ICP transformation applied during NSM fitting. Can be a VTK object
-            or a 4x4 numpy array.
-        scale (float or numpy.ndarray): Scaling factor from NSM fitting.
-        center (numpy.ndarray): Centering vector from NSM fitting.
-        ref_mesh_orig_center (numpy.ndarray): The original centering vector of the
-            reference mesh before it was transformed to the NSM reference space.
+            The per-bone alignment transform (4x4 or VTK), normalized via
+            :func:`check_icp_transform`. Maps REFALIGN -> NSMcanon.
+        scale (float or numpy.ndarray): Isotropic scale fed to
+            :func:`apply_transform`. ``1`` for the standard round-trip.
+        center (numpy.ndarray): Center offset fed to :func:`apply_transform`.
+            ``[0, 0, 0]`` for the standard round-trip.
+        ref_mesh_orig_center (numpy.ndarray): 3-vector (mm) — the reference femur
+            ``mean_orig`` (``fem_ref_center``).
 
     Returns:
-        numpy.ndarray: Nx3 array of points in the canonical NSM space.
+        numpy.ndarray: Nx3 points in NSMcanon (dimensionless ~[-1, 1], per-bone
+            canonical).
 
     Raises:
         ValueError: If `icp_transform` is not a valid type.
@@ -894,6 +999,23 @@ def _nsm_recon_to_osim_single_surface(
     fem_ref_center,
     n_clusters,
 ):
+    """Convert one reconstructed surface from REFALIGN to OSIM, optionally resample.
+
+    Thin wrapper around :func:`convert_nsm_recon_to_OSIM_` (the underscore,
+    MRI-path converter) applied to a mesh's ``point_coords``.
+
+    Args:
+        mesh (pymskt.mesh.Mesh): A reconstructed surface in REFALIGN (femur-aligned
+            mm, reference size) — i.e. a ``*_mesh_nsm`` from the fitting step.
+        fem_ref_center (numpy.ndarray): 3-vector (mm), the reference femur
+            ``mean_orig``; passed through to the converter for every surface.
+        n_clusters (int or None): If given, ACVD-resample the OSIM mesh to this
+            many points; if None, leave the point count unchanged.
+
+    Returns:
+        pymskt.mesh.Mesh: A copy of ``mesh`` with points in OSIM (meters, reference
+            size, OpenSim orientation), optionally resampled.
+    """
     mesh_osim = mesh.copy()
     mesh_osim.point_coords = convert_nsm_recon_to_OSIM_(mesh.point_coords, fem_ref_center)
     if n_clusters is not None:
@@ -911,38 +1033,45 @@ def nsm_recon_to_osim(
     men_clusters=None,
     seed=0,
 ):
-    """
-    Transforms NSM-reconstructed bone and cartilage meshes to OSIM coordinates.
+    """Convert a bone's reconstructed surfaces from REFALIGN to OSIM. **REFALIGN -> OSIM.**
 
-    Takes the bone and cartilage meshes from NSM reconstruction (which are typically
-    in a centered, scaled, and possibly ICP-aligned space in mm), converts their
-    point coordinates to the OSIM coordinate system (meters) using
-    `convert_nsm_recon_to_OSIM_`. Optionally resamples the meshes to a target
-    number of points/clusters.
+    Per-bone dispatcher: pulls the reconstructed surfaces for ``bone`` out of
+    ``dict_bones`` (bone, cartilage, and — for the femur — menisci, or — for the
+    tibia — fibula), and converts each from REFALIGN (femur-aligned mm, reference
+    size) to OSIM (meters, reference size) via
+    :func:`_nsm_recon_to_osim_single_surface` /
+    :func:`convert_nsm_recon_to_OSIM_`. No subject (true-size) scale is applied,
+    so every surface lands at reference size.
+
+    Place in the pipeline:
+        Stage 2 (per-bone processing) of the MRI/fitting pipeline. Runs after
+        :func:`align_knee_osim_fit_nsm` (which produces the ``*_mesh_nsm``
+        REFALIGN surfaces) and feeds the OSIM-space meshes to the
+        :mod:`nsosim.model_building` builders (articular surfaces, ligament
+        interpolation, wrap fitting, meniscus surfaces, fat pad).
 
     Args:
-        bone (str): The name of the bone (e.g., 'femur', 'tibia'). Used to access
-            the correct meshes from `dict_bones`.
-        dict_bones (dict): Dictionary containing the subject's NSM fitting results,
-            including `bone_mesh_nsm` and `cart_mesh_nsm` for the specified `bone`.
-        fem_ref_center (numpy.ndarray): The original centering vector of the reference
-            femur mesh. This is used by `convert_nsm_recon_to_OSIM_` for all bones
-            assuming a consistent reference frame was used.
-        bone_clusters (int, optional): Target number of points for resampling the
-            bone mesh after coordinate conversion. If None, no resampling. Defaults to 20_000.
-        cart_clusters (int, optional): Target number of points for resampling the
-            cartilage mesh after coordinate conversion. If None, no resampling. Defaults to None.
+        bone (str): Bone key ('femur', 'tibia', 'patella') into ``dict_bones``.
+        dict_bones (dict): Subject NSM fitting results; reads
+            ``dict_bones[bone]['subject']['*_mesh_nsm']`` (REFALIGN mm).
+        fem_ref_center (numpy.ndarray): 3-vector (mm), the reference femur
+            ``mean_orig`` — used for ALL bones so their REFALIGN spatial
+            relationship is preserved in OSIM.
+        bone_clusters (int, optional): ACVD target point count for the bone (and
+            fibula) surface. None = no resampling. Defaults to 20_000.
+        cart_clusters (int, optional): ACVD target for cartilage. None = no
+            resampling. Defaults to None.
+        men_clusters (int, optional): ACVD target for menisci. None = no
+            resampling. Defaults to None.
         seed (int or None, optional): Seed for all RNGs. Pinned here too because
             ``resample_surface`` (ACVD) is sensitive to upstream numerical noise
             and we want any determinism guarantee to hold from a single call.
             Defaults to 0. Pass ``None`` to opt out.
 
     Returns:
-        tuple: A tuple containing:
-            - bone_mesh_osim (pymskt.mesh.Mesh): The bone mesh with points in OSIM
-              coordinates, optionally resampled.
-            - cart_mesh_osim (pymskt.mesh.Mesh): The cartilage mesh with points in
-              OSIM coordinates, optionally resampled.
+        dict: ``{surface_name: pymskt.mesh.Mesh}`` in OSIM (meters, reference
+            size, OpenSim orientation). Keys: ``'bone'``, ``'cart'``, and — when
+            present in ``dict_bones`` — ``'med_men'``, ``'lat_men'``, ``'fibula'``.
     """
     if seed is not None:
         from ._determinism import set_global_seed

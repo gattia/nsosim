@@ -1,3 +1,13 @@
+"""Repoint a COMAK OpenSim model at subject-specific geometry and attachments.
+
+High-level helpers that take an already-loaded OpenSim model and rewrite its
+mesh-file references, wrap surfaces, ligament/muscle attachments, and joint
+defaults so the model uses subject-specific (or synthetic) geometry. All
+spatial inputs (attachment xyz, wrap parameters, patella position) are in OSIM
+space (meters, OpenSim body-local frames); the STL/OBJ paths handed to the
+repoint helpers are expected to point at meshes in that same space.
+"""
+
 import numpy as np
 
 from nsosim.osim_utils import (
@@ -145,29 +155,62 @@ def update_osim_model(
     dict_joints_coords_to_update=None,
 ):
     """
-    Updates an entire OpenSim model with new geometry and attachments.
+    Repoint a whole OpenSim model at new geometry, wrap surfaces, and attachments.
 
-    This function orchestrates several updates:
-    1.  Sets a new model name.
-    2.  Updates BodySet STL file paths for visualization (`update_comak_bodyset_stl`).
-    3.  Updates ContactGeometrySet STL file paths for simulation (`update_comak_contact_geometry_stl`).
-    4.  Updates wrap object properties (`update_wrap_objects`).
-    5.  Updates muscle attachment locations (`update_muscle_attachments`).
-    6.  Updates ligament attachment locations (`update_ligament_attachments`).
-    7.  Updates the default patella location (`update_patella_location`).
+    High-level orchestrator that mutates ``model`` in place by running, in order:
+    1.  ``validate_fitted_wrap_parameters`` on ``dict_wrap_objects``.
+    2.  ``update_body_geometry_meshfile`` — repoint body visualization geometry
+        ``mesh_file`` references (``dict_body_geometries_update``).
+    3.  ``update_contact_mesh_files`` — repoint Smith2018ContactMesh
+        ``mesh_file`` references (``dict_contact_mesh_files_update``).
+    4.  ``update_wrap_objects`` — write the fitted wrap surface parameters.
+    5.  ``update_model_attachments_slacks`` — write ligament/muscle attachment
+        locations and recompute slack lengths.
+    6.  ``update_joint_default_values`` — set the patella (``pf_r``) default
+        position from ``mean_patella``, and optionally other joint coords.
+    7.  Optionally scale ligament stiffness (``dict_ligament_stiffness_update``).
+
+    Place in the pipeline:
+        Final geometry-assembly step of the MRI-fitting pipeline (Stage 5,
+        "OpenSim Model Update"). It is called once all subject-specific meshes,
+        wrap parameters, and attachment locations have been produced; the
+        synthetic-decode pipeline can reuse it the same way once it has meshes
+        and parameters in OSIM space. It delegates to the ``update_*`` helpers in
+        ``nsosim.osim_utils`` plus ``update_wrap_objects`` above. It does not
+        load or save the ``.osim`` file — the caller owns model I/O.
+
+    All spatial inputs are in OSIM space (meters, OpenSim body-local frames):
+    wrap parameters (translation, dimensions, etc.), attachment ``xyz`` values,
+    and ``mean_patella``. The mesh-file paths point at STL/OBJ geometry in that
+    same space (meters, reference size for recon meshes).
 
     Args:
-        path_model (str): Path to the original OpenSim model (.osim) file.
-        list_results (list): List of wrap surface objects for `update_wrap_objects`.
-        muscle_df (pandas.DataFrame): DataFrame for `update_muscle_attachments`.
-        ligament_df (pandas.DataFrame): DataFrame for `update_ligament_attachments`.
-        fem_interpolated_pts_osim (numpy.ndarray): Femur points for attachments.
-        tib_interpolated_pts_osim (numpy.ndarray): Tibia points for attachments.
-        pat_interpolated_pts_osim (numpy.ndarray): Patella points for attachments.
-        mean_patella (list or numpy.ndarray): New patella default position.
-        tib_mesh_osim (pymskt.mesh.Mesh): Tibia mesh for ligament adjustments.
-        new_model_name (str, optional): Name for the updated model. Defaults to a
-            timestamped name.
+        model (osim.Model): Loaded OpenSim model, mutated in place.
+        dict_wrap_objects (dict): Nested fitted wrap parameters
+            (bone → body → wrap_type → wrap_name → ``wrap_surface``), in OSIM
+            meters. Validated then applied by ``update_wrap_objects``.
+        dict_lig_mus_attach (dict or str): Ligament/muscle attachment dict (or
+            path to its JSON). Attachment xyz under ``lig_musc_xyz_key`` are in
+            OSIM meters, expressed in their parent body-local frames.
+        tibia_mesh_osim (pymskt.mesh.Mesh or str): Tibia mesh in OSIM space
+            (meters); used to derive the tibia size vector for attachment shifts.
+        mean_patella (list or numpy.ndarray): Patella default position
+            (``pf_r`` coords 3–5) in OSIM meters.
+        lig_musc_xyz_key (str): Key selecting which xyz field in the attachment
+            dict to write (default ``"xyz_mesh_updated"``).
+        lig_musc_normal_vector_shift (float): Absolute shift magnitude (meters)
+            along surface normals for attachment points that request it.
+        dict_body_geometries_update (dict): Body-geometry repoint map passed to
+            ``update_body_geometry_meshfile`` (defaults to
+            ``DICT_BODY_GEOMETRIES_UPDATE``).
+        dict_contact_mesh_files_update (dict): Contact-mesh repoint map passed to
+            ``update_contact_mesh_files`` (defaults to
+            ``DICT_CONTACT_MESHFILES_UPDATE``).
+        dict_ligament_stiffness_update (dict or None): Optional per-ligament
+            ``{default_stiffness, update_factor}`` map; when given, sets each
+            ligament's linear stiffness to ``default_stiffness * update_factor``.
+        dict_joints_coords_to_update (dict or None): Optional extra joint default
+            values to set, in addition to the patella update.
 
     """
 

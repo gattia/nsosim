@@ -43,8 +43,16 @@ def build_scale_set(
 ) -> Tuple[osim.ScaleSet, float]:
     """Construct a ScaleSet per mode. Returns (scale_set, s_wa).
 
-    s_wa is the isotropic weighted-average knee factor — used downstream by
-    bake_knee_geometry to scale the knee STLs on disk.
+    All scale factors here are dimensionless ratios (mm/mm). ``s_wa`` is the
+    isotropic weighted-average knee factor:
+
+        s_wa = (ab_factors['femur_r'][2] + ab_factors['tibia_r'][2]) / 2
+
+    i.e. the mean of the femur and tibia LONG-AXIS factors (index 2 =
+    ``LONG_AXIS_INDEX``, the OSIM long/superior-inferior axis). It is a single
+    isotropic, dimensionless ratio (1.0 = no change). It is returned so
+    ``bake_knee_geometry`` can multiply the knee STL vertices (meters) on disk
+    by it, and so ``scale_comak_model`` can record it in the report.
 
     Modes
     -----

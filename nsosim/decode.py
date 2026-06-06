@@ -39,18 +39,33 @@ def decode_latent_to_osim(
 ):
     """Decode a latent vector to OSIM-space meshes for a single bone.
 
+    This is the synthetic-decode entry point (latent in → OpenSim meshes out),
+    the inverse of the MRI-fitting pipeline.
+
     Steps:
-        1. Decode latent via ``NSM.mesh.create_mesh`` → canonical-space meshes
-        2. Convert each mesh to OSIM coordinates via ``convert_nsm_recon_to_OSIM``
-        3. Optionally resample each mesh
+        1. Decode latent via ``NSM.mesh.create_mesh`` → meshes in NSMcanon space
+           (NSM training-normalized box ~[-1, 1], dimensionless, per-bone
+           canonical scale).
+        2. Convert each mesh to OSIM coordinates via the non-underscore
+           ``convert_nsm_recon_to_OSIM``. That converter internally chains
+           ``undo_transform`` (NSMcanon → REFALIGN, mm, reference size) then the
+           underscore converter (REFALIGN → OSIM: +fixed ref-center, mm→m,
+           axis-swap). It accepts a subject scale and center term; this call
+           passes ``scale=1`` and ``center=[0, 0, 0]``, so the output stays at
+           reference size and the meshes land in OSIM space (meters, reference
+           size, rotated).
+        3. Optionally resample each mesh (does not change coordinate space).
 
     Args:
-        latent_vector (numpy.ndarray): 1-D latent vector (e.g. shape ``(1024,)``).
+        latent_vector (numpy.ndarray): 1-D latent vector (e.g. shape
+            ``(1024,)``) in NSMcanon space (dimensionless).
         model (torch.nn.Module): NSM decoder model, already on GPU.
         linear_transform (numpy.ndarray): 4×4 similarity transform mapping
-            femur-aligned space → this bone's NSM canonical space.
+            REFALIGN (femur-aligned, mm, reference size) → this bone's NSMcanon
+            space (dimensionless). Embeds centering + uniform scale + rotation.
         fem_ref_center (numpy.ndarray): Femur reference center (``mean_orig``
-            from the reference femur alignment JSON). Used for all bones.
+            from the reference femur alignment JSON), in NSM-oriented mm. Added
+            back during the REFALIGN → OSIM step. Used for all bones.
         model_config (dict): Model configuration. Must contain
             ``objects_per_decoder`` (int) and ideally ``mesh_names`` (list).
         n_pts_per_axis (int): Marching-cubes grid resolution per axis.
@@ -61,7 +76,9 @@ def decode_latent_to_osim(
             deterministic output. Pass ``None`` to opt out.
 
     Returns:
-        dict: ``{'bone': Mesh, 'cart': Mesh, ...}`` — keys from ``mesh_names``.
+        dict: ``{'bone': Mesh, 'cart': Mesh, ...}`` — pymskt Meshes in OSIM
+        space (meters, reference size, OpenSim-rotated). Keys from
+        ``mesh_names``.
     """
     if seed is not None:
         from nsosim._determinism import set_global_seed
@@ -125,21 +142,37 @@ def decode_joint_from_descriptors(
 ):
     """Decode a full joint from per-bone latent vectors and pose transforms.
 
-    Recovers per-bone transforms from ``T_fem`` and relative transforms, then
-    calls ``decode_latent_to_osim`` for each bone.
+    Recovers per-bone alignment transforms from ``T_fem`` and the relative
+    transforms (T_rel), then calls ``decode_latent_to_osim`` for each bone and
+    returns the assembled joint.
+
+    Place in the pipeline:
+        Top of the synthetic-decode pipeline (the inverse of MRI fitting). It is
+        called when generating a joint from descriptors (e.g. synthetic joints,
+        shape-mode visualization, latent interpolation) rather than from a
+        subject segmentation. It calls ``recover_bone_transform`` to turn the
+        relative transforms into per-bone transforms, then ``decode_latent_to_osim``
+        once per bone. The per-bone decode handles NSMcanon → OSIM conversion.
 
     Args:
-        femur_latent (numpy.ndarray): Femur latent vector.
-        tibia_latent (numpy.ndarray): Tibia latent vector.
-        patella_latent (numpy.ndarray): Patella latent vector.
-        T_fem (numpy.ndarray): 4×4 femur linear_transform.
+        femur_latent (numpy.ndarray): Femur latent vector (NSMcanon,
+            dimensionless).
+        tibia_latent (numpy.ndarray): Tibia latent vector (NSMcanon,
+            dimensionless).
+        patella_latent (numpy.ndarray): Patella latent vector (NSMcanon,
+            dimensionless).
+        T_fem (numpy.ndarray): 4×4 femur linear_transform (REFALIGN mm →
+            femur NSMcanon).
         T_rel_tib (numpy.ndarray): 4×4 relative tibia transform
-            (from ``compute_T_rel(T_fem, T_tib)``).
+            (from ``compute_T_rel(T_fem, T_tib)``). Encodes the tibia's pose
+            and relative size in canonical space.
         T_rel_pat (numpy.ndarray): 4×4 relative patella transform
-            (from ``compute_T_rel(T_fem, T_pat)``).
+            (from ``compute_T_rel(T_fem, T_pat)``). Encodes the patella's pose
+            and relative size in canonical space.
         models (dict): ``{'femur': model, 'tibia': model, 'patella': model}``.
         model_configs (dict): ``{'femur': config, 'tibia': config, 'patella': config}``.
-        fem_ref_center (numpy.ndarray): Femur reference center.
+        fem_ref_center (numpy.ndarray): Femur reference center (``mean_orig``,
+            NSM-oriented mm). Shared by all bones during REFALIGN → OSIM.
         n_pts_per_axis (int): Marching-cubes grid resolution per axis.
         clusters (dict or None): Per-bone resampling targets, e.g.
             ``{'femur': {'bone': 20000}, 'tibia': {'bone': 20000}}``.
@@ -149,7 +182,10 @@ def decode_joint_from_descriptors(
             Defaults to 0. Pass ``None`` to opt out.
 
     Returns:
-        dict: ``{'femur': {'bone': Mesh, ...}, 'tibia': {...}, 'patella': {...}}``.
+        dict: ``{'femur': {'bone': Mesh, ...}, 'tibia': {...}, 'patella': {...}}``
+        — nested dict of pymskt Meshes in OSIM space (meters, reference size,
+        OpenSim-rotated). Inter-bone spatial relationships (joint configuration)
+        are preserved because all bones share ``fem_ref_center``.
     """
     if seed is not None:
         from nsosim._determinism import set_global_seed

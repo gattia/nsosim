@@ -40,6 +40,18 @@ def bake_knee_geometry(
     has its STL pre-scaled too — the cartilage contact STLs are shared with the
     visual meshes; the meniscus superior/inferior surfaces are contact-only.
 
+    `scale` is the isotropic, dimensionless ``s_wa`` ratio from
+    ``build_scale_set``. STL vertices are in meters (OSIM space). Each vertex is
+    multiplied by `scale` about the body-local origin (0, 0, 0) — i.e.
+    ``v_out = v_in * scale``. For the knee subbodies the body-local origin is the
+    knee joint center (where knee_r / pf_r sit), NOT the bone centroid: the
+    geometry sits offset from the origin (measured centroid-to-origin distances:
+    femur 24.8 mm, tibia 54 mm, patella ~1 mm), so the scaled STL bounding box
+    shifts slightly toward the origin. The JAM contact loader reads raw vertices
+    and ignores XML `scale_factors`, which is why the scale must be baked into
+    the STL on disk rather than left on `scale_factors` (the reset to [1, 1, 1]
+    avoids double-scaling and makes the on-disk STL self-describing).
+
     Each unique STL file is scaled exactly once (a file referenced by both a
     contact mesh and a visual mesh is not double-scaled). The model is saved
     back to `scaled_osim`. Returns {stl_filename: stl_path} for files written.

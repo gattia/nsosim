@@ -160,11 +160,26 @@ def scale_comak_model(
 ) -> Path:
     """Produce a scaled COMAK model from a base + AB output.
 
+    Place in the pipeline (Stage X):
+        This is the Stage-X orchestrator. It consumes AB's
+        ``match_markers_and_physics.osim`` (``ab_scaled_osim`` — source of the
+        per-body scale factors in dimensionless ratios and the per-body
+        physics-tuned masses in kg) plus a COMAK base model (``base_osim`` —
+        carries the subject-specific knee geometry, JAM contact meshes,
+        ligaments, wraps). It produces a scaled COMAK ``.osim`` at
+        ``output_osim`` with its meshes in ``output_geometry_dir``, plus a JSON
+        report. Everything operates in OSIM space: STL vertices and frame
+        translations are in meters, masses in kg, inertia in kg·m², and all
+        scale factors are dimensionless ratios (1.0 = no change).
+
     Pipeline:
       1. Read AB per-body scale factors.
       2. Build a ScaleSet according to `mode`.
-      3. ScaleTool.run() → output_osim (geometry-only scaling; body masses
-         pass through ScaleTool's preserve-mass-distribution path).
+      3. ScaleTool.run() → output_osim (geometry-only scaling in meters via the
+         dimensionless ScaleSet; the knee weld translation is scaled per-axis by
+         the parent bone's anisotropic AB factors, not by s_wa). Body masses
+         (kg) pass through unchanged on ScaleTool's preserve-mass-distribution
+         path; inertia (kg·m²) is scaled geometrically by scale².
       4. Two-pass per-body mass transfer (the post-2026-05-31 fix):
            Pass 1: target each AB-characterised body to AB's per-body mass;
                    target the rest to base_mass × global_ratio.
@@ -174,8 +189,12 @@ def scale_comak_model(
          21 % BW, etc.) while keeping the COMAK extras (menisci, fatpad,
          knee subbodies) from inflating the total.
       5. Copy base Geometry/ → output_geometry_dir/.
-      6. Bake the knee-body geometry into its STLs (pymskt vertex scale,
-         visual scale_factors reset to 1).
+      6. Bake the knee-body geometry into its STLs: multiply each knee STL's
+         vertices (meters) by the isotropic, dimensionless ``s_wa`` about the
+         body-local origin (= knee joint center, not the bone centroid), then
+         reset the visual scale_factors to [1, 1, 1]. This is mandatory for the
+         JAM contact meshes (the loader ignores XML scale_factors) and makes the
+         on-disk STL self-describing.
       7. Swap MarkerSet for AB's static-trial-placed markers.
       8. Apply permanent model fix-ups (ITB1 reparent).
       9. Write the JSON report (always — see below).
@@ -198,11 +217,13 @@ def scale_comak_model(
         exactly even though COMAK has bodies that AB doesn't model (which
         otherwise causes a ~18% overcount).
 
-    The report is always written so the WA scale and per-body factors are
-    recoverable from disk — the baked STLs and the model's reset
-    ``scale_factors = [1, 1, 1]`` would otherwise hide how much the knee was
-    scaled. If ``report_json`` is None, it defaults to
-    ``output_osim.with_suffix(".scaling.json")``. Returns the report path.
+    The report is always written so the scaling is recoverable from disk — the
+    baked STLs and the model's reset ``scale_factors = [1, 1, 1]`` would
+    otherwise hide how much the knee was scaled. The JSON records the isotropic
+    ``s_wa`` ratio, the full per-body scale set (dimensionless ratios), and the
+    per-body mass audit (base/provisional/final masses in kg). If ``report_json``
+    is None, it defaults to ``output_osim.with_suffix(".scaling.json")``.
+    Returns the report path.
     """
     base_osim = Path(base_osim)
     ab_scaled_osim = Path(ab_scaled_osim)

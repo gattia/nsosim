@@ -30,7 +30,17 @@ def update_ligament_stiffness(model, ligament, linear_stiffness):
 
 def update_body_geometry_meshfile(model, dict_body_geometries_update):
     """
-    Updates the mesh file paths for body visualization geometry in an OpenSim model.
+    Repoints each body's attached visualization geometry to a new mesh file.
+
+    For every body in the input dict, looks up its ``attached_geometry``
+    entries and, for any whose name matches a key in the body's sub-dict, calls
+    OpenSim ``set_mesh_file`` to point that geometry at the supplied path. This
+    only changes the ``mesh_file`` reference (a path/filename string on disk); it
+    does not modify ``scale_factors`` or any geometry transform, so the model's
+    body-local frame (meters, OpenSim orientation) is untouched. The STL files
+    the paths point at are expected to be in OSIM / body-local space (meters).
+    Geometry names present on the body but absent from the dict are left
+    unchanged; names in the dict but absent from the body are logged and skipped.
 
     Args:
         model: osim.Model
@@ -61,7 +71,20 @@ def update_body_geometry_meshfile(model, dict_body_geometries_update):
 
 def update_contact_mesh_files(model, dict_contact_mesh_files_update):
     """
-    Updates the mesh file paths for contact geometry in an OpenSim model.
+    Repoints each Smith2018ContactMesh to a new mesh file (and optional back file).
+
+    For every contact-geometry name in the input dict, looks up the matching
+    ``Smith2018ContactMesh`` in the model's ContactGeometrySet and calls
+    OpenSim ``set_mesh_file`` (and ``set_mesh_back_file`` when provided) to point
+    it at the supplied path(s). This only changes the ``mesh_file`` /
+    ``mesh_back_file`` references (path/filename strings on disk); it does not
+    modify ``scale_factors`` or any contact-mesh transform, so the body-local
+    contact frame (meters, OpenSim orientation) is untouched. The STL/OBJ files
+    the paths point at are expected to be in OSIM / body-local space (meters).
+    If a name is not found, registered fallback aliases (e.g.
+    ``meniscus_medial_superior`` ↔ ``meniscus_med_sup``) are tried. Any name that
+    still cannot be resolved is recorded; if one or more updates fail the
+    function logs a summary and raises ``RuntimeError``.
 
     Args:
         model: osim.Model

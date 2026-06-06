@@ -7,6 +7,23 @@ the same code here.
 
 Step functions are pure (no file I/O) — they take data in and return results.
 The orchestrator (build_joint_model) handles all saving.
+
+Coordinate space convention for this module
+--------------------------------------------
+Every mesh, point array, and attachment coordinate handled here is in **OSIM
+space**: the OpenSim body-local frame produced by ``nsm_recon_to_osim()``
+(via ``convert_nsm_recon_to_OSIM_``: add the fixed reference center, mm→m,
+axis-swap). Units are **metres** and the scale identity is **reference size,
+rotated** — i.e. the smith2019 reference bone's size, because the subject mesh
+was similarity-registered onto that fixed reference (REFALIGN) before NSM
+reconstruction, dividing the subject's true physical size out. For the knee
+sub-bodies the body-local origin is the knee joint center, so OSIM space and the
+body-local STL-attachment frame coincide for the recon meshes.
+
+Consequently the articular-surface, ligament-interpolation, wrap-fitting,
+meniscus, and fat-pad builders here all operate in OSIM metres at reference
+size, and any scale baked into the NSM recon is inherited by everything they
+build. Individual functions restate this where it matters.
 """
 
 import json
@@ -169,6 +186,16 @@ def interpolate_bone_ligaments(
     Source: comak_1_nsm_fitting.py lines 408–449 (femur), 541–582 (tibia),
     825–856 (patella).
 
+    Coordinate space
+    ----------------
+    The labeled reference mesh is loaded from ``labeled_mesh_path``, but the
+    function returns it warped into **OSIM space** (metres, reference size,
+    rotated) — ``interp_ref_to_subject_to_osim`` produces OSIM-space output, so
+    both the returned mesh points and the warped ligament attachment positions
+    are OSIM metres. The attachment ``xyz_mesh`` reference seeds that are
+    snapped to vertices are likewise read in OSIM metres (the ``d * 1000``
+    snap-distance reporting converts m→mm for the warning).
+
     Parameters
     ----------
     bone_name : str
@@ -177,11 +204,13 @@ def interpolate_bone_ligaments(
     labeled_mesh_path : str
         Path to the labeled bone VTK file with wrap surface classifications.
     dict_lig_musc_attach_params : dict
-        Ligament/muscle attachment parameters dict. Not modified in-place.
+        Ligament/muscle attachment parameters dict. Attachment ``xyz_mesh``
+        seeds are in OSIM metres. Not modified in-place.
     dict_bones : dict
         dict_bones-compatible structure with recon_dict + recon_latent per bone.
     fem_ref_center : np.ndarray
-        Femur reference center from ref_femur_alignment.json['mean_orig'].
+        Femur reference center from ref_femur_alignment.json['mean_orig'] (the
+        reference femur centroid in NSM-oriented mm, used by the OSIM conversion).
     folder_ref_recons : str
         Path to folder containing reference reconstruction data.
     surface_idx : int
@@ -192,16 +221,18 @@ def interpolate_bone_ligaments(
         from the loaded labeled mesh).
     snap_warn_mm : float
         Warn when a bone attachment's reference ``xyz_mesh`` is farther than
-        this from its nearest labeled-bone-mesh vertex.
+        this (in mm) from its nearest labeled-bone-mesh vertex.
 
     Returns
     -------
     labeled_mesh : Mesh
-        Labeled mesh with updated (warped) point coordinates.
+        Labeled mesh with updated (warped) point coordinates, in OSIM space
+        (metres, reference size).
     labeled_mesh_points : np.ndarray
-        Copy of the updated labeled mesh point coordinates.
+        Copy of the updated labeled mesh point coordinates (OSIM metres).
     lig_xyz_points_updated : np.ndarray
-        Warped ligament attachment point coordinates (n_lig_pts, 3).
+        Warped ligament attachment point coordinates (n_lig_pts, 3), in OSIM
+        metres.
     list_lig_name_pt_idx : list of [str, int]
         [force_name, point_index] pairs identifying which ligament points were
         updated.
@@ -339,14 +370,26 @@ def fit_bone_wrap_surfaces(
     and cylinders using SDF-based optimization.
     For patella: uses PatellaFitter (specialized ellipsoid fitting).
 
+    Coordinate space
+    ----------------
+    Operates entirely in **OSIM space** (metres, reference size, rotated): the
+    labeled mesh points and the SDF arrays come from the OSIM-space subject
+    bone, so the fitted ``wrap_surface`` parameters (``translation``,
+    ``radius``, ``length``, ``dimensions``) are returned in OSIM metres in the
+    body-local frame that wrap surface attaches to. For the patella the input
+    mesh is patella-centered (mean position already subtracted), so the patella
+    wrap parameters are expressed in the centered patella body-local frame.
+
     Parameters
     ----------
     bone_name : str
         'femur', 'tibia', or 'patella'.
     labeled_mesh : Mesh
-        Labeled bone mesh with wrap surface classification arrays.
+        Labeled bone mesh with wrap surface classification arrays, in OSIM
+        space (metres, reference size).
     labeled_mesh_points : np.ndarray
-        Point coordinates of the labeled mesh (possibly patella-centered).
+        Point coordinates of the labeled mesh in OSIM metres (already
+        patella-centered for the patella).
     wrap_surface_spec : dict or None
         Wrap surface specification from DEFAULT_SMITH2019_BONES[bone_name]['wrap_surfaces'].
         If None, uses DEFAULT_SMITH2019_BONES[bone_name]['wrap_surfaces'].
@@ -376,7 +419,9 @@ def fit_bone_wrap_surfaces(
     -------
     dict
         Fitted wrap parameters dict for this bone, structured as:
-        {body_name: {surface_type: {wrap_name: wrap_surface}}}
+        {body_name: {surface_type: {wrap_name: wrap_surface}}}. Each
+        ``wrap_surface``'s geometric fields (translation, radius, length,
+        dimensions) are in OSIM metres in the corresponding body-local frame.
     """
     if fitter_configs is None:
         fitter_configs = DEFAULT_FITTING_CONFIG
@@ -543,15 +588,25 @@ def interpolate_meniscus_ligaments(
     lateral horns set manually from the labeling workflow are at exact
     vertices, snap = 0).
 
+    Coordinate space
+    ----------------
+    The per-side reference meniscus meshes (``..._osim_space.vtk``) are read in
+    **OSIM space** (metres, reference size, rotated), and
+    ``interp_ref_to_subject_to_osim`` returns the warped points in OSIM space
+    too. The attachment ``xyz_mesh`` seeds are read and the written
+    ``xyz_mesh_updated`` values are stored in OSIM metres. Snap distances are
+    converted m→mm only for the warning print.
+
     Parameters
     ----------
     dict_lig_musc_attach_params : dict
-        Ligament/muscle attachment parameters. Modified in-place with
-        ``xyz_mesh_updated``.
+        Ligament/muscle attachment parameters. ``xyz_mesh`` seeds are in OSIM
+        metres. Modified in-place: each matched attachment gets an
+        ``xyz_mesh_updated`` entry holding the warped position in OSIM metres.
     dict_bones : dict
         dict_bones structure (needs femur entry with recon_dict + recon_latent).
     fem_ref_center : np.ndarray
-        Femur reference center.
+        Femur reference center from ref_femur_alignment.json['mean_orig'].
     folder_ref_recons : str
         Path to reference reconstruction data.
     interpolate_kwargs : dict, optional
@@ -560,7 +615,7 @@ def interpolate_meniscus_ligaments(
         from the loaded reference mesh).
     snap_warn_mm : float
         Warn when an attachment's reference ``xyz_mesh`` is farther than this
-        from the nearest reference-mesh vertex.
+        (in mm) from the nearest reference-mesh vertex.
     """
     from scipy.spatial import cKDTree
 
@@ -672,27 +727,42 @@ def update_coronary_ligament_tibia_attachments(
 def center_patella_meshes(pat_mesh, pat_articular, pat_cart_mesh=None):
     """Center patella meshes by subtracting the bone mesh centroid.
 
+    Subtracts ``mean_patella`` (the mean of the bone mesh point coordinates)
+    from the bone, articular, and (optional) cartilage meshes so the patella
+    STL is centered at its body-local origin. The same offset is later written
+    as the patellofemoral joint coordinate offset.
+
     Source: comak_1_nsm_fitting.py lines 794–822.
+
+    Coordinate space
+    ----------------
+    Inputs are in **OSIM space** (metres, reference size, rotated). Outputs are
+    in the centered patella body-local frame (OSIM metres with the patella
+    centroid moved to the origin). ``mean_patella`` is the subtracted
+    translation, in OSIM metres at reference size.
 
     Parameters
     ----------
     pat_mesh : Mesh
-        Patella bone mesh in OSIM space.
+        Patella bone mesh in OSIM space (metres, reference size).
     pat_articular : Mesh
-        Patella articular surface mesh.
+        Patella articular surface mesh in OSIM space.
     pat_cart_mesh : Mesh or None
-        Patella cartilage mesh (optional).
+        Patella cartilage mesh in OSIM space (optional).
 
     Returns
     -------
     pat_mesh_centered : Mesh
-        Centered patella bone mesh.
+        Patella bone mesh with ``mean_patella`` subtracted (centered body-local
+        frame, OSIM metres).
     pat_articular_centered : Mesh
-        Centered patella articular surface mesh.
+        Patella articular surface mesh with ``mean_patella`` subtracted.
     pat_cart_centered : Mesh or None
-        Centered patella cartilage mesh (None if input was None).
+        Patella cartilage mesh with ``mean_patella`` subtracted (None if input
+        was None).
     mean_patella : np.ndarray
-        The centroid that was subtracted (for saving as offset).
+        The centroid that was subtracted (OSIM metres, reference size); saved as
+        the patellofemoral joint coordinate offset.
     """
     if not isinstance(pat_articular, Mesh):
         pat_articular = Mesh(pat_articular)
@@ -747,9 +817,23 @@ DEFAULT_GEOMETRY_FILES = {
 
 
 def save_geometry_files(folder_save_bones, path_save_model, geometry_dict=None):
-    """Copy generated geometry files to the OpenSim model's Geometry/ folder.
+    """Copy the newly generated geometry files into the OpenSim model's Geometry/ folder.
+
+    Copies each per-bone mesh file (e.g. ``femur_nsm_recon_osim.stl``,
+    ``tibia_articular_surface_osim.stl``, ``med_men_osim.stl``) from
+    ``folder_save_bones/<bone>/`` into ``<path_save_model>/Geometry/``,
+    creating the Geometry directory if needed. These are *new* filenames that
+    sit alongside the template model's reference geometry; this does not
+    overwrite the reference STLs (e.g. ``smith2019-R-femur-bone.stl``), which
+    have different names.
 
     Source: comak_1_nsm_fitting.py lines 934–964.
+
+    Coordinate space
+    ----------------
+    Pure file copy — does not transform geometry. The copied STL/OBJ meshes are
+    in **OSIM space** (metres, reference size) as produced upstream; the patella
+    STLs copied here are the centered (body-local) variants.
 
     Parameters
     ----------
@@ -758,7 +842,8 @@ def save_geometry_files(folder_save_bones, path_save_model, geometry_dict=None):
     path_save_model : str
         Path to the OpenSim model directory (Geometry/ subfolder will be created).
     geometry_dict : dict or None
-        {bone_name: [filename, ...]} mapping. If None, uses DEFAULT_GEOMETRY_FILES.
+        {bone_name: [filename, ...]} mapping of files to copy. If None, uses
+        DEFAULT_GEOMETRY_FILES.
     """
     if geometry_dict is None:
         geometry_dict = DEFAULT_GEOMETRY_FILES
@@ -794,20 +879,44 @@ def finalize_osim_model(
 ):
     """Update OpenSim model with subject-specific data and save.
 
+    Writes the fitted wrap surfaces, interpolated ligament/muscle attachments,
+    patella centering offset, prefemoral-fat-pad contact mesh, and fat-pad
+    contact force into the loaded ``osim_model``, then names it and prints it to
+    ``<path_save>/<model_name>.osim``.
+
+    Place in the pipeline
+    ---------------------
+    Final assembly step of the MRI→model chain. Called by ``build_joint_model``
+    after all per-bone geometry has been built and saved; it is the only step
+    that mutates the OpenSim ``Model`` object. It delegates the bulk of the XML
+    editing to ``update_osim_model`` and the fat-pad contact wiring to
+    ``create_contact_mesh`` / ``create_articular_contact_force``.
+
     Source: comak_1_nsm_fitting.py lines 966–1051.
+
+    Coordinate space
+    ----------------
+    All geometric inputs are in **OSIM space** (metres, reference size,
+    rotated): the wrap parameters, the ``xyz_mesh_updated`` attachment
+    coordinates, the tibia mesh used for coronary/meniscal projection, and
+    ``mean_patella`` (written as the patellofemoral joint coordinate offset).
+    Proximity / shift lengths below are in metres.
 
     Parameters
     ----------
     osim_model : osim.Model
         Loaded OpenSim model.
     fitted_wrap_parameters : dict
-        Fitted wrap parameters for all bones.
+        Fitted wrap parameters for all bones (geometry in OSIM metres,
+        body-local).
     dict_lig_musc_attach_params : dict
-        Ligament/muscle attachment parameters with 'xyz_mesh_updated' entries.
+        Ligament/muscle attachment parameters with 'xyz_mesh_updated' entries
+        in OSIM metres.
     tib_mesh_osim : Mesh
-        Subject tibia mesh in OSIM space.
+        Subject tibia mesh in OSIM space (metres, reference size).
     mean_patella : np.ndarray
-        Patella centroid offset.
+        Patella centroid offset in OSIM metres (written as the patellofemoral
+        joint coordinate offset).
     model_name : str
         Name for the model.
     path_save : str
@@ -960,14 +1069,44 @@ def build_joint_model(
     surfaces, creates meniscus surfaces and fat pad, and assembles the final
     OpenSim model.
 
+    Place in the pipeline
+    ---------------------
+    Shared assembler used by BOTH the MRI-fitting pipeline and the
+    synthetic-decode pipeline — the last stage of the MRI→model (or
+    latent→model) chain. Its caller supplies ``bone_meshes`` already in OSIM
+    space (the output of ``nsm_recon_to_osim()`` in the fitting path, or of
+    the decode path); this function does not do the NSM→OSIM conversion itself.
+    It calls the per-bone step functions in this module
+    (``create_articular_surfaces``, ``interpolate_bone_ligaments``,
+    ``fit_bone_wrap_surfaces``, ``create_meniscus_articulating_surface``,
+    ``interpolate_meniscus_ligaments``, ``create_prefemoral_fatpad_noboolean``,
+    ``center_patella_meshes``), ``copytree``s the base model directory, writes
+    the recon/derived STLs via ``save_geometry_files``, and finalizes the
+    ``.osim`` via ``finalize_osim_model``.
+
+    Coordinate space
+    ----------------
+    Every mesh in ``bone_meshes`` is in **OSIM space** (metres, reference size,
+    rotated). All derived geometry (articular surfaces, wrap surfaces, meniscus
+    surfaces, fat pad) is produced and saved in OSIM metres. The patella is the
+    one exception in handling: this function consumes the non-centered patella
+    meshes, saves them as ``*_original_position.vtk`` (OSIM space *before*
+    centering), and does its own centering via ``center_patella_meshes`` — the
+    centered patella STLs/wraps live in the centered patella body-local frame
+    and ``mean_patella`` is recorded as the patellofemoral joint offset
+    (``patella_offset.json``).
+
     Parameters
     ----------
     bone_meshes : dict
-        OSIM-space meshes::
+        OSIM-space meshes (metres, reference size)::
 
             {'femur': {'bone': Mesh, 'cart': Mesh, 'med_men': Mesh, 'lat_men': Mesh},
              'tibia': {'bone': Mesh, 'cart': Mesh},
              'patella': {'bone': Mesh, 'cart': Mesh}}
+
+        Patella entries are the non-centered ("original position") meshes;
+        centering is performed internally.
 
     dict_bones : dict
         dict_bones-compatible structure with recon_dict + recon_latent per bone.
@@ -979,9 +1118,13 @@ def build_joint_model(
              'lig_attach_params_path': str}  # (unused here, params passed directly)
 
     dict_lig_musc_attach_params : dict
-        Ligament/muscle attachment parameters (will be modified in-place).
+        Ligament/muscle attachment parameters (will be modified in-place;
+        ``xyz_mesh`` seeds and the ``xyz_mesh_updated`` results are in OSIM
+        metres).
     fem_ref_center : np.ndarray
-        Femur reference center from ref_femur_alignment.json['mean_orig'].
+        Femur reference center from ref_femur_alignment.json['mean_orig'] (the
+        reference femur centroid in NSM-oriented mm, used by the OSIM conversion
+        inside the interpolation steps).
     save_dir : str
         Root directory for saving per-bone intermediate outputs.
     model_name : str
