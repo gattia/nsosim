@@ -143,3 +143,7 @@ untracked/
 
 # Stale tempfile leak (Python tempfile.mkstemp pattern; deleted 2026-05-23)
 tests/fixtures/osim_models/tmp*.osim
+
+# mkdocs build output + throwaway docs venv
+/site/
+/.venv-docs/

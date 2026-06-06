@@ -1,4 +1,4 @@
-.PHONY: build install requirements requirements-mamba requirements-conda install-dev dev dev-mamba dev-conda docs test lint autoformat clean coverage
+.PHONY: build install requirements requirements-mamba requirements-conda install-dev dev dev-mamba dev-conda docs docs-install docs-serve test lint autoformat clean coverage
 
 requirements:
 	python -m pip install -r requirements.txt
@@ -27,10 +27,17 @@ dev-mamba:
 dev-conda:
 	conda install --file requirements-dev.txt
 
-# docs:
-# 	pdoc --output-dir docs/ --html --force NSM
-# 	mv docs/NSM/* docs/
-# 	rm -rf docs/NSM
+docs-install:
+	python -m pip install -r requirements-docs.txt
+
+# Build the static site with broken-reference checking (the staleness gate).
+# Uses griffe static analysis — does NOT import nsosim, so opensim/torch/NSM
+# are not required to build the docs.
+docs:
+	mkdocs build --strict
+
+docs-serve:
+	mkdocs serve
 
 
 test:

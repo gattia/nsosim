@@ -3,9 +3,9 @@
 Also home to the coordinate-conversion functions (``convert_nsm_recon_to_OSIM[_]``,
 ``convert_OSIM_to_nsm[_]``, ``apply_transform``/``undo_transform``). The four coordinate
 spaces (MRI / REFALIGN / NSMcanon / OSIM), the full transform chain, and how Stage X body
-scaling (``s_wa``) meets the knee build are documented in
-``nsosim/docs/SCALING_AND_SPACES.md``; pipeline-wiring deviations live in
-``nsosim/docs/SCALING_DEVIATIONS.md``.
+scaling (``s_wa``) meets the knee build are documented in ``docs/coordinate-systems.md``;
+pipeline-wiring deviations live in ``docs/deviations.md`` (rendered as the mkdocs site —
+see ``mkdocs.yml`` / ``make docs``).
 """
 
 import json

@@ -1,0 +1,74 @@
+site_name: nsosim
+site_description: Personalized biomechanical knee models — NSM fitting + OpenSim/COMAK integration
+docs_dir: docs
+use_directory_urls: true
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - toc.follow
+  palette:
+    - scheme: default
+      primary: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+plugins:
+  - search
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python:
+          # Static analysis via griffe — nsosim is NOT imported, so building the
+          # docs does NOT require opensim/torch/NSM. paths=[.] lets griffe find
+          # the nsosim/ source from the repo root.
+          paths: ["."]
+          options:
+            docstring_style: google
+            docstring_section_style: table
+            show_root_heading: true
+            show_root_full_path: false
+            show_source: true
+            show_signature_annotations: true
+            separate_signature: true
+            members_order: source
+            filters: ["!^_"]
+            merge_init_into_class: true
+            show_if_no_docstring: false
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Coordinate systems & pipeline: coordinate-systems.md
+  - Known deviations: deviations.md
+  - API reference:
+      - nsm_fitting: reference/nsm_fitting.md
+      - transforms: reference/transforms.md
+      - decode: reference/decode.md
+      - model_building: reference/model_building.md
+      - articular_surfaces: reference/articular_surfaces.md
+      - meniscal_ligaments: reference/meniscal_ligaments.md
+      - comak_osim_update: reference/comak_osim_update.md
+      - osim_utils: reference/osim_utils.md
+      - utils: reference/utils.md
+      - schemas: reference/schemas.md
+      - scaling (Stage X): reference/scaling.md
+      - wrap_surface_fitting: reference/wrap_surface_fitting.md

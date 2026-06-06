@@ -1,0 +1,9 @@
+# Documentation build dependencies (the `docs` extra).
+#
+# Intentionally minimal and decoupled from the runtime deps: the docs are built
+# with griffe static analysis, so nsosim itself is NOT imported and
+# opensim/torch/NSM/pymskt are NOT needed to build the site. This means the docs
+# build runs in a tiny, throwaway virtualenv (see `make docs-install`).
+mkdocs
+mkdocs-material
+mkdocstrings[python]

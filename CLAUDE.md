@@ -6,6 +6,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `nsosim` is a library for creating personalized biomechanical knee models by fitting Neural Shape Models (NSM) to MRI segmentations and integrating them into OpenSim/COMAK simulations. It bridges raw imaging data → NSM-derived geometries → subject-specific OpenSim models.
 
+## Documentation Site
+
+A browsable docs site lives under `docs/` and builds with mkdocs (`make docs`, or
+`make docs-serve` to preview). It is generated from the docstrings via static analysis
+(griffe), so building it does **not** import `nsosim` (no opensim/torch/NSM needed).
+
+- `docs/index.md` — architecture overview + module map + pipeline stages.
+- **`docs/coordinate-systems.md` — the canonical reference for the four coordinate spaces
+  (MRI / REFALIGN / NSMcanon / OSIM), the full transform chain, and how Stage X body
+  scaling (`s_wa`) meets the knee build. Read this before touching scaling or coordinate
+  conversion.**
+- `docs/deviations.md` — the single list of pipeline-wiring deviations (reference-scale
+  knee, Pathway-B `s_wa` gap, etc.) and the levers to change them.
+
+Cross-references in the docs use mkdocstrings symbol links (never line numbers).
+`tests/docs/test_doc_references.py` (pure stdlib, runs in any env) fails if a documented
+symbol is renamed or removed — keep docs and code in sync or that test goes red.
+
 ## Development Commands
 
 ```bash

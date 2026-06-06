@@ -61,6 +61,23 @@ conda create --name comak --file conda-env-lock.txt
 
 This project is currently in **Alpha** stage. It is under active development, and APIs might change.
 
+## Documentation
+
+The library docs (architecture overview, the coordinate-space/transform-chain reference,
+and the full API reference generated from the docstrings) live under [`docs/`](docs/) and
+build into a browsable site with mkdocs:
+
+```bash
+make docs-install   # one-time: installs mkdocs + mkdocstrings (into the active env)
+make docs           # build the static site to ./site
+make docs-serve     # live-preview at http://127.0.0.1:8000
+```
+
+The docs build via static analysis (griffe), so it does **not** import `nsosim` — no
+opensim/torch/NSM needed to build the site. Start with [`docs/index.md`](docs/index.md)
+and the [coordinate-systems page](docs/coordinate-systems.md) (the most important
+reference for anyone touching the scaling or coordinate-conversion code).
+
 ## Purpose / Motivation
 
 The `nsosim` library serves a crucial role in the larger Gait Simulation Project by enabling the creation of subject-specific knee models. The primary goal of the overall project is to perform cartilage contact simulations of a human gait cycle using COMAK and OpenSim. `nsosim` bridges the gap between a subject's raw imaging data (e.g., MRI segmentations) and a personalized OpenSim knee model that incorporates Neural Shape Model (NSM) derived geometries. This personalized model is a key input for subsequent biomechanical simulations with COMAK, allowing for more accurate and patient-specific analyses of knee joint mechanics.

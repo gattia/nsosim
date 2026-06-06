@@ -40,6 +40,9 @@ dynamic = ["version"]
 
 [project.optional-dependencies]
 fitting = ["torch>=2.0"]
+# Docs build via static analysis (griffe) — nsosim itself is NOT imported, so
+# this extra deliberately does NOT pull opensim/torch/NSM.
+docs = ["mkdocs", "mkdocs-material", "mkdocstrings[python]"]
 
 [project.urls]
 #Homepage = "https://github.com/gattia/NSM/"
