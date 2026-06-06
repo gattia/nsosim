@@ -93,9 +93,9 @@ def align_bone_osim_fit_nsm(
 
     Place in the pipeline:
         Stage 1 of the MRI/fitting pipeline, driven by
-        :func:`align_knee_osim_fit_nsm` (which passes the femur's transform to
+        `align_knee_osim_fit_nsm` (which passes the femur's transform to
         the tibia/patella calls). The ``*_mesh_nsm`` outputs feed
-        :func:`nsm_recon_to_osim`.
+        `nsm_recon_to_osim`.
 
     Args:
         bone (str): The name of the bone (e.g., 'femur', 'tibia', 'patella').
@@ -365,7 +365,7 @@ def align_knee_osim_fit_nsm(
         Stage 1 (NSM model fitting) of the MRI/fitting pipeline; the entry point
         a subject build calls first. Processes the femur first so its transform
         can be reused for tibia/patella, then hands the REFALIGN reconstructions
-        to :func:`nsm_recon_to_osim` (Stage 2).
+        to `nsm_recon_to_osim` (Stage 2).
 
     Args:
         dict_bones (dict): Dictionary mapping bone names (e.g., 'femur', 'tibia', 'patella')
@@ -695,10 +695,10 @@ def apply_transform(
     """Low-level alignment primitive: ``p_out = (p_in @ icp_transform.T - center) / scale``.
 
     Applies a 4x4 transform, then removes a center offset and an isotropic scale.
-    It is the algebraic inverse of :func:`undo_transform`.
+    It is the algebraic inverse of `undo_transform`.
 
     Place in the transform chain:
-        This is the final leg of :func:`convert_OSIM_to_nsm`. In the nsosim
+        This is the final leg of `convert_OSIM_to_nsm`. In the nsosim
         pipeline it is called with the per-bone ``linear_transform`` (the
         similarity that maps REFALIGN -> NSMcanon; stored in the bone's
         ``*_alignment.json``) and ``scale=1, center=[0, 0, 0]`` — so it maps
@@ -747,10 +747,10 @@ def undo_transform(
     """Low-level alignment primitive: ``p_out = (p_in * scale + center) @ inv(icp_transform).T``.
 
     Re-applies an isotropic scale and a center offset, then applies the inverse
-    of the 4x4 transform. It is the algebraic inverse of :func:`apply_transform`.
+    of the 4x4 transform. It is the algebraic inverse of `apply_transform`.
 
     Place in the transform chain:
-        This is the first leg of :func:`convert_nsm_recon_to_OSIM` (the
+        This is the first leg of `convert_nsm_recon_to_OSIM` (the
         non-underscore converter on the synthetic-decode path). In the nsosim
         pipeline it is called with the per-bone ``linear_transform`` (the
         similarity that maps REFALIGN -> NSMcanon; stored in ``*_alignment.json``)
@@ -807,10 +807,10 @@ def convert_nsm_recon_to_OSIM_(
     reference-size REFALIGN mesh straight to OSIM, so the output is at reference
     size, not the subject's true anatomical size. (Restoring true size would
     require a scale step, which lives only in the non-underscore
-    :func:`convert_nsm_recon_to_OSIM` via :func:`undo_transform`.)
+    `convert_nsm_recon_to_OSIM` via `undo_transform`.)
 
     This is the converter on the **MRI/fitting path** (called by
-    :func:`_nsm_recon_to_osim_single_surface`). The same fixed
+    `_nsm_recon_to_osim_single_surface`). The same fixed
     ``ref_mesh_orig_center`` (the reference femur's ``mean_orig``) is used for
     all three bones so their spatial relationship is preserved.
 
@@ -845,7 +845,7 @@ def convert_OSIM_to_nsm_(
 ):
     """Convert OpenSim (OSIM) points back to REFALIGN. **OSIM -> REFALIGN.**
 
-    Exact inverse of :func:`convert_nsm_recon_to_OSIM_`:
+    Exact inverse of `convert_nsm_recon_to_OSIM_`:
     1. Rotate/axis-swap OpenSim orientation -> NSM orientation
        (``@ OSIM_TO_NSM_TRANSFORM``).
     2. Scale m -> mm (``*= 1000``).
@@ -908,29 +908,29 @@ def convert_nsm_recon_to_OSIM(
     """Convert NSMcanon points to OpenSim (OSIM) coordinates. **NSMcanon -> OSIM.**
 
     Two-leg converter for the **synthetic-decode path** (output of
-    :func:`create_mesh`, which is in NSMcanon):
-    1. :func:`undo_transform` (``icp_transform``, ``scale``, ``center``):
+    `create_mesh`, which is in NSMcanon):
+    1. `undo_transform` (``icp_transform``, ``scale``, ``center``):
        NSMcanon -> REFALIGN (femur-aligned mm).
-    2. :func:`convert_nsm_recon_to_OSIM_` (``ref_mesh_orig_center``):
+    2. `convert_nsm_recon_to_OSIM_` (``ref_mesh_orig_center``):
        REFALIGN -> OSIM (meters).
 
-    The ``scale`` argument flows into :func:`undo_transform` and is the only
+    The ``scale`` argument flows into `undo_transform` and is the only
     place a subject (true-size) scaling could be re-introduced. Callers on the
-    synthetic-decode path (:mod:`nsosim.decode`) pass ``scale=1, center=[0, 0, 0]``
+    synthetic-decode path (`nsosim.decode`) pass ``scale=1, center=[0, 0, 0]``
     and the per-bone ``linear_transform``, so the output lands at reference size.
     The MRI/fitting path does not call this function — it uses the underscore
-    :func:`convert_nsm_recon_to_OSIM_` directly (the recon is already in REFALIGN).
+    `convert_nsm_recon_to_OSIM_` directly (the recon is already in REFALIGN).
 
     Args:
         points (numpy.ndarray): Nx3 points in NSMcanon (dimensionless ~[-1, 1],
             per-bone canonical).
         icp_transform (vtk.vtkIterativeClosestPointTransform or numpy.ndarray):
             The per-bone alignment transform (4x4 or VTK), normalized via
-            :func:`check_icp_transform`. Maps REFALIGN -> NSMcanon; its inverse
+            `check_icp_transform`. Maps REFALIGN -> NSMcanon; its inverse
             is applied here.
         scale (float or numpy.ndarray): Isotropic scale fed to
-            :func:`undo_transform`. ``1`` on the synthetic-decode path.
-        center (numpy.ndarray): Center offset fed to :func:`undo_transform`.
+            `undo_transform`. ``1`` on the synthetic-decode path.
+        center (numpy.ndarray): Center offset fed to `undo_transform`.
             ``[0, 0, 0]`` on the synthetic-decode path.
         ref_mesh_orig_center (numpy.ndarray): 3-vector (mm) — the reference femur
             ``mean_orig`` (``fem_ref_center``).
@@ -960,20 +960,20 @@ def convert_OSIM_to_nsm(
 ):
     """Convert OpenSim (OSIM) points to NSMcanon. **OSIM -> NSMcanon.**
 
-    Exact inverse of :func:`convert_nsm_recon_to_OSIM`, two legs:
-    1. :func:`convert_OSIM_to_nsm_` (``ref_mesh_orig_center``):
+    Exact inverse of `convert_nsm_recon_to_OSIM`, two legs:
+    1. `convert_OSIM_to_nsm_` (``ref_mesh_orig_center``):
        OSIM (meters) -> REFALIGN (femur-aligned mm).
-    2. :func:`apply_transform` (``icp_transform``, ``scale``, ``center``):
+    2. `apply_transform` (``icp_transform``, ``scale``, ``center``):
        REFALIGN -> NSMcanon.
 
     Args:
         points (numpy.ndarray): Nx3 points in OSIM (meters, OpenSim orientation).
         icp_transform (vtk.vtkIterativeClosestPointTransform or numpy.ndarray):
             The per-bone alignment transform (4x4 or VTK), normalized via
-            :func:`check_icp_transform`. Maps REFALIGN -> NSMcanon.
+            `check_icp_transform`. Maps REFALIGN -> NSMcanon.
         scale (float or numpy.ndarray): Isotropic scale fed to
-            :func:`apply_transform`. ``1`` for the standard round-trip.
-        center (numpy.ndarray): Center offset fed to :func:`apply_transform`.
+            `apply_transform`. ``1`` for the standard round-trip.
+        center (numpy.ndarray): Center offset fed to `apply_transform`.
             ``[0, 0, 0]`` for the standard round-trip.
         ref_mesh_orig_center (numpy.ndarray): 3-vector (mm) — the reference femur
             ``mean_orig`` (``fem_ref_center``).
@@ -1001,7 +1001,7 @@ def _nsm_recon_to_osim_single_surface(
 ):
     """Convert one reconstructed surface from REFALIGN to OSIM, optionally resample.
 
-    Thin wrapper around :func:`convert_nsm_recon_to_OSIM_` (the underscore,
+    Thin wrapper around `convert_nsm_recon_to_OSIM_` (the underscore,
     MRI-path converter) applied to a mesh's ``point_coords``.
 
     Args:
@@ -1039,15 +1039,15 @@ def nsm_recon_to_osim(
     ``dict_bones`` (bone, cartilage, and — for the femur — menisci, or — for the
     tibia — fibula), and converts each from REFALIGN (femur-aligned mm, reference
     size) to OSIM (meters, reference size) via
-    :func:`_nsm_recon_to_osim_single_surface` /
-    :func:`convert_nsm_recon_to_OSIM_`. No subject (true-size) scale is applied,
+    `_nsm_recon_to_osim_single_surface` /
+    `convert_nsm_recon_to_OSIM_`. No subject (true-size) scale is applied,
     so every surface lands at reference size.
 
     Place in the pipeline:
         Stage 2 (per-bone processing) of the MRI/fitting pipeline. Runs after
-        :func:`align_knee_osim_fit_nsm` (which produces the ``*_mesh_nsm``
+        `align_knee_osim_fit_nsm` (which produces the ``*_mesh_nsm``
         REFALIGN surfaces) and feeds the OSIM-space meshes to the
-        :mod:`nsosim.model_building` builders (articular surfaces, ligament
+        `nsosim.model_building` builders (articular surfaces, ligament
         interpolation, wrap fitting, meniscus surfaces, fat pad).
 
     Args:
