@@ -59,12 +59,14 @@ the "rotated into OpenSim axes" in the OSIM row above refers to — applied in e
 REFALIGN→OSIM conversion.
 
 !!! info "What 'MRI space' actually is"
-    MRI space is the segmentation mesh's **native anatomical frame**. Following DICOM, the
-    convention is **LPS** — axes point toward the patient's **L**eft, **P**osterior, and
-    **S**uperior (the DICOM patient coordinate system; NIfTI/Slicer pipelines use RAS
-    instead). nsosim reads the meshes as-is and imposes no convention of its own; because the
-    femur similarity registration in the first step aligns the input onto the fixed reference,
-    everything downstream is agnostic to it anyway.
+    MRI space is the segmentation mesh's **native anatomical frame**. The meshes come from a
+    DICOM → SimpleITK pipeline, and both DICOM and ITK/SimpleITK use **LPS** as their physical
+    coordinate system (axes toward the patient's **L**eft, **P**osterior, **S**uperior) — so
+    the meshes are LPS as long as the extraction keeps SimpleITK's physical space (origin +
+    direction + spacing). NIfTI/Slicer pipelines use RAS instead; if you need to be certain,
+    the authority is the mesh-extraction code, not nsosim. Either way nsosim reads the meshes
+    as-is and imposes no convention — the femur similarity registration in the first step
+    aligns the input onto the fixed reference, so everything downstream is agnostic to it.
 
 !!! info "Body-local frames and the knee joint center"
     "OSIM" *is* a body-local OpenSim frame. For the knee sub-bodies (`femur_distal_r`,
