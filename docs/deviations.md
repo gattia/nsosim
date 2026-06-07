@@ -76,26 +76,39 @@ scale that recon to the gait body by `s_wa`, so the shape ends up at the body's 
     `s_wa`-scaled body**. (The body-scaled reference bake from Mode 2 is still produced, but it
     has different filenames and is simply left unused — see [Notes](#notes).)
 
-**How to fix it.** Scale the knee geometry by `s_wa` **about the joint-center origin** — a
-plain OSIM-space multiply (`osim_points *= s_wa`), the same operation
-[`bake_knee_geometry`][nsosim.scaling.knee_geometry.bake_knee_geometry] already uses. Do it
-**early — scale the OSIM recon right after
-[`nsm_recon_to_osim`][nsosim.nsm_fitting.nsm_recon_to_osim], before the model-building builders
-run** — so the articular surfaces, wrap fits, ligament/muscle attachments, menisci, fat pad,
-and `mean_patella` are all computed from correctly-sized geometry and need no per-quantity
-fix-up (see [Notes](#notes)).
+**How to fix it.** Scale by `s_wa` with a plain OSIM-space multiply (`osim_points *= s_wa`)
+**about the joint-center origin** — the same operation
+[`bake_knee_geometry`][nsosim.scaling.knee_geometry.bake_knee_geometry] uses, **not** the
+converter's `scale` argument (see the warning below). The catch is that the knee build has
+**two independent geometry generators**, both emitting reference-size OSIM output, and you must
+scale **both**:
+
+1. **The recon meshes** ([`nsm_recon_to_osim`][nsosim.nsm_fitting.nsm_recon_to_osim]). Scaling
+   these covers everything *extracted* from them: articular surfaces, meniscus surfaces, the
+   prefemoral fat pad, and `mean_patella` (the mean of the scaled patella mesh).
+2. **The reference→subject warp**
+   ([`interpolate_bone_ligaments`][nsosim.model_building.interpolate_bone_ligaments] and the
+   meniscus-ligament warp). It does **not** read the recon mesh — it warps the *reference*
+   labeled mesh + attachment points onto the subject through the NSM. Its output feeds the
+   **wrap-surface fit** ([`fit_bone_wrap_surfaces`][nsosim.model_building.fit_bone_wrap_surfaces]
+   takes the warped labeled mesh) and **is** the ligament/muscle attachment positions. Scaling
+   (1) alone leaves all of these at reference size.
+
+So scale each generator's OSIM output once, early, about the joint-center origin. (This is the
+"latent-interpolation" subtlety: ligaments and wraps are a *separate* product, not a readout of
+the bone mesh.)
 
 !!! warning "Not the converter's `scale` argument"
     The natural-looking lever — passing a `scale` to
-    [`convert_nsm_recon_to_OSIM`][nsosim.nsm_fitting.convert_nsm_recon_to_OSIM] — is **not**
-    the right one: it scales in canonical space about a per-bone affine center, not the shared
-    joint-center origin, so it distorts the joint (verified;
-    [Coordinate systems §3](coordinate-systems.md) has the numbers). Use the plain OSIM-space
-    multiply above.
+    [`convert_nsm_recon_to_OSIM`][nsosim.nsm_fitting.convert_nsm_recon_to_OSIM] (which the warp
+    path already uses for its OSIM conversion) — is **not** the right one: it scales in
+    canonical space about a per-bone affine center, not the shared joint-center origin, so it
+    distorts the joint (verified; [Coordinate systems §3](coordinate-systems.md) has the
+    numbers). Scale each generator's *OSIM output* with a plain multiply instead.
 
-A heavier alternative is to register each subject onto a **pre-scaled** reference so the recon
-inherits the size directly; it changes the fitting step and gives the same result, so scaling
-the OSIM recon is simpler.
+A heavier alternative is to register each subject onto a **pre-scaled** reference so both
+generators inherit the size directly; it changes the fitting step and gives the same result, so
+scaling the OSIM outputs is simpler.
 
 ---
 
@@ -142,16 +155,21 @@ synthetic path.
 
 ## Notes
 
-**The clean way to keep everything consistent: scale early.** If a resizing mode (3–5) scales
-the OSIM geometry *before* the model-building builders run, then the articular surfaces, wrap
-fits, ligament/muscle attachments, menisci, fat pad, and `mean_patella` are all computed from
-correctly-sized geometry — nothing downstream needs a separate fix-up. `mean_patella`, for
-instance, is just the mean of the (already-scaled) patella vertices
-([`center_patella_meshes`][nsosim.model_building.center_patella_meshes], written as the
-patellofemoral joint translation by
-[`update_osim_model`][nsosim.comak_osim_update.update_osim_model]), so it comes out right on
-its own. The only way it becomes a problem is scaling the meshes *late* and forgetting this
-offset — which scaling early avoids entirely.
+**Scale both generators early, and the derived quantities follow.** There is no single place
+to scale — the recon meshes and the reference→subject warp are independent (see
+[Mode 3](#mode-3-personalized-knee-scaled-to-the-gait-body)). Scale each generator's OSIM output
+early and everything *downstream of each* is correct without per-quantity fix-up:
+
+- from the **recon meshes**: articular surfaces, meniscus surfaces, fat pad, and `mean_patella`
+  (just the mean of the already-scaled patella vertices —
+  [`center_patella_meshes`][nsosim.model_building.center_patella_meshes], written as the
+  patellofemoral joint translation by
+  [`update_osim_model`][nsosim.comak_osim_update.update_osim_model]; so no separate scalar
+  fix-up if the mesh was scaled first);
+- from the **warp**: the wrap surfaces and the ligament/muscle attachments.
+
+The trap is scaling only the recon meshes (or scaling anything *late*) and leaving the warp
+products — wraps, ligaments — at reference size.
 
 **The reference-knee bake (Mode 2) is not a leak.** When a subject or synthetic recon is
 swapped in (Modes 3–5), the `s_wa`-baked `smith2019-R-*.stl` from Mode 2 go unused — the recon
@@ -165,12 +183,13 @@ That's expected; keep the bake for Mode 2, the other modes simply don't use it.
 
 A verified starting list:
 
-- **Scale the OSIM recon by `s_wa` about the joint-center origin, early** — right after
-  [`nsm_recon_to_osim`][nsosim.nsm_fitting.nsm_recon_to_osim] and before the model-building
-  builders — so every derived quantity (articular surfaces, wraps, ligament/muscle
-  attachments, menisci, fat pad, `mean_patella`) inherits the right size. Use a plain
-  OSIM-space multiply, **not** the converter's `scale` argument (see
-  [Mode 3](#mode-3-personalized-knee-scaled-to-the-gait-body)).
+- **Scale both geometry generators by `s_wa` about the joint-center origin, early**, with a
+  plain OSIM-space multiply (**not** the converter's `scale` argument): (a) the recon meshes
+  from [`nsm_recon_to_osim`][nsosim.nsm_fitting.nsm_recon_to_osim] (covers articular surfaces,
+  menisci, fat pad, `mean_patella`), **and** (b) the reference→subject warp output from
+  [`interpolate_bone_ligaments`][nsosim.model_building.interpolate_bone_ligaments] / the
+  meniscus-ligament warp (covers the wrap-fit input and the ligament/muscle attachments). See
+  [Mode 3](#mode-3-personalized-knee-scaled-to-the-gait-body).
 - Thread the synthetic path ([`nsosim.decode`](reference/decode.md)) the same way, so Mode 5
   generalizes.
 - Keep mass/inertia owned by COMAK body scaling (the orchestrator two-pass) — a geometry fix

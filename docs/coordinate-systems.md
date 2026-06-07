@@ -232,13 +232,14 @@ REFALIGN-only converter — which is *why* it has no `scale`. The **synthetic/de
 starts in NSMcanon, so it uses the full converter, where a `scale` *can* be applied.
 
 !!! info "Resizing the MRI path"
-    The MRI path has no resize today. The clean way to add one is to multiply the OSIM-space
-    recon by the scale **about the joint-center origin** at the OSIM-entry point — a plain
-    `osim_points *= s_wa`, the same operation
-    [`bake_knee_geometry`][nsosim.scaling.knee_geometry.bake_knee_geometry] uses. This is *not*
-    the same as the converter's `scale` argument (which scales in canonical space about a
-    per-bone affine center — see the warning above). Scaling at the OSIM-entry point is what
-    [Mode 3](deviations.md#mode-3-personalized-knee-scaled-to-the-gait-body) needs.
+    The MRI path has no resize today. The clean way to add one is a plain OSIM-space multiply
+    **about the joint-center origin** (`osim_points *= s_wa`, the same operation
+    [`bake_knee_geometry`][nsosim.scaling.knee_geometry.bake_knee_geometry] uses) — *not* the
+    converter's `scale` argument (which scales in canonical space about a per-bone affine
+    center; see the warning above). Note there are **two** OSIM-space generators to scale: the
+    recon meshes *and* the reference→subject warp that produces the ligament/muscle attachments
+    and the wrap-fit mesh. [Mode 3](deviations.md#mode-3-personalized-knee-scaled-to-the-gait-body)
+    spells out which derived geometry comes from which.
 
 !!! info "What `+ ref-center` is, and where it comes from"
     `ref-center` is **`fem_ref_center`** — the centroid of the *reference* femur in

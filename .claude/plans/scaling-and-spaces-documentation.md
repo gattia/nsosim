@@ -179,13 +179,28 @@ joint-center origin** that **differs per bone** — so applying the same `scale`
 bones would scale each about a different point and distort the joint.
 
 **The clean lever (use this in the fix):** a plain OSIM-space multiply about the shared
-joint-center origin (`osim_points *= s_wa`), the same operation `bake_knee_geometry` uses.
-Apply it **early — to the OSIM recon right after `nsm_recon_to_osim`, before the
-`build_joint_model` builders run** — so the articular surfaces, wrap fits, ligament/muscle
-attachments, menisci, fat pad, and `mean_patella` are all computed from correctly-sized
-geometry and need **no** per-quantity fix-up. (This supersedes the older "scale the recon AND
-mean_patella AND wrap input AND …" enumeration in the Stage-5 list above — scale once, early.)
-Docs corrected: `coordinate-systems.md` §3, §4; `deviations.md` Mode 3/4/5 + future-fix list.
+joint-center origin (`osim_points *= s_wa`), the same operation `bake_knee_geometry` uses —
+NOT the converter's `scale` argument.
+
+**Where to apply it — there are TWO independent geometry generators, scale BOTH** (an earlier
+draft wrongly said "scale the recon once and everything follows"; the owner caught it, code
+re-checked). Confirmed by reading `build_joint_model`:
+1. **Recon meshes** (`nsm_recon_to_osim`) → `create_articular_surfaces`, meniscus surfaces, fat
+   pad, and `mean_patella` (`center_patella_meshes` takes the recon patella mesh). Scaling the
+   recon meshes covers all of these.
+2. **Reference→subject warp** (`interpolate_bone_ligaments` + the meniscus-ligament warp) →
+   produces the warped *labeled* mesh that `fit_bone_wrap_surfaces` fits to, **and** the
+   ligament/muscle attachment positions. This path does NOT read the recon mesh (it warps the
+   reference labeled mesh through the NSM and converts via the non-underscore converter), so
+   scaling the recon does nothing for wraps or ligaments. Scale this generator's OSIM output
+   too.
+
+So the original Stage-5 enumeration ("recon AND warp-path attachments AND the labeled mesh fed
+to the wrap fitter AND `mean_patella`") was **correct about the number of places** — the only
+correction is the *lever* (OSIM-space multiply about the joint origin, not the converter
+`scale` arg). `mean_patella` rides along with generator 1; wraps + ligaments ride along with
+generator 2. Docs corrected: `coordinate-systems.md` §3, §4; `deviations.md` Mode 3/4/5 + Notes
++ future-fix list.
 
 ### OPEN — verification task for the fix (do before relying on the common-origin assumption)
 The docs assert recon and reference geometry share the joint-center origin "by construction"
