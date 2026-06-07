@@ -1,126 +1,137 @@
-# Known Issues & Deviations
+# Knee Sizing — Modes & Status
 
-Where the current knee-build wiring produces the wrong result, and the lever to fix each.
-Background and terminology (the **cross-subject** vs **matched-subject** scenarios, the
-coordinate spaces, `s_wa`) are on the [Coordinate systems & pipeline](coordinate-systems.md)
-page.
+When you drop a knee into a COMAK body model, you choose how its **size** is handled. This
+page lists the modes you might want, how each is (or would be) achieved, and what's built
+today. The mechanics they rest on — the coordinate spaces, the similarity registration,
+`s_wa`, and the converter's scale hook — are on
+[Coordinate systems & pipeline](coordinate-systems.md).
 
-Each entry says **what the code does now**, **why it's wrong / what's missing**, and **the
-lever** to change it. Items tagged **Bug** are active defects to fix; the rest are
-properties or unbuilt modes. None of the "lever" notes are implemented — they are inputs to
-a future fix plan, not work items here.
+Two independent choices define a mode: **where the knee geometry comes from** (the generic
+reference knee, a subject MRI fit, or a decoded latent) and **what size it should end up at**
+(the gait body's size, or the knee's own true anatomical size).
 
----
+| Mode | Knee geometry | Target size | Status |
+|---|---|---|---|
+| [1](#mode-1-generic-knee-sized-to-the-gait-body) — generic, body-sized | reference (base model) | gait body (`s_wa`) | **works** |
+| [2](#mode-2-subject-knee-mri-sized-to-the-gait-body) — subject, body-sized | MRI fit | gait body (`s_wa`) | **bug** — stays reference size |
+| [3](#mode-3-subject-knee-mri-at-true-anatomical-size) — subject, true size | MRI fit | the subject's real size | **not implemented** |
+| [4](#mode-4-synthetic-knee-scaled-to-a-model) — synthetic, scaled | decoded latent | any model | **partial** — path exists at scale = 1 |
 
-## 1. The MRI knee is size-normalized to the reference (by design)
-
-**What happens.** The femur similarity registration
-([`align_bone_osim_fit_nsm`][nsosim.nsm_fitting.align_bone_osim_fit_nsm],
-`reg_mode='similarity'`) divides the subject's true size out so every subject knee lands in
-one shared reference frame (REFALIGN); tibia/patella reuse the femur transform. This part is
-intentional and correct — registering everyone to one reference is what makes the geometry
-comparable.
-
-**What's missing.** No size is ever *restored* on the MRI path: it converts to OSIM with the
-underscore [`convert_nsm_recon_to_OSIM_`][nsosim.nsm_fitting.convert_nsm_recon_to_OSIM_],
-which has no scale step. So the knee stays at reference size — correct for neither scenario
-(it should be body-scaled for cross-subject, true-size for matched-subject). Measured: raw
-MRI femur diagonal CoV across subjects ≈ 7.9%; after registration ≈ 1.0% (size collapsed to
-the reference).
-
-**Lever.** The non-underscore
-[`convert_nsm_recon_to_OSIM`][nsosim.nsm_fitting.convert_nsm_recon_to_OSIM] forwards a
-`scale` into [`undo_transform`][nsosim.nsm_fitting.undo_transform] — the one place a resize
-can re-enter. Restoring a size means routing through that hook (or applying `s_wa`
-downstream, see §2).
+"True size" means the knee's real anatomical size as segmented from the MRI, before the
+similarity registration normalizes it away.
 
 ---
 
-## 2. The knee geometry isn't scaled to the gait body — **Bug**
+## Mode 1 — generic knee, sized to the gait body
 
-!!! bug "Reference-size knee inside a body-scaled body (cross-subject)"
-    COMAK body scaling scales the *body* to the gait subject and bakes the reference knee by
-    `s_wa` ([`bake_knee_geometry`][nsosim.scaling.knee_geometry.bake_knee_geometry]). But the
-    knee build then writes the **reference-size recon** (`femur_nsm_recon_osim.stl`, …) and
-    repoints the model at it
+**What you want.** No subject MRI — use the reference knee the base model already ships with,
+resized to fit a particular gait subject's body.
+
+**How.** COMAK body scaling bakes the reference knee STLs by `s_wa`
+([`bake_knee_geometry`][nsosim.scaling.knee_geometry.bake_knee_geometry]): vertices × `s_wa`
+about the joint-center origin, then `scale_factors` reset to `1`. Bone, cartilage, contact,
+and menisci all scale together.
+
+**Status: works.** This is the one thing the knee bake does correctly today, and it's worth
+keeping — it's how you take the generic model to a new gait subject with no imaging at all.
+
+---
+
+## Mode 2 — subject knee (MRI), sized to the gait body
+
+**What you want.** Put an MRI-derived knee under a *different* person's gait, sized to roughly
+match that body. (The MRI came from one person; the gait/body from another.)
+
+**How it's meant to work.** Register the MRI knee onto the reference — this divides the MRI
+donor's true size out, leaving a personalized *shape* at reference *size* — and then scale
+that recon to the gait body by `s_wa`, so the shape ends up at the body's size.
+
+!!! bug "The recon never gets scaled to the body"
+    The second half doesn't happen. The knee build writes the reference-size recon and points
+    the model at it with `scale_factors = 1,1,1`
     ([`update_body_geometry_meshfile`][nsosim.osim_utils.update_body_geometry_meshfile] /
-    [`update_contact_mesh_files`][nsosim.osim_utils.update_contact_mesh_files], with
-    `scale_factors` left at `1,1,1`). The recon is **never multiplied by `s_wa`**, so you end
-    up with a reference-size knee inside an `s_wa`-scaled body — a geometric mismatch.
+    [`update_contact_mesh_files`][nsosim.osim_utils.update_contact_mesh_files]); `s_wa` is
+    never applied to it. The result is a **reference-size knee inside an `s_wa`-scaled body**.
+    (The body-scaled reference bake from Mode 1 is still produced, but it has different
+    filenames and is simply left unused — see [Notes](#notes).)
 
-**Evidence.** On `OARSI_multigait_RSubject_121_…/9018389_00m_RIGHT`, `s_wa = 0.97298`; the
-baked `smith2019-R-femur-bone.stl` is exactly `0.97298×` but **orphaned** (see §4), while the
-body references `femur_nsm_recon_osim.stl` at `scale_factors = 1 1 1` (reference scale).
+**How to fix it (two routes).**
 
-**Lever.** `s_wa` is on disk in the scaling report. Apply it to the knee recon about the
-**common joint-center origin** (see
-[Coordinate systems §1, §5](coordinate-systems.md)) at the OSIM-entry point
-([`nsm_recon_to_osim`][nsosim.nsm_fitting.nsm_recon_to_osim] /
-[`convert_nsm_recon_to_OSIM_`][nsosim.nsm_fitting.convert_nsm_recon_to_OSIM_]), and equally to
-the wrap-fit input, the warp-path attachment converter, and `mean_patella` (§3). A cleaner
-alternative is the "register-to-native-reference, then resize via the `scale` hook" design
-in [Coordinate systems §3](coordinate-systems.md).
-
----
-
-## 3. `mean_patella` is a reference-size joint offset
-
-**What happens.** [`center_patella_meshes`][nsosim.model_building.center_patella_meshes]
-subtracts the patella's mean position (`mean_patella`) so the patella STL is centered at its
-body-local origin; that offset is later written as the patellofemoral joint coordinate
-translation (via [`update_osim_model`][nsosim.comak_osim_update.update_osim_model]).
-`mean_patella` is a translation in **OSIM metres at reference size**.
-
-**Why it matters.** It is the one load-bearing *scalar* in the knee build. Any fix that
-scales the patella meshes (§2) must scale this translation too, about the same joint-center
-origin, or the patellofemoral kinematics drift relative to the scaled geometry.
-
-**Lever.** Multiply `mean_patella` by `s_wa` wherever the meshes are scaled.
+- **Scale the recon.** Multiply the recon by `s_wa` about the joint-center origin at the
+  OSIM-entry point ([`nsm_recon_to_osim`][nsosim.nsm_fitting.nsm_recon_to_osim] /
+  [`convert_nsm_recon_to_OSIM_`][nsosim.nsm_fitting.convert_nsm_recon_to_OSIM_]), and carry
+  the same scale into the wrap-fit input and `mean_patella` ([Notes](#notes)).
+- **Register to a scaled reference.** Pre-scale the reference knee and register each subject
+  onto *that*, so the recon inherits the size directly. (A cleaner variant — always register
+  to the native reference, then resize via the converter's `scale` hook — is described in
+  [Coordinate systems §3](coordinate-systems.md).)
 
 ---
 
-## 4. The body-scaled reference-knee bake is orphaned
+## Mode 3 — subject knee (MRI), at true anatomical size
 
-**What happens.** COMAK body scaling bakes `smith2019-R-{femur,tibia,patella,…}.stl` by
-`s_wa` ([`bake_knee_geometry`][nsosim.scaling.knee_geometry.bake_knee_geometry]). The knee
-build then repoints the model to the **differently named** recon STLs
-([`save_geometry_files`][nsosim.model_building.save_geometry_files] copies new files; the
-`update_*` helpers repoint via `set_mesh_file`). The baked `smith2019-R-*.stl` are left on
-disk but not referenced by the built model — only the **non-knee** Geometry (torso, pelvis,
-limbs) keeps its body scaling.
+**What you want.** The gait subject *is* the MRI subject — keep their real knee at its real
+size, rather than normalizing it to the reference.
 
-**Note on a cross-repo map.** The mechanism is **repoint + orphan**, not
-"overwrite-by-filename-collision": the recon STLs have different names, so there is no
-overwrite. The difference matters for the fix — you scale the recon that gets *repointed to*,
-and the reference-knee bake is dead weight in the cross-subject case.
+**How it would work.** Two routes:
 
-**Lever.** Decide the bake's fate once §2 is fixed (drop it, unless it's wanted for the
-"scale whatever knee the base model has" use case, which is its one independent value).
+- **Don't divide the size out.** Register with `reg_mode='rigid'` (rotation + translation
+  only, no scale) so the recon stays at the subject's true size from the start.
+- **Store and restore the scale.** Register with `'similarity'` as usual, but record the
+  scale it removed and re-apply it (via the converter's `scale` hook in
+  [`convert_nsm_recon_to_OSIM`][nsosim.nsm_fitting.convert_nsm_recon_to_OSIM]) instead of
+  leaving the knee at reference size.
+
+**Status: not implemented.** Neither route is wired as a complete, supported mode yet.
 
 ---
 
-## 5. Matched-subject (true-size) mode — not implemented
+## Mode 4 — synthetic knee, scaled to a model
 
-When the gait subject *is* the MRI subject, the knee should keep its true MRI size rather
-than be normalized to the reference. There is no code path for this today. The lever is the
-same `scale` hook as §1 (route the recon through the non-underscore converter with the
-subject's true scale instead of the underscore converter).
+**What you want.** Decode an arbitrary latent (a synthetic joint, a shape-mode sweep, an
+interpolation) into any model, at an appropriate size.
+
+**How.** The decode path ([`nsosim.decode`](reference/decode.md)) already runs through the
+non-underscore [`convert_nsm_recon_to_OSIM`][nsosim.nsm_fitting.convert_nsm_recon_to_OSIM],
+which carries the `scale` hook — but it is currently called with `scale = 1`, so the output
+lands at reference size. Resizing it up/down to a target model is the same lever as Modes 2
+and 3, just applied on the synthetic path.
+
+**Status: partial.** The path exists at `scale = 1`; the resize is not wired.
 
 ---
 
-## Where the fix would touch (pre-identified; do NOT implement from this page)
+## Notes
 
-A verified starting list for the future fix plan — **not** work items here:
+Anything that resizes the knee (Modes 2–4) has to carry two more things along, or the result
+won't be internally consistent:
 
-- Apply `s_wa` to the knee recon about the common joint-center origin at the OSIM-entry point
-  ([`nsm_recon_to_osim`][nsosim.nsm_fitting.nsm_recon_to_osim] /
-  [`convert_nsm_recon_to_OSIM_`][nsosim.nsm_fitting.convert_nsm_recon_to_OSIM_]), **and** the
-  wrap-fit input, the warp-path attachment converter, and `mean_patella` (§3).
-- Thread the synthetic path ([`nsosim.decode`](reference/decode.md)) too if the feature is
-  meant to be general.
+- **`mean_patella` must scale with the meshes.** The patella is centered by subtracting its
+  mean position, and that offset is written as the patellofemoral joint translation
+  ([`center_patella_meshes`][nsosim.model_building.center_patella_meshes] →
+  [`update_osim_model`][nsosim.comak_osim_update.update_osim_model]). It is a reference-size
+  scalar; if the meshes are scaled by `s_wa` but this offset is not (about the same origin),
+  the patellofemoral kinematics drift away from the geometry.
+- **The reference-knee bake is Mode 1's tool, not a leak.** When a subject or synthetic recon
+  is swapped in (Modes 2–4), the `s_wa`-baked `smith2019-R-*.stl` from Mode 1 go unused (the
+  recon STLs have different filenames and the model is repointed to them via
+  [`save_geometry_files`][nsosim.model_building.save_geometry_files] + the `update_*`
+  helpers). That's expected — keep the bake for Mode 1; the other modes simply don't use it.
+
+---
+
+## For the future fix plan
+
+A verified starting list (not work items on this page):
+
+- Apply the knee scale at the OSIM-entry point
+  ([`nsm_recon_to_osim`][nsosim.nsm_fitting.nsm_recon_to_osim] / the converter), **and** to
+  the wrap-fit input, the warp-path attachment converter, and `mean_patella`.
+- Thread the synthetic path ([`nsosim.decode`](reference/decode.md)) the same way, so Mode 4
+  generalizes.
 - Keep mass/inertia owned by COMAK body scaling (the orchestrator two-pass) — a geometry fix
   touches geometry only.
-- For matched-subject (§5), route the MRI recon through the non-underscore converter's
-  `scale` hook instead of the underscore converter.
+- For true size (Mode 3), either default to `reg_mode='rigid'` for that path or store/restore
+  the similarity scale through the converter's `scale` hook.
 
 See `.claude/plans/scaling-and-spaces-documentation.md` (Stage 5) for the fix-plan scope.

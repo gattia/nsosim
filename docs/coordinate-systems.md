@@ -2,8 +2,8 @@
 
 This page is the canonical reference for the coordinate spaces a knee build passes through,
 the transform chain that connects them, and how body scaling interacts with the knee
-geometry. Its companion, [Known issues & deviations](deviations.md), lists the specific
-places where the current wiring produces the wrong result (and the lever to fix each).
+geometry. Its companion, [Knee sizing modes](deviations.md), catalogs the ways you might
+size a knee placed into a model, how each is achieved, and which are built today.
 
 Function names link to the [API reference](reference/nsm_fitting.md), generated from the
 docstrings — so they move with the code and never point at a stale line.
@@ -33,7 +33,8 @@ size"). They differ only in what scale is restored at the end:
     the gait body (cross-subject) nor kept at true MRI size (matched-subject). For
     cross-subject this is an active bug (the body is scaled but the swapped-in knee is not);
     see [§5](#5-comak-body-scaling-and-how-it-meets-the-knee-build) and
-    [Known issues §2](deviations.md). Matched-subject is simply unbuilt.
+    [Knee sizing Mode 2](deviations.md#mode-2-subject-knee-mri-sized-to-the-gait-body).
+    Matched-subject is simply unbuilt.
 
 The rest of this page describes the mechanics that make the above happen.
 
@@ -128,7 +129,8 @@ one before it**):
     contact / wrap / ligament geometry is **shape-personalized but size-normalized to the
     reference**. Restoring an appropriate size — body scale (cross-subject) or true MRI size
     (matched-subject) — is the missing piece; see
-    [§5](#5-comak-body-scaling-and-how-it-meets-the-knee-build) and [Known issues](deviations.md).
+    [§5](#5-comak-body-scaling-and-how-it-meets-the-knee-build) and the
+    [knee sizing modes](deviations.md).
 
 !!! info "`reg_mode` (the size-normalization switch)"
     The similarity scale only happens when `reg_mode='similarity'` — which is the **default**
@@ -184,7 +186,7 @@ configuration instead of being decoded in isolation.
     knee and registering each subject to that scaled target, the cleaner design is to always
     similarity-register to the **one native reference knee**, then resize the result through
     this `scale` hook — up/down to the gait body (cross-subject) or back to true size
-    (matched-subject). See [Known issues](deviations.md).
+    (matched-subject). See the [knee sizing modes](deviations.md).
 
 ---
 
@@ -291,8 +293,8 @@ problem is what happens when a subject-specific knee is then swapped in.
     from the top of this page). The fix is to apply `s_wa` to the recon (and to
     `mean_patella`, the wrap-fit input, etc.) about the shared joint-center origin — or to
     adopt the cleaner "register-to-native-reference, then resize" design from
-    [§3](#3-the-synthetic-decode-transform-chain-latent-opensim). Tracked in
-    [Known issues §2](deviations.md).
+    [§3](#3-the-synthetic-decode-transform-chain-latent-opensim). Tracked as
+    [Knee sizing Mode 2](deviations.md#mode-2-subject-knee-mri-sized-to-the-gait-body).
 
 ### The scaling report
 [`scale_comak_model`][nsosim.scaling.orchestrator.scale_comak_model] always writes a JSON
@@ -314,7 +316,8 @@ Two functions in the chain live in the **NSM** dependency, not this repo:
 
 ## 7. See also
 
-- [Known issues & deviations](deviations.md) — the per-issue list and the lever to fix each.
+- [Knee sizing modes](deviations.md) — the catalog of sizing modes, how each is achieved,
+  and which are built.
 - Repo-root `CLAUDE.md` — "Coordinate Systems & Units", "Per-bone linear_transform",
   "fem_ref_center", "Relative Transforms (T_rel)".
 - COMAK-body-scaling spec: `.claude/plans/completed/comak-body-scaling_COMPLETED.md`.

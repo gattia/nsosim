@@ -61,7 +61,7 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Coordinate systems & pipeline: coordinate-systems.md
-  - Known deviations: deviations.md
+  - Knee sizing modes: deviations.md
   - API reference:
       - nsm_fitting: reference/nsm_fitting.md
       - transforms: reference/transforms.md

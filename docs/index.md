@@ -29,7 +29,8 @@ hand-off — is documented in **[Coordinate systems & pipeline](coordinate-syste
 A separate **COMAK body scaling** step ([`nsosim.scaling`](reference/scaling.md)) sizes a
 whole-body COMAK model to a subject by applying AddBiomechanics-derived scale factors and
 masses; where it meets the knee build (and the active bug there) is covered in the
-coordinate-systems page §5, with the full list in **[Known issues & deviations](deviations.md)**.
+coordinate-systems page §5, with the full set of sizing modes (and the active bug) in
+**[Knee sizing modes](deviations.md)**.
 
 ---
 
@@ -86,6 +87,7 @@ seed and inputs produce bit-identical mesh coordinates. Pass `seed=None` to opt 
 
 - **[Coordinate systems & pipeline](coordinate-systems.md)** — the spaces, the transform
   chain, and the COMAK-body-scaling ↔ knee-build interaction. The most important page.
-- **[Known issues & deviations](deviations.md)** — where the wiring produces a reference-size
-  knee in a scaled body (an active bug), and the lever to change it.
+- **[Knee sizing modes](deviations.md)** — the ways to size a knee placed into a model
+  (generic / subject / true-size / synthetic), how each is achieved, and which are built
+  (including the active reference-size-knee bug).
 - **API reference** — per-module docstrings (left nav).
