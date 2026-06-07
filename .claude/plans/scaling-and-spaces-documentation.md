@@ -1,6 +1,9 @@
 # Plan: Document the Scale/Space Behaviour of the Knee-Build Pipeline (then prepare the `s_wa` fix)
 
-**Status:** Proposed — documentation-first. No behaviour changes until Stages 0–4 are done and signed off.
+**Status:** Stages 0–4 **COMPLETE** (2026-06-07) — docstrings + the mkdocs site (`docs/`,
+`make docs`) are shipped and reviewed across several rounds. Stage 5 (the actual `s_wa` fix)
+is now its own plan: [`knee-scaling-fix.md`](knee-scaling-fix.md). See the **Handoff state &
+docs↔code trust** section at the bottom before continuing.
 **Created:** 2026-06-06
 **Owner:** nsosim (this is where the scale/space logic lives; the comak repo only wires it).
 
@@ -232,3 +235,60 @@ catalog** that includes how each mode *would* be built. So `deviations.md` now c
 proposed (unbuilt) fix designs for Modes 3–5, clearly labeled "not implemented / design sketch"
 (yellow admonitions). This is an intentional widening of scope, not an accuracy slip — the
 unbuilt content is marked as such and separated from the verified current-behavior description.
+
+---
+
+## Handoff state & docs↔code trust (2026-06-07)
+
+**For the next agent.** This documentation effort is complete and the docs are safe to build
+the scaling fix on, *with the trust ratings below*. The fix itself is scoped in
+[`knee-scaling-fix.md`](knee-scaling-fix.md).
+
+### What was produced (vs. the original plan)
+- **Stage 1** (gaps): closed empirically — ScaleTool's effect on knee welds/inertia/mass and
+  the joint-center origin were measured (see "Corrected findings" + the docs).
+- **Stage 2** (docstrings): done across the scale/space call chain (`nsm_fitting`,
+  `model_building`, `decode`, `osim_utils`, `comak_osim_update`, `scaling/`). RST `:func:`
+  markers were later stripped (mkdocstrings is Markdown).
+- **Stage 3** (the two docs): shipped, but **the layout deviated from the plan**:
+  - Docs moved from `nsosim/docs/` to repo-root `docs/` and became a **mkdocs + mkdocstrings**
+    site (build via `make docs` / `make docs-serve`; griffe static analysis, no import of
+    nsosim). `SCALING_AND_SPACES.md` → `docs/coordinate-systems.md`;
+    `SCALING_DEVIATIONS.md` → `docs/deviations.md` (retitled "Knee Sizing — Modes & Status").
+  - Cross-references are mkdocstrings **symbol** links, not line numbers; a stdlib pytest
+    (`tests/docs/test_doc_references.py`) fails if a referenced symbol is renamed/removed.
+  - `deviations.md` was **reframed** from a flat deviation list into a **5-mode catalog**
+    (owner-requested) that includes unbuilt fix designs, clearly labeled.
+- **Stage 4** (re-validate): done; plus three external review rounds (owner + an independent
+  AI) folded in. The "Post-documentation review" section above is the running record.
+- **Two code changes** were made beyond docs (owner-approved): `reg_mode` default flipped to
+  `'similarity'`; "Stage X" renamed to "COMAK body scaling" in the scaling-module docstrings.
+
+### Docs↔code TRUST — can a new agent rely on the docs for the scaling fix?
+
+**Trust (verified against code/data; safe to build on):**
+- The full MRI→OSIM transform chain, the four spaces, `OSIM_TO_NSM_TRANSFORM`
+  (covered by `tests/test_transform_chain.py`).
+- The `s_wa` formula and ScaleTool's knee behavior (weld scaled by parent AB factors; mass
+  unchanged by ScaleTool, set by the orchestrator two-pass; inertia mass-ratio-scaled) —
+  measured in Stage 1.
+- **The converter `scale` argument is NOT a clean OSIM resize** — verified numerically
+  (`scale=2` ≠ 2×). The clean lever is a plain OSIM-space multiply about the joint-center
+  origin. **This is the single most important correction; build the fix on it.**
+- **Two geometry generators** (recon meshes vs. the reference→subject warp that feeds wraps +
+  ligaments) — verified by reading `build_joint_model`. A fix must scale **both**.
+- Consumer wiring (verified in `comak_gait_simulation`): `comak_1_nsm_fitting.py` is the build;
+  `prepare_gait_subject.py` runs Stage X + writes the Stage-Y config; `submit_stage_y.sh`
+  launches the Pathway-B build; `project_coronary=False` at `comak_1_nsm_fitting.py:459`
+  (owner-confirmed: `True` makes menisci too taut).
+
+**Use with care (design sketches / not yet verified — do NOT treat as authoritative for impl):**
+- All "how to fix it" content for Modes 3–5 is **proposed**, not built or tested.
+- The claim that scaling about OSIM `(0,0,0)` preserves placement for *every* knee body is
+  grounded in measured origins but has **no regression test** — write one first (Stage-5 plan).
+- The "register to a pre-scaled reference gives the same result" alternative is unverified.
+- Patella centering × scaling, and the meniscus-ligament `project_coronary` variant, are open
+  design knots (see the fix plan).
+
+**Bottom line:** the *current-behavior* description and the corrected scaling mechanism are
+trustworthy; the *future-fix* designs are clearly-labeled starting points, not settled.

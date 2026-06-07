@@ -77,18 +77,20 @@ Pipeline Workflow"); this site focuses on the architecture and the per-function 
 repo (not here). The scripts below are the worked examples of intended use — each maps to one
 of the [knee sizing modes](deviations.md):
 
-| Driver (in `comak_gait_simulation`) | What it does | Mode |
+| Driver (in `comak_gait_simulation/run_simulations/scripts`) | What it does | Mode |
 |---|---|---|
-| `comak_1_nsm_fitting.py` | Canonical MRI→model build: `align → recon → assemble` against a reference-size base model. | [1](deviations.md#mode-1-personalized-knee-unscaled-reference-size-model) |
-| `comak_1_nsm_model_run.py` + `submit_nsm_slurm_job.py` | Queue/batch driver for the fit. **With `--config stage_y.json` it is the multigait knee-build driver** (runs against a body-scaled base). | [3](deviations.md#mode-3-personalized-knee-scaled-to-the-gait-body) |
-| `multigait/prepare_gait_subject.py` | Runs COMAK body scaling, writes the Stage-Y config (base = the scaled model), launches the runner. | sets up [3](deviations.md#mode-3-personalized-knee-scaled-to-the-gait-body) |
+| `comak_1_nsm_fitting.py` | **The** MRI→model build (`align → recon → assemble`). Against a reference base it's the standard build; against a config whose `paths.base_model_dir` is a Stage-X-scaled model it builds the knee into a body-scaled base. | [1](deviations.md#mode-1-personalized-knee-unscaled-reference-size-model) / [3](deviations.md#mode-3-personalized-knee-scaled-to-the-gait-body) |
+| `comak_1_nsm_model_run.py` (+ `submit_nsm_slurm_job.py`) | Queue/batch wrapper that loads a `--config` and drives the fit across subjects. | — |
+| `multigait/prepare_gait_subject.py` + `submit_stage_y.sh` | `prepare_*` runs COMAK body scaling (`scale_comak_model`), writes the Stage-Y config (`base_model_dir` → the scaled model), and prints the submit commands; `submit_stage_y.sh` then launches `comak_1_nsm_fitting.py` against that scaled base. | sets up [3](deviations.md#mode-3-personalized-knee-scaled-to-the-gait-body) |
 | `comak_1_synthetic.py` | Builds a model from latents via [`nsosim.decode`](reference/decode.md) (no MRI). | [5](deviations.md#mode-5-synthetic-knee-scaled-to-a-model) |
 
-!!! note "Production calls may override library defaults"
-    The library's defaults are not always what production selects. For example, the MRI driver
-    calls `build_joint_model(..., project_coronary=False)` even though the library default is
-    `True`. When tracing behavior, check the actual call site in `comak_gait_simulation`, not
-    just the nsosim default.
+!!! note "Production overrides some library defaults — verified example"
+    Production does not always use the library defaults. The MRI driver
+    (`comak_1_nsm_fitting.py:459`) calls `build_joint_model(..., project_coronary=False)`
+    even though the library default is `True`: projecting the coronary (meniscotibial)
+    ligament attachments straight onto the tibia (`True`) makes the menisci too taut. When
+    tracing behavior, check the actual call site in `comak_gait_simulation`, not the nsosim
+    default.
 
 ---
 
