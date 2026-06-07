@@ -10,33 +10,30 @@ docstrings — so they move with the code and never point at a stale line.
 
 ---
 
-## What the pipeline is trying to do (two scenarios)
+## What the pipeline is trying to do
 
 The library takes a knee (bone + cartilage geometry, from an MRI fit or a decoded latent)
-and drops it into a whole-body OpenSim/COMAK model so it can be simulated under a gait. The
-right thing to do with the knee's **size** depends on whose body it's going into:
+and drops it into a whole-body OpenSim/COMAK model so it can be simulated under a gait.
 
-| Scenario | Gait body vs. MRI knee | What we want the knee size to be | Status |
-|---|---|---|---|
-| **Cross-subject** | *different* people (e.g. an OAI knee simulated under someone else's gait) | roughly matched to the gait body — scale the knee to the body | **partially built — see the bug below** |
-| **Matched-subject** | the *same* person (the MRI subject *is* the gait subject) | the knee's true anatomical (MRI) size — don't normalize it away | **not implemented yet** |
+**Most builds use the unscaled model and just work.** A subject's knee comes out *reference
+size* after registration (below), and the default base model is also reference size — so a
+personalized knee dropped into it matches, with nothing to rescale. This is the standard
+personalized build ([Mode 1](deviations.md#mode-1-personalized-knee-unscaled-reference-size-model)),
+and it's the most common path.
 
-Both scenarios start the same way: every subject knee is **similarity-registered onto one
-fixed reference knee**, which divides the subject's true size out (it lands at "reference
-size"). They differ only in what scale is restored at the end:
+The **size** question only arises when the body is **scaled to a gait subject** (`s_wa`,
+[§5](#5-comak-body-scaling-and-how-it-meets-the-knee-build)). Then what the knee's size
+should be depends on whose gait it is:
 
-- **Cross-subject** wants the knee scaled to roughly fit the body it's being placed in.
-- **Matched-subject** wants the knee's original true size kept (or restored).
+- **A different person's gait** (e.g. an OAI knee under someone else's gait) — scale the knee
+  to the gait body's size. → currently an active **bug**: the body is scaled but the
+  swapped-in knee is not
+  ([Mode 3](deviations.md#mode-3-personalized-knee-scaled-to-the-gait-body)).
+- **The MRI subject's own gait** — keep the knee at its true MRI size instead. → **not
+  implemented** ([Mode 4](deviations.md#mode-4-personalized-knee-true-anatomical-size)).
 
-!!! bug "Current state: neither scenario gets the right size"
-    Today the knee comes out at **reference size** in both cases — it is neither scaled to
-    the gait body (cross-subject) nor kept at true MRI size (matched-subject). For
-    cross-subject this is an active bug (the body is scaled but the swapped-in knee is not);
-    see [§5](#5-comak-body-scaling-and-how-it-meets-the-knee-build) and
-    [Knee sizing Mode 2](deviations.md#mode-2-subject-knee-mri-sized-to-the-gait-body).
-    Matched-subject is simply unbuilt.
-
-The rest of this page describes the mechanics that make the above happen.
+The [knee sizing modes](deviations.md) page is the full catalog (it also covers the
+generic-knee and synthetic paths); the rest of *this* page is the mechanics behind them.
 
 ---
 
@@ -151,7 +148,7 @@ invokes):
     size from the reference, a rigid (no-scale) fit aligns *worse*. The more robust route to a
     true-size knee is therefore to register with `'similarity'` (which gets good shape
     correspondence) and **restore the removed scale afterwards** — see
-    [Mode 3](deviations.md#mode-3-subject-knee-mri-at-true-anatomical-size).
+    [Mode 4](deviations.md#mode-4-personalized-knee-true-anatomical-size).
 
 ---
 
@@ -198,7 +195,7 @@ instead of being decoded in isolation.
     MRI path doesn't call this converter at all — so **nothing currently resizes a knee** —
     but the capability exists.
 
-    This is the natural lever for the sizing fix (Mode 2, and building Mode 3, on the
+    This is the natural lever for the sizing fix (Mode 3, and building Mode 4, on the
     [knee sizing modes](deviations.md) page). Instead of pre-scaling the *reference* knee and
     registering each subject onto that scaled target, the cleaner design is to always
     similarity-register to the **one native reference knee**, then resize the result through
@@ -234,7 +231,7 @@ starts in NSMcanon, so it uses the full converter, where a `scale` *can* be appl
     too, which it doesn't have today. Two equivalent ways: route the MRI recon through the
     full converter's `scale` hook (instead of the REFALIGN-only converter), or just multiply
     the recon by the scale at the OSIM-entry point. Either is exactly what
-    [Mode 2](deviations.md#mode-2-subject-knee-mri-sized-to-the-gait-body) needs.
+    [Mode 3](deviations.md#mode-3-personalized-knee-scaled-to-the-gait-body) needs.
 
 !!! info "What `+ ref-center` is, and where it comes from"
     `ref-center` is **`fem_ref_center`** — the centroid of the *reference* femur in
@@ -311,7 +308,7 @@ see [§1](#1-the-coordinate-spaces); not the bone centroid), and resets the visu
 This bake scales the **reference** knee that ships in the base model — the design being
 "scale the reference knee with the body."
 
-!!! success "This works on its own (Mode 1)"
+!!! success "This works on its own (Mode 2)"
     Run COMAK body scaling by itself and you get a valid, runnable model with the reference
     knee resized to the gait body: the STLs are baked by `s_wa`, ScaleTool scales the joint
     frames/welds to match, and the masses come from AB. The Stage-X tests check exactly this
@@ -333,7 +330,7 @@ This bake scales the **reference** knee that ships in the base model — the des
     (and to `mean_patella`, the wrap-fit input, etc.) about the shared joint-center origin —
     or to adopt the cleaner "register-to-native-reference, then resize" design from
     [§3](#3-the-synthetic-decode-transform-chain-latent-opensim). Tracked as
-    [Knee sizing Mode 2](deviations.md#mode-2-subject-knee-mri-sized-to-the-gait-body).
+    [Knee sizing Mode 3](deviations.md#mode-3-personalized-knee-scaled-to-the-gait-body).
 
 ### The scaling report
 [`scale_comak_model`][nsosim.scaling.orchestrator.scale_comak_model] always writes a JSON

@@ -18,7 +18,8 @@ A browsable docs site lives under `docs/` and builds with mkdocs (`make docs`, o
   scaling (`s_wa`) meets the knee build. Read this before touching scaling or coordinate
   conversion.**
 - `docs/deviations.md` ("Knee sizing modes") — the ways to size a knee placed into a model
-  (generic / subject-body-sized / subject-true-size / synthetic), how each is achieved, and
+  (unscaled-model / generic-gait-scaled / subject-gait-scaled / subject-true-size /
+  synthetic), how each is achieved, and
   which are built (including the active reference-size-knee-in-a-scaled-body bug).
 
 Cross-references in the docs use mkdocstrings symbol links (never line numbers).

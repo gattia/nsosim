@@ -88,6 +88,7 @@ seed and inputs produce bit-identical mesh coordinates. Pass `seed=None` to opt 
 - **[Coordinate systems & pipeline](coordinate-systems.md)** — the spaces, the transform
   chain, and the COMAK-body-scaling ↔ knee-build interaction. The most important page.
 - **[Knee sizing modes](deviations.md)** — the ways to size a knee placed into a model
-  (generic / subject / true-size / synthetic), how each is achieved, and which are built
+  (unscaled-model / generic / gait-scaled / true-size / synthetic), how each is achieved, and
+  which are built
   (including the active reference-size-knee bug).
 - **API reference** — per-module docstrings (left nav).
