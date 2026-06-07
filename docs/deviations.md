@@ -51,9 +51,9 @@ that recon to the gait body by `s_wa`, so the shape ends up at the body's size.
     the model at it with `scale_factors = 1,1,1`
     ([`update_body_geometry_meshfile`][nsosim.osim_utils.update_body_geometry_meshfile] /
     [`update_contact_mesh_files`][nsosim.osim_utils.update_contact_mesh_files]); `s_wa` is
-    never applied to it. The result is a **reference-size knee inside an `s_wa`-scaled body**.
-    (The body-scaled reference bake from Mode 1 is still produced, but it has different
-    filenames and is simply left unused — see [Notes](#notes).)
+    never applied to it. The result is a **reference-size (unscaled) knee inside an
+    `s_wa`-scaled body**. (The body-scaled reference bake from Mode 1 is still produced, but it
+    has different filenames and is simply left unused — see [Notes](#notes).)
 
 **How to fix it (two routes).**
 
@@ -73,14 +73,17 @@ that recon to the gait body by `s_wa`, so the shape ends up at the body's size.
 **What you want.** The gait subject *is* the MRI subject — keep their real knee at its real
 size, rather than normalizing it to the reference.
 
-**How it would work.** Two routes:
+**How it would work.** Two routes — the first is usually safer:
 
+- **Store and restore the scale (preferred).** Register with `'similarity'` as usual — which
+  gets good shape correspondence regardless of how much the subject differs in size from the
+  reference — then **record** the scale it removed and **restore** it via the converter's
+  `scale` hook in [`convert_nsm_recon_to_OSIM`][nsosim.nsm_fitting.convert_nsm_recon_to_OSIM],
+  instead of leaving the knee at reference size.
 - **Don't divide the size out.** Register with `reg_mode='rigid'` (rotation + translation
-  only, no scale) so the recon stays at the subject's true size from the start.
-- **Store and restore the scale.** Register with `'similarity'` as usual, but record the
-  scale it removed and re-apply it (via the converter's `scale` hook in
-  [`convert_nsm_recon_to_OSIM`][nsosim.nsm_fitting.convert_nsm_recon_to_OSIM]) instead of
-  leaving the knee at reference size.
+  only) so the recon keeps true size from the start. Simpler, but a rigid (no-scale) fit
+  aligns *worse* when the subject's knee differs much in size from the reference — so the
+  similarity-then-restore route is usually the better choice.
 
 **Status: not implemented.** Neither route is wired as a complete, supported mode yet.
 
@@ -92,7 +95,7 @@ size, rather than normalizing it to the reference.
 interpolation) into any model, at an appropriate size.
 
 **How.** The decode path ([`nsosim.decode`](reference/decode.md)) already runs through the
-non-underscore [`convert_nsm_recon_to_OSIM`][nsosim.nsm_fitting.convert_nsm_recon_to_OSIM],
+full converter [`convert_nsm_recon_to_OSIM`][nsosim.nsm_fitting.convert_nsm_recon_to_OSIM],
 which carries the `scale` hook — but it is currently called with `scale = 1`, so the output
 lands at reference size. Resizing it up/down to a target model is the same lever as Modes 2
 and 3, just applied on the synthetic path.

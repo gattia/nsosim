@@ -58,6 +58,14 @@ The **MRI → OSIM** orientation change is a single fixed rotation/axis-swap,
 the "rotated into OpenSim axes" in the OSIM row above refers to — applied in every
 REFALIGN→OSIM conversion.
 
+!!! info "What 'MRI space' actually is"
+    MRI space is the segmentation mesh's **native anatomical frame** — its convention
+    (typically RAS or LPS) is set by the segmentation/imaging tool, not by nsosim, which reads
+    the meshes as-is and imposes no convention. Because the femur similarity registration in
+    the first step aligns the input onto the fixed reference, everything downstream is
+    agnostic to which convention the input used. *(If you want this pinned to your specific
+    pipeline's convention in the docs, tell me which segmentation tool produces the meshes.)*
+
 !!! info "Body-local frames and the knee joint center"
     "OSIM" *is* a body-local OpenSim frame. For the knee sub-bodies (`femur_distal_r`,
     `tibia_proximal_r`, `patella_r`, the two menisci) the body-local origin is the **knee
@@ -108,8 +116,8 @@ OSIM meshes ──────────────────────�
 Subject-specific COMAK .osim ───────────────────────── knee surfaces: m · reference size
 ```
 
-The same chain as a call tree (a function in parentheses is a **sub-function called by the
-one before it**):
+The same chain as a call tree (each **`— calls …`** entry lists the sub-functions that step
+invokes):
 
 - [`align_bone_osim_fit_nsm`][nsosim.nsm_fitting.align_bone_osim_fit_nsm] — per bone, driven by
   [`align_knee_osim_fit_nsm`][nsosim.nsm_fitting.align_knee_osim_fit_nsm]
@@ -136,24 +144,31 @@ one before it**):
     The similarity scale only happens when `reg_mode='similarity'` — which is the **default**
     on [`align_knee_osim_fit_nsm`][nsosim.nsm_fitting.align_knee_osim_fit_nsm] /
     [`align_bone_osim_fit_nsm`][nsosim.nsm_fitting.align_bone_osim_fit_nsm] (matching every
-    production caller). Pass `reg_mode='rigid'` to register with rotation + translation only,
-    which **preserves the subject's true size** (no normalization) — the natural starting
-    point for the matched-subject scenario.
+    production caller). `reg_mode='rigid'` registers with rotation + translation only and so
+    keeps the subject's true size — but with a caveat: if the subject's knee differs much in
+    size from the reference, a rigid (no-scale) fit aligns *worse*. The more robust route to a
+    true-size knee is therefore to register with `'similarity'` (which gets good shape
+    correspondence) and **restore the removed scale afterwards** — see
+    [Mode 3](deviations.md#mode-3-subject-knee-mri-at-true-anatomical-size).
 
 ---
 
 ## 3. The synthetic-decode transform chain (latent → OpenSim)
 
 Used to build a knee from an arbitrary latent — synthetic joints, shape-mode visualization,
-latent interpolation — with **no MRI target**. It is the inverse direction of fitting and,
-crucially, uses a **different converter** (the non-underscore one).
+latent interpolation — with **no MRI target**. It is the inverse direction of fitting and
+starts in NSMcanon, so it goes through the **full converter**
+[`convert_nsm_recon_to_OSIM`][nsosim.nsm_fitting.convert_nsm_recon_to_OSIM] (canonical → OSIM,
+which exposes a `scale`), rather than the REFALIGN-only converter the MRI path uses.
+
+The diagram below is the **single-bone** path:
 
 ```
 latent ─────────────────────────────────────────────── NSMcanon · dimensionless
    │
-   │ STEP  decode_latent_to_osim
+   │ STEP  decode_latent_to_osim   (one bone; for a full joint, see below)
    │   create_mesh (NSM)                         → NSMcanon meshes
-   │   convert_nsm_recon_to_OSIM (NON-underscore):
+   │   convert_nsm_recon_to_OSIM  (the full converter):
    │       undo_transform           NSMcanon → REFALIGN   (called with scale=1, center=0)
    │       convert_nsm_recon_to_OSIM_   REFALIGN → OSIM
    ▼
@@ -164,52 +179,60 @@ OSIM meshes ──────────────────────�
 Subject-specific COMAK .osim
 ```
 
-[`decode_latent_to_osim`][nsosim.decode.decode_latent_to_osim] handles **one bone**: it
-decodes the latent to NSMcanon meshes and converts each to OSIM.
-[`decode_joint_from_descriptors`][nsosim.decode.decode_joint_from_descriptors] builds a
-**whole joint** from three latents (femur, tibia, patella) plus *relative* transforms
-(`T_rel`) that say how the tibia and patella sit relative to the femur. It first turns each
-`T_rel` back into a per-bone alignment transform
-([`recover_bone_transform`][nsosim.transforms.recover_bone_transform]), then calls
-`decode_latent_to_osim` once per bone — so the three bones land in one consistent joint
-configuration instead of being decoded in isolation.
+[`decode_latent_to_osim`][nsosim.decode.decode_latent_to_osim] is the single-bone primitive
+shown above: one latent → NSMcanon meshes → OSIM. To build a **whole joint** you use
+[`decode_joint_from_descriptors`][nsosim.decode.decode_joint_from_descriptors], which wraps
+it: given three latents (femur, tibia, patella) plus *relative* transforms (`T_rel`) that say
+how the tibia and patella sit relative to the femur, it recovers each bone's alignment
+transform ([`recover_bone_transform`][nsosim.transforms.recover_bone_transform]) and then runs
+the single-bone path once per bone — so the three land in one consistent joint configuration
+instead of being decoded in isolation.
 
-!!! info "The scale hook — why it matters for the fix"
-    The non-underscore
+!!! info "The scale hook — the lever for the knee-sizing fix"
+    The full converter
     [`convert_nsm_recon_to_OSIM`][nsosim.nsm_fitting.convert_nsm_recon_to_OSIM] forwards a
-    `scale` argument into [`undo_transform`][nsosim.nsm_fitting.undo_transform]. A non-unit
+    `scale` argument into [`undo_transform`][nsosim.nsm_fitting.undo_transform]; a non-unit
     `scale` there applies an isotropic resize. The synthetic path passes `scale=1`, and the
     MRI path doesn't call this converter at all — so **nothing currently resizes a knee** —
     but the capability exists.
 
-    This is the natural lever for the planned fix. Instead of pre-scaling the *reference*
-    knee and registering each subject to that scaled target, the cleaner design is to always
+    This is the natural lever for the sizing fix (Mode 2, and building Mode 3, on the
+    [knee sizing modes](deviations.md) page). Instead of pre-scaling the *reference* knee and
+    registering each subject onto that scaled target, the cleaner design is to always
     similarity-register to the **one native reference knee**, then resize the result through
     this `scale` hook — up/down to the gait body (cross-subject) or back to true size
-    (matched-subject). See the [knee sizing modes](deviations.md).
+    (matched-subject).
 
 ---
 
 ## 4. Converter reference
 
-There are two converters per direction. The **underscore** version does only the
-REFALIGN↔OSIM leg (centre/units/orientation, no scale). The **non-underscore** version is
-the full canonical↔OSIM round-trip: it wraps the underscore version *and* the
-NSMcanon↔REFALIGN leg (`undo_transform` / `apply_transform`), and it is the only one that
-exposes a `scale`.
+There are two converters per direction, distinguished in the code by a trailing underscore.
+The **REFALIGN-only** version (`convert_nsm_recon_to_OSIM_`, with the underscore) does just
+the REFALIGN↔OSIM leg — centre, units, orientation; no scale. The **full** version
+(`convert_nsm_recon_to_OSIM`, no underscore) is the whole canonical↔OSIM round-trip: it
+*calls* the REFALIGN-only version and adds the NSMcanon↔REFALIGN leg (`undo_transform` /
+`apply_transform`), and it is the only one that exposes a `scale`.
 
 | Converter | What it does | Space in → out |
 |---|---|---|
-| [`convert_nsm_recon_to_OSIM_`][nsosim.nsm_fitting.convert_nsm_recon_to_OSIM_] (underscore) | REFALIGN → OSIM only: `+ ref-center`, mm→m, axis-swap. **No scale.** | mm, refsize → m, refsize |
-| [`convert_OSIM_to_nsm_`][nsosim.nsm_fitting.convert_OSIM_to_nsm_] (underscore) | exact inverse of the above | m, refsize → mm, refsize |
-| [`convert_nsm_recon_to_OSIM`][nsosim.nsm_fitting.convert_nsm_recon_to_OSIM] (no underscore) | full path: `undo_transform` (canonical→REFALIGN, **applies `scale`**) then the underscore leg | NSMcanon → m |
-| [`convert_OSIM_to_nsm`][nsosim.nsm_fitting.convert_OSIM_to_nsm] (no underscore) | full inverse: underscore leg then `apply_transform` (REFALIGN→canonical) | m → NSMcanon |
+| [`convert_nsm_recon_to_OSIM_`][nsosim.nsm_fitting.convert_nsm_recon_to_OSIM_] (REFALIGN-only) | REFALIGN → OSIM only: `+ ref-center`, mm→m, axis-swap. **No scale.** | mm, refsize → m, refsize |
+| [`convert_OSIM_to_nsm_`][nsosim.nsm_fitting.convert_OSIM_to_nsm_] (REFALIGN-only) | exact inverse of the above | m, refsize → mm, refsize |
+| [`convert_nsm_recon_to_OSIM`][nsosim.nsm_fitting.convert_nsm_recon_to_OSIM] (full) | `undo_transform` (canonical→REFALIGN, **applies `scale`**) then the REFALIGN-only leg | NSMcanon → m |
+| [`convert_OSIM_to_nsm`][nsosim.nsm_fitting.convert_OSIM_to_nsm] (full) | REFALIGN-only leg then `apply_transform` (REFALIGN→canonical) | m → NSMcanon |
 | [`undo_transform`][nsosim.nsm_fitting.undo_transform] | NSMcanon → REFALIGN, via the per-bone `linear_transform` (the only place a `scale` enters) | canon → mm |
 | [`apply_transform`][nsosim.nsm_fitting.apply_transform] | REFALIGN → NSMcanon (inverse of `undo_transform`) | mm → canon |
 
-In short: the **MRI path** already has its mesh in REFALIGN, so it only needs the
-underscore leg. The **synthetic/decode path** starts in NSMcanon, so it needs the full
-non-underscore converter (which is also where a resize could be applied).
+In short: the **MRI path** already has its mesh in REFALIGN, so it only uses the
+REFALIGN-only converter — which is *why* it has no `scale`. The **synthetic/decode path**
+starts in NSMcanon, so it uses the full converter, where a `scale` *can* be applied.
+
+!!! info "Resizing the MRI path"
+    Yes — to make MRI-built knees bigger/smaller we'd need to expose a scale on the MRI path
+    too, which it doesn't have today. Two equivalent ways: route the MRI recon through the
+    full converter's `scale` hook (instead of the REFALIGN-only converter), or just multiply
+    the recon by the scale at the OSIM-entry point. Either is exactly what
+    [Mode 2](deviations.md#mode-2-subject-knee-mri-sized-to-the-gait-body) needs.
 
 !!! info "What `+ ref-center` is, and where it comes from"
     `ref-center` is **`fem_ref_center`** — the centroid of the *reference* femur in
@@ -224,6 +247,13 @@ non-underscore converter (which is also where a resize could be applied).
     value is used for **all three bones** (not a per-subject, per-bone centre) — that is
     exactly what preserves their relative spatial layout (e.g. tibia ~50 mm distal to the
     femur condyles) when they land in OSIM.
+
+    **Does scaling have to account for `mean_orig`?** No. By the time a knee is in OSIM,
+    `mean_orig` is already baked into the vertex coordinates, and `s_wa` scaling happens about
+    the body-local **joint-center origin** — the same origin the reference bake uses
+    ([§1](#1-the-coordinate-spaces)). Scaling those coordinates about that shared origin
+    carries the position correctly, so no separate centre term is needed. It hasn't been
+    ignored — it's already in the numbers being scaled.
 
 **Per-bone `linear_transform`** (in each bone's `*_alignment.json`) maps REFALIGN → that
 bone's NSMcanon space. Its 3×3 block is `scale · R`, where **`R` is a proper rotation matrix**
@@ -277,9 +307,16 @@ see [§1](#1-the-coordinate-spaces); not the bone centroid), and resets the visu
 `Smith2018ContactMesh` loader ignores `scale_factors`, so contact STLs *must* be baked.)
 
 This bake scales the **reference** knee that ships in the base model — the design being
-"scale the reference knee with the body." That is genuinely useful on its own: it lets you
-take whatever knee the base model has and resize it to a different subject's gait body. The
-problem is what happens when a subject-specific knee is then swapped in.
+"scale the reference knee with the body."
+
+!!! success "This works on its own (Mode 1)"
+    Run COMAK body scaling by itself and you get a valid, runnable model with the reference
+    knee resized to the gait body: the STLs are baked by `s_wa`, ScaleTool scales the joint
+    frames/welds to match, and the masses come from AB. The Stage-X tests check exactly this
+    (cartilage–bone proximity, ligament reference strains, and wrap placement all hold up
+    after a non-trivial scale). So if you just want the **generic** knee at a new subject's
+    size, this is complete and correct. The problem is *only* the next step — swapping a
+    subject-specific knee in.
 
 !!! bug "The knee build doesn't inherit the body scale"
     When the knee build runs against a body-scaled base model, it writes the
@@ -289,10 +326,10 @@ problem is what happens when a subject-specific knee is then swapped in.
     recon is **never multiplied by `s_wa`**, and the body-scaled `smith2019-R-*.stl` bake —
     which has *different filenames* — is left orphaned on disk.
 
-    **Net result: a reference-size knee inside a body-scaled body** (the cross-subject case
-    from the top of this page). The fix is to apply `s_wa` to the recon (and to
-    `mean_patella`, the wrap-fit input, etc.) about the shared joint-center origin — or to
-    adopt the cleaner "register-to-native-reference, then resize" design from
+    **Net result: a reference-size (unscaled) knee inside a body-scaled body** (the
+    cross-subject case from the top of this page). The fix is to apply `s_wa` to the recon
+    (and to `mean_patella`, the wrap-fit input, etc.) about the shared joint-center origin —
+    or to adopt the cleaner "register-to-native-reference, then resize" design from
     [§3](#3-the-synthetic-decode-transform-chain-latent-opensim). Tracked as
     [Knee sizing Mode 2](deviations.md#mode-2-subject-knee-mri-sized-to-the-gait-body).
 
