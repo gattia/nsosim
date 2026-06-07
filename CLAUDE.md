@@ -14,7 +14,7 @@ A browsable docs site lives under `docs/` and builds with mkdocs (`make docs`, o
 
 - `docs/index.md` — architecture overview + module map + pipeline stages.
 - **`docs/coordinate-systems.md` — the canonical reference for the four coordinate spaces
-  (MRI / REFALIGN / NSMcanon / OSIM), the full transform chain, and how Stage X body
+  (MRI / REFALIGN / NSMcanon / OSIM), the full transform chain, and how COMAK body
   scaling (`s_wa`) meets the knee build. Read this before touching scaling or coordinate
   conversion.**
 - `docs/deviations.md` — the single list of known issues / wiring deviations (the

@@ -69,9 +69,15 @@ build into a browsable site with mkdocs:
 
 ```bash
 make docs-install   # one-time: installs mkdocs + mkdocstrings (into the active env)
-make docs           # build the static site to ./site
-make docs-serve     # live-preview at http://127.0.0.1:8000
+make docs-serve     # build + live-preview at http://127.0.0.1:8000 (easiest way to view)
+make docs           # just build the static site to ./site/
 ```
+
+**Viewing:** `make docs-serve` is the simplest way to read the docs — it serves a live,
+auto-reloading site at `http://127.0.0.1:8000`. Over SSH (e.g. VSCode Remote), the editor
+forwards that port automatically, so the localhost URL just works in your local browser.
+(You can also open `site/index.html` as a file after `make docs`, but a server avoids
+relative-path and font-loading quirks.)
 
 The docs build via static analysis (griffe), so it does **not** import `nsosim` — no
 opensim/torch/NSM needed to build the site. Start with [`docs/index.md`](docs/index.md)
