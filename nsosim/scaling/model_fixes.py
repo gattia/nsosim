@@ -1,4 +1,4 @@
-"""Source-model bug fix-ups applied at Stage X.
+"""Source-model bug fix-ups applied during COMAK body scaling.
 
 These are not scaling artifacts — they are permanent corrections to the base
 COMAK model that the legacy pipeline applied post-scaling and that downstream

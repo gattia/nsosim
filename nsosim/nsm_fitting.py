@@ -2,7 +2,7 @@
 
 Also home to the coordinate-conversion functions (``convert_nsm_recon_to_OSIM[_]``,
 ``convert_OSIM_to_nsm[_]``, ``apply_transform``/``undo_transform``). The four coordinate
-spaces (MRI / REFALIGN / NSMcanon / OSIM), the full transform chain, and how Stage X body
+spaces (MRI / REFALIGN / NSMcanon / OSIM), the full transform chain, and how COMAK body
 scaling (``s_wa``) meets the knee build are documented in ``docs/coordinate-systems.md``;
 pipeline-wiring deviations live in ``docs/deviations.md`` (rendered as the mkdocs site —
 see ``mkdocs.yml`` / ``make docs``).
@@ -37,7 +37,7 @@ def align_bone_osim_fit_nsm(
     bone,
     dict_bone,
     folder_save,
-    rigid_reg_type="rigid",  # 'similarity' or 'rigid'
+    rigid_reg_type="similarity",  # 'similarity' or 'rigid'
     acs_align=False,
     save_intermediate_cartilage=True,
     save_intermediate_men=True,
@@ -103,8 +103,10 @@ def align_bone_osim_fit_nsm(
             The dictionary is updated in place during the function execution.
         folder_save (str): Path to the directory where aligned and NSM-reconstructed
             meshes will be saved.
-        rigid_reg_type (str, optional): Type of rigid registration ('rigid' or
-            'similarity'). Defaults to 'rigid'.
+        rigid_reg_type (str, optional): Registration mode. ``'similarity'``
+            (rigid + isotropic scale → reference size) or ``'rigid'`` (rotation +
+            translation only → subject true size preserved). Defaults to
+            'similarity'.
         acs_align (bool, optional): Whether to perform ACS alignment for the femur.
             Defaults to False.
         save_intermediate_cartilage (bool, optional): Whether to save the aligned
@@ -329,7 +331,7 @@ def align_knee_osim_fit_nsm(
     folder_save_bones,
     n_samples_latent_recon=20_000,
     convergence_patience=10,
-    rigid_reg_type="rigid",
+    rigid_reg_type="similarity",
     acs_align=False,
     bones_to_ignore=["meniscus"],
     seed=0,
@@ -353,13 +355,10 @@ def align_knee_osim_fit_nsm(
         Subject inputs are MRI space (mm, subject-physical). Outputs (the
         ``*_mesh_nsm`` meshes and the ``*_nsm_recon_mm.vtk`` files) are REFALIGN
         — femur-aligned mm. Their scale identity follows ``rigid_reg_type``: with
-        ``'similarity'`` they are reference size (subject true scale divided out);
-        with ``'rigid'`` they keep subject size. The function default here is
-        ``'rigid'``; the production MRI pipeline
-        (``comak_1_nsm_fitting.align_knee_osim_fit_nsm`` call) passes
-        ``'similarity'``, so production reconstructions are reference size. The
-        per-bone ``*_alignment.json`` stores ``linear_transform`` (REFALIGN ->
-        NSMcanon similarity), ``scale``, and ``center``.
+        ``'similarity'`` (the default) they are reference size (subject true scale
+        divided out); with ``'rigid'`` they keep subject true size. The per-bone
+        ``*_alignment.json`` stores ``linear_transform`` (REFALIGN -> NSMcanon
+        similarity), ``scale``, and ``center``.
 
     Place in the pipeline:
         Stage 1 (NSM model fitting) of the MRI/fitting pipeline; the entry point
@@ -379,7 +378,9 @@ def align_knee_osim_fit_nsm(
             reconstruction. Defaults to 20_000.
         convergence_patience (int, optional): Patience for NSM fitting convergence.
             Defaults to 10.
-        rigid_reg_type (str, optional): Type of rigid registration. Defaults to 'rigid'.
+        rigid_reg_type (str, optional): Registration mode, passed to each
+            ``align_bone_osim_fit_nsm`` call. ``'similarity'`` → reference size,
+            ``'rigid'`` → subject true size. Defaults to 'similarity'.
         acs_align (bool, optional): Whether to perform ACS alignment for the femur.
             Defaults to False.
         seed (int or None, optional): Seed for all RNGs (PyTorch, CUDA, NumPy,

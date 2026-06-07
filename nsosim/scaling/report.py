@@ -1,4 +1,4 @@
-"""JSON sidecar for Stage X."""
+"""JSON sidecar for COMAK body scaling."""
 
 import json
 from pathlib import Path

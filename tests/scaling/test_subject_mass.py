@@ -1,4 +1,4 @@
-"""Stage X subject-mass + per-body mass transfer (the post-2026-05-31 fix).
+"""COMAK body-scaling subject-mass + per-body mass transfer (the post-2026-05-31 fix).
 
 Before the fix, ``scale_comak_model`` transferred only per-body geometric
 scale factors from the AB output to the COMAK base — body masses inherited

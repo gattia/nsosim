@@ -130,12 +130,13 @@ one before it**):
     (matched-subject) — is the missing piece; see
     [§5](#5-comak-body-scaling-and-how-it-meets-the-knee-build) and [Known issues](deviations.md).
 
-!!! info "`reg_mode` default vs. production"
-    The similarity scale only happens when `reg_mode='similarity'`. The function default on
-    [`align_knee_osim_fit_nsm`][nsosim.nsm_fitting.align_knee_osim_fit_nsm] is `'rigid'`, but
-    every production caller (`comak_1_nsm_fitting.py` in the comak repo) passes
-    `'similarity'`. The default therefore does not reflect real usage — a reasonable thing to
-    reconsider (make `'similarity'` the default, or make the argument required).
+!!! info "`reg_mode` (the size-normalization switch)"
+    The similarity scale only happens when `reg_mode='similarity'` — which is the **default**
+    on [`align_knee_osim_fit_nsm`][nsosim.nsm_fitting.align_knee_osim_fit_nsm] /
+    [`align_bone_osim_fit_nsm`][nsosim.nsm_fitting.align_bone_osim_fit_nsm] (matching every
+    production caller). Pass `reg_mode='rigid'` to register with rotation + translation only,
+    which **preserves the subject's true size** (no normalization) — the natural starting
+    point for the matched-subject scenario.
 
 ---
 

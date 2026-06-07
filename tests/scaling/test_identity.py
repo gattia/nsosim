@@ -1,6 +1,6 @@
 """Identity-scaling canary: s=1 in every body → spatial state matches base.
 
-If this fails, something in the Stage X wrapper is non-identity at identity.
+If this fails, something in the COMAK body-scaling wrapper is non-identity at identity.
 """
 
 from pathlib import Path

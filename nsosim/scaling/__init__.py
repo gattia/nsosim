@@ -1,4 +1,6 @@
-"""Stage X: COMAK body scaling from AddBiomechanics outputs.
+"""COMAK body scaling from AddBiomechanics outputs.
+
+(Referred to as "Stage X" in the cross-repo COMAK pipeline naming.)
 
 Public API: ``scale_comak_model``. Reads AB per-body scale factors from a
 match_markers_and_physics.osim, builds a ScaleSet, runs ScaleTool, bakes the

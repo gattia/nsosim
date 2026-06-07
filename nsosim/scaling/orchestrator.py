@@ -1,4 +1,4 @@
-"""Top-level orchestrator for Stage X (COMAK body scaling)."""
+"""Top-level orchestrator for COMAK body scaling (a.k.a. "Stage X")."""
 
 import logging
 import shutil
@@ -160,8 +160,8 @@ def scale_comak_model(
 ) -> Path:
     """Produce a scaled COMAK model from a base + AB output.
 
-    Place in the pipeline (Stage X):
-        This is the Stage-X orchestrator. It consumes AB's
+    Place in the pipeline (COMAK body scaling):
+        This is the COMAK body-scaling orchestrator. It consumes AB's
         ``match_markers_and_physics.osim`` (``ab_scaled_osim`` — source of the
         per-body scale factors in dimensionless ratios and the per-body
         physics-tuned masses in kg) plus a COMAK base model (``base_osim`` —
