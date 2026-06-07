@@ -50,8 +50,7 @@ def _per_body(p: Path) -> dict:
     m = osim.Model(str(p))
     m.initSystem()
     bs = m.getBodySet()
-    return {bs.get(i).getName(): float(bs.get(i).getMass())
-            for i in range(bs.getSize())}
+    return {bs.get(i).getName(): float(bs.get(i).getMass()) for i in range(bs.getSize())}
 
 
 @pytest.mark.slow
@@ -75,9 +74,9 @@ class TestSubjectMassTransfer:
         )
 
         out_total = _total_body_mass(out_osim)
-        assert out_total == pytest.approx(ab_total, rel=1e-5), (
-            f"output total {out_total} kg should match AB total {ab_total} kg"
-        )
+        assert out_total == pytest.approx(
+            ab_total, rel=1e-5
+        ), f"output total {out_total} kg should match AB total {ab_total} kg"
 
     def test_explicit_subject_mass_overrides_total(
         self,
@@ -126,9 +125,7 @@ class TestSubjectMassTransfer:
         ):
             assert k in r, f"report missing field: {k}"
         assert r["subject_mass_source"] == "ab_total_body_mass"
-        assert r["output_total_mass_kg"] == pytest.approx(
-            r["subject_mass_kg"], rel=1e-5
-        )
+        assert r["output_total_mass_kg"] == pytest.approx(r["subject_mass_kg"], rel=1e-5)
 
     def test_ab_per_body_preserved_in_distribution(
         self,

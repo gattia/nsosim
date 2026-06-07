@@ -246,7 +246,8 @@ def scale_comak_model(
         subject_mass_effective = _total_body_mass(ab_scaled_osim)
         log.info(
             "Auto-detected subject_mass=%.4f kg from AB model %s",
-            subject_mass_effective, ab_scaled_osim.name,
+            subject_mass_effective,
+            ab_scaled_osim.name,
         )
     else:
         subject_mass_effective = float(subject_mass)
@@ -301,9 +302,7 @@ def scale_comak_model(
         scale_set_dump[s.getSegmentName()] = (float(sf[0]), float(sf[1]), float(sf[2]))
     output_mass = _total_body_mass(output_osim)
     # Split the audit into the per-body table + scalar metadata before serialising.
-    per_body_audit = {
-        k: v for k, v in mass_audit.items() if not str(k).startswith("__")
-    }
+    per_body_audit = {k: v for k, v in mass_audit.items() if not str(k).startswith("__")}
     renormalize_correction = mass_audit.get("__renormalize_correction", 1.0)
     provisional_total = mass_audit.get("__provisional_total_kg", subject_mass_effective)
     write_report(
