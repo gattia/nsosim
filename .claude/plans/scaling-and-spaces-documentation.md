@@ -156,3 +156,64 @@ Design choice B (and/or the Pathway C true-size mode). Pre-identified injection 
 ## Open items
 
 - Whether the Stage-2 fan-out is run from the comak session (agents editing nsosim files) or by a dedicated agent inside the nsosim repo — owner's choice.
+
+---
+
+## Post-documentation review (AI assessment, 2026-06-07)
+
+A second AI did an independent assessment of the published docs against the code (39 focused
+tests passed; no files modified). Its findings, what was done, and what remains for the Stage-5
+fix plan. **The first item is the most important — it changes the fix design.**
+
+### CORRECTED — the converter `scale` argument is NOT the sizing lever (verified)
+Earlier doc drafts called the `scale` arg of the non-underscore
+`convert_nsm_recon_to_OSIM` the "natural/preferred lever" for resizing the knee. **That is
+wrong.** `scale` is applied to the points in **NSMcanon space, before** the per-bone inverse
+transform and the `+ fem_ref_center` shift, so it is the NSM canonical-normalization scale —
+not the femur similarity-registration scale, and not a clean OSIM resize.
+
+Verified numerically (real subject `tibia_alignment.json`): `convert_nsm_recon_to_OSIM(scale=2)`
+does **not** give `2×` the OSIM points. `out2 − 2·out1` is a constant offset
+(≈ `[−0.0004, +0.041, −0.001]` m), i.e. it scales about an **affine center ~4 cm from the
+joint-center origin** that **differs per bone** — so applying the same `scale` to the three
+bones would scale each about a different point and distort the joint.
+
+**The clean lever (use this in the fix):** a plain OSIM-space multiply about the shared
+joint-center origin (`osim_points *= s_wa`), the same operation `bake_knee_geometry` uses.
+Apply it **early — to the OSIM recon right after `nsm_recon_to_osim`, before the
+`build_joint_model` builders run** — so the articular surfaces, wrap fits, ligament/muscle
+attachments, menisci, fat pad, and `mean_patella` are all computed from correctly-sized
+geometry and need **no** per-quantity fix-up. (This supersedes the older "scale the recon AND
+mean_patella AND wrap input AND …" enumeration in the Stage-5 list above — scale once, early.)
+Docs corrected: `coordinate-systems.md` §3, §4; `deviations.md` Mode 3/4/5 + future-fix list.
+
+### OPEN — verification task for the fix (do before relying on the common-origin assumption)
+The docs assert recon and reference geometry share the joint-center origin "by construction"
+and that scaling about OSIM `(0,0,0)` preserves placement. Stage-1 measured the origin offsets
+empirically (femur 24.8 mm, tibia 54 mm from origin; the origin is the joint center, not the
+centroid) but there is **no permanent regression test**. Before the fix ships, add a test that
+scaling a built knee about OSIM `(0,0,0)` by `s_wa` preserves the intended placement for **every
+knee body** (femur_distal_r, tibia_proximal_r, patella_r, both menisci).
+
+### RESOLVED in the docs (no further action)
+- **REFALIGN frame vs scale identity** — the spaces table now defines REFALIGN as a *frame*,
+  with scale identity listed as `reg_mode`-dependent (reference size with `'similarity'`,
+  subject size with `'rigid'`). `coordinate-systems.md` §1.
+- **`build_joint_model` over-constrained to reference-size** — docstring now says the assembler
+  is size-agnostic; reference size is a property of *current callers*, not the function.
+- **"Most common" (Mode 1)** — labeled as a workflow observation, not a code-enforced fact.
+- **Consumer-script orchestration** — `index.md` now has a "How the library is driven in
+  production" table naming `comak_1_nsm_fitting.py`, `comak_1_nsm_model_run.py` +
+  `submit_nsm_slurm_job.py`, `multigait/prepare_gait_subject.py`, `comak_1_synthetic.py`, each
+  mapped to a sizing mode. (These live in the external `comak_gait_simulation` repo.)
+- **Production overrides** — `index.md` notes that production may override library defaults
+  (example: `build_joint_model(..., project_coronary=False)`); trace the real call site, not the
+  nsosim default, when reasoning about production behavior.
+
+### SCOPE DECISION — deviations.md now carries proposed fix designs (deliberate)
+The original plan boundary was "document current behavior + existing capabilities only." The
+owner subsequently asked for the deviations page to be reframed as a **knee-sizing modes
+catalog** that includes how each mode *would* be built. So `deviations.md` now contains
+proposed (unbuilt) fix designs for Modes 3–5, clearly labeled "not implemented / design sketch"
+(yellow admonitions). This is an intentional widening of scope, not an accuracy slip — the
+unbuilt content is marked as such and separated from the verified current-behavior description.
