@@ -1,8 +1,10 @@
 # nsosim.scaling
 
-**Stage X** — scale a whole-body COMAK base model to an AddBiomechanics (AB) subject.
-See [Coordinate systems & pipeline §5](../coordinate-systems.md) for how Stage X meets the
-knee build.
+**COMAK body scaling** — size a whole-body COMAK model to a subject by applying
+AddBiomechanics (AB) scale factors and masses to the full COMAK base model. (Called
+"Stage X" in the code/plans.) See
+[Coordinate systems & pipeline §5](../coordinate-systems.md) for how it meets the knee
+build.
 
 ## orchestrator
 

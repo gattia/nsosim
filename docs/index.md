@@ -26,10 +26,10 @@ full transform chain — with which converter is used where, and the scale ident
 hand-off — is documented in **[Coordinate systems & pipeline](coordinate-systems.md)**.
 **Read that page before touching the scaling or conversion code.**
 
-A separate **Stage X** body-scaling step ([`nsosim.scaling`](reference/scaling.md)) scales
-a whole-body COMAK base model to an AddBiomechanics subject; where it meets the knee build
-is covered in the coordinate-systems page §5, and the resulting wiring gaps are listed in
-**[Known deviations](deviations.md)**.
+A separate **COMAK body scaling** step ([`nsosim.scaling`](reference/scaling.md)) sizes a
+whole-body COMAK model to a subject by applying AddBiomechanics-derived scale factors and
+masses; where it meets the knee build (and the active bug there) is covered in the
+coordinate-systems page §5, with the full list in **[Known issues & deviations](deviations.md)**.
 
 ---
 
@@ -47,7 +47,7 @@ is covered in the coordinate-systems page §5, and the resulting wiring gaps are
 | [`osim_utils`](reference/osim_utils.md) | Low-level OpenSim XML manipulation via the Python API. |
 | [`utils`](reference/utils.md) | NSM model loading, mesh I/O, anatomical-coordinate-system (ACS) alignment helpers. |
 | [`schemas`](reference/schemas.md) | Input validation (`dict_bones`, surface indices). |
-| [`scaling`](reference/scaling.md) | **Stage X** — scale a COMAK base model to an AddBiomechanics subject (`s_wa`, knee-geometry bake, per-body mass transfer). |
+| [`scaling`](reference/scaling.md) | **COMAK body scaling** — size a COMAK base model to a subject from AddBiomechanics outputs (`s_wa`, knee-geometry bake, per-body mass transfer). Called "Stage X" in the scaling code. |
 | [`wrap_surface_fitting`](reference/wrap_surface_fitting.md) | PyTorch SDF optimization to adapt OpenSim wrap surfaces (cylinders, ellipsoids, patella) to new bone geometry. |
 
 ---
@@ -85,7 +85,7 @@ seed and inputs produce bit-identical mesh coordinates. Pass `seed=None` to opt 
 ## Where to go next
 
 - **[Coordinate systems & pipeline](coordinate-systems.md)** — the spaces, the transform
-  chain, and the Stage X ↔ knee-build interaction. The most important page.
-- **[Known deviations](deviations.md)** — where the wiring produces a reference-scale knee
-  in a scaled body, and the lever to change it.
+  chain, and the COMAK-body-scaling ↔ knee-build interaction. The most important page.
+- **[Known issues & deviations](deviations.md)** — where the wiring produces a reference-size
+  knee in a scaled body (an active bug), and the lever to change it.
 - **API reference** — per-module docstrings (left nav).

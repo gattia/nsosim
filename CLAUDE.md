@@ -17,8 +17,8 @@ A browsable docs site lives under `docs/` and builds with mkdocs (`make docs`, o
   (MRI / REFALIGN / NSMcanon / OSIM), the full transform chain, and how Stage X body
   scaling (`s_wa`) meets the knee build. Read this before touching scaling or coordinate
   conversion.**
-- `docs/deviations.md` — the single list of pipeline-wiring deviations (reference-scale
-  knee, Pathway-B `s_wa` gap, etc.) and the levers to change them.
+- `docs/deviations.md` — the single list of known issues / wiring deviations (the
+  reference-size-knee-in-a-scaled-body bug, the `s_wa` gap, etc.) and the levers to fix them.
 
 Cross-references in the docs use mkdocstrings symbol links (never line numbers).
 `tests/docs/test_doc_references.py` (pure stdlib, runs in any env) fails if a documented
