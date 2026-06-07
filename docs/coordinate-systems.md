@@ -19,7 +19,7 @@ and drops it into a whole-body OpenSim/COMAK model so it can be simulated under 
 size* after registration (below), and the default base model is also reference size — so a
 personalized knee dropped into it matches, with nothing to rescale. This is the standard
 personalized build ([Mode 1](deviations.md#mode-1-personalized-knee-unscaled-reference-size-model)),
-and it's the most common path.
+and in practice the most common path (a workflow observation, not something the code enforces).
 
 The **size** question only arises when the body is **scaled to a gait subject** (`s_wa`,
 [§5](#5-comak-body-scaling-and-how-it-meets-the-knee-build)). Then what the knee's size
@@ -46,7 +46,7 @@ size-normalized to the reference.
 | Space | Definition | Units | Scale identity |
 |---|---|---|---|
 | **MRI** | Subject segmentation mesh in its native DICOM (LPS) frame | mm | **subject-physical** — the subject's true anatomical size |
-| **REFALIGN** | Subject mesh after **similarity** registration onto the fixed `smith2019` reference bone (a.k.a. "femur-aligned mm") | mm | **reference size** — subject's true scale divided out by the similarity scale |
+| **REFALIGN** | The *frame* the subject mesh lands in after registration onto the fixed `smith2019` reference bone (a.k.a. "femur-aligned mm"); the common frame the NSM fit runs in | mm | **mode-dependent:** **reference size** with `reg_mode='similarity'` (the default — true scale divided out), **subject true size** with `'rigid'` |
 | **NSMcanon** | NSM training-normalized box ~[−1, 1]; each bone has its own canonical space | dimensionless | per-bone canonical |
 | **OSIM** | OpenSim body-local frame, produced by `convert_nsm_recon_to_OSIM_` (see [§4](#4-converter-reference)) | m | reference size, rotated into OpenSim axes |
 
@@ -187,20 +187,25 @@ transform ([`recover_bone_transform`][nsosim.transforms.recover_bone_transform])
 the single-bone path once per bone — so the three land in one consistent joint configuration
 instead of being decoded in isolation.
 
-!!! info "The scale hook — the lever for the knee-sizing fix"
+!!! warning "The converter `scale` argument is NOT a clean knee-resize"
     The full converter
     [`convert_nsm_recon_to_OSIM`][nsosim.nsm_fitting.convert_nsm_recon_to_OSIM] forwards a
-    `scale` argument into [`undo_transform`][nsosim.nsm_fitting.undo_transform]; a non-unit
-    `scale` there applies an isotropic resize. The synthetic path passes `scale=1`, and the
-    MRI path doesn't call this converter at all — so **nothing currently resizes a knee** —
-    but the capability exists.
+    `scale` into [`undo_transform`][nsosim.nsm_fitting.undo_transform], where it multiplies the
+    points **in NSMcanon space, before** the per-bone inverse transform and the `+ ref-center`
+    shift. So it is the NSM canonical-normalization scale — **not** the femur
+    similarity-registration scale, and **not** a clean resize of the final OSIM geometry.
 
-    This is the natural lever for the sizing fix (Mode 3, and building Mode 4, on the
-    [knee sizing modes](deviations.md) page). Instead of pre-scaling the *reference* knee and
-    registering each subject onto that scaled target, the cleaner design is to always
-    similarity-register to the **one native reference knee**, then resize the result through
-    this `scale` hook — up/down to the gait body (cross-subject) or back to true size
-    (matched-subject).
+    Verified numerically: setting `scale=2` does **not** double the OSIM points. It scales them
+    about an affine offset center (~4 cm from the joint-center origin for a test tibia) that
+    **differs per bone** — so using it to "resize the knee" would scale each of the three bones
+    about a different point and distort the joint.
+
+    The clean way to resize a built knee is a plain **OSIM-space multiply about the shared
+    joint-center origin** — `osim_points *= s_wa`, exactly what
+    [`bake_knee_geometry`][nsosim.scaling.knee_geometry.bake_knee_geometry] already does for the
+    reference knee. The synthetic path passes `scale=1` and the MRI path doesn't call this
+    converter at all, so nothing resizes a knee today. See the
+    [knee sizing modes](deviations.md) for the fix.
 
 ---
 
@@ -227,10 +232,12 @@ REFALIGN-only converter — which is *why* it has no `scale`. The **synthetic/de
 starts in NSMcanon, so it uses the full converter, where a `scale` *can* be applied.
 
 !!! info "Resizing the MRI path"
-    Yes — to make MRI-built knees bigger/smaller we'd need to expose a scale on the MRI path
-    too, which it doesn't have today. Two equivalent ways: route the MRI recon through the
-    full converter's `scale` hook (instead of the REFALIGN-only converter), or just multiply
-    the recon by the scale at the OSIM-entry point. Either is exactly what
+    The MRI path has no resize today. The clean way to add one is to multiply the OSIM-space
+    recon by the scale **about the joint-center origin** at the OSIM-entry point — a plain
+    `osim_points *= s_wa`, the same operation
+    [`bake_knee_geometry`][nsosim.scaling.knee_geometry.bake_knee_geometry] uses. This is *not*
+    the same as the converter's `scale` argument (which scales in canonical space about a
+    per-bone affine center — see the warning above). Scaling at the OSIM-entry point is what
     [Mode 3](deviations.md#mode-3-personalized-knee-scaled-to-the-gait-body) needs.
 
 !!! info "What `+ ref-center` is, and where it comes from"
@@ -254,12 +261,14 @@ starts in NSMcanon, so it uses the full converter, where a `scale` *can* be appl
     carries the position correctly, so no separate centre term is needed. It hasn't been
     ignored — it's already in the numbers being scaled.
 
-**Per-bone `linear_transform`** (in each bone's `*_alignment.json`) maps REFALIGN → that
-bone's NSMcanon space. Its 3×3 block is `scale · R`, where **`R` is a proper rotation matrix**
-(det +1) and `scale` is a single uniform factor (the same along every column). The JSON's
-separate `scale` and `center` fields are always `1` and `[0,0,0]` because the whole
-similarity (rotation + uniform scale + centring) is baked into the 4×4. See the repo-root
-`CLAUDE.md` "Per-bone linear_transform" section for the full structure.
+**Per-bone `linear_transform`** (in each bone's `*_alignment.json`) is the transform from the
+**registration-output frame** — REFALIGN, i.e. your mesh after it was registered onto the
+reference (similarity, in production) — into that bone's **NSM canonical/latent space**. Its
+3×3 block is `scale · R`, where **`R` is a proper rotation matrix** (det +1) and `scale` is a
+single uniform factor (the same along every column). The JSON's separate `scale` and `center`
+fields are always `1` and `[0,0,0]` because the whole similarity (rotation + uniform scale +
+centring) is baked into the 4×4. See the repo-root `CLAUDE.md` "Per-bone linear_transform"
+section for the full structure.
 
 ---
 
@@ -294,9 +303,15 @@ it also gets `s_wa`).
 ### Masses
 The full pipeline **does** set subject masses: after ScaleTool runs, the orchestrator's
 `_apply_per_body_masses` writes AB's physics-tuned per-body masses onto the model
-(renormalized so the total matches the subject), and rescales each body's inertia to match.
-(ScaleTool itself is run *without* `setSubjectMass`, so the mass change is entirely this
-later pass — geometry scaling and mass transfer are deliberately separated.)
+(renormalized so the total matches the subject). (ScaleTool itself is run *without*
+`setSubjectMass`, so the mass change is entirely this later pass — geometry scaling and mass
+transfer are deliberately separated.)
+
+The inertia is **not** recomputed from geometry — it is the body's existing inertia (already
+geometrically scaled by ScaleTool) multiplied by the **mass ratio** `new_mass / old_mass`.
+That's the consistent update: for a fixed shape, inertia is proportional to mass, so only the
+mass is being corrected here, not the mass distribution. (A from-scratch inertia from the
+meshes would be a different, larger change and isn't what this step does.)
 
 ### The knee geometry "bake"
 [`bake_knee_geometry`][nsosim.scaling.knee_geometry.bake_knee_geometry] multiplies each knee

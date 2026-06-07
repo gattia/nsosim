@@ -1086,9 +1086,14 @@ def build_joint_model(
 
     Coordinate space
     ----------------
-    Every mesh in ``bone_meshes`` is in **OSIM space** (metres, reference size,
-    rotated). All derived geometry (articular surfaces, wrap surfaces, meniscus
-    surfaces, fat pad) is produced and saved in OSIM metres. The patella is the
+    Every mesh in ``bone_meshes`` is in **OSIM space** (metres, rotated). The
+    assembler is size-agnostic: it builds whatever geometry it is handed and all
+    derived geometry (articular surfaces, wrap surfaces, meniscus surfaces, fat
+    pad) is produced and saved in the same OSIM metres. With *current* callers the
+    input is reference size (the MRI and synthetic paths both emit reference-size
+    OSIM meshes), but that is a property of those callers, not a requirement of
+    this function — a caller that scaled the meshes first (e.g. a future Mode-3
+    body-scaled build) would get correctly-sized derived geometry for free. The patella is the
     one exception in handling: this function consumes the non-centered patella
     meshes, saves them as ``*_original_position.vtk`` (OSIM space *before*
     centering), and does its own centering via ``center_patella_meshes`` — the
