@@ -48,7 +48,7 @@ size-normalized to the reference.
 
 | Space | Definition | Units | Scale identity |
 |---|---|---|---|
-| **MRI** | Subject segmentation mesh as it comes off the scanner | mm | **subject-physical** — the subject's true anatomical size |
+| **MRI** | Subject segmentation mesh in its native DICOM (LPS) frame | mm | **subject-physical** — the subject's true anatomical size |
 | **REFALIGN** | Subject mesh after **similarity** registration onto the fixed `smith2019` reference bone (a.k.a. "femur-aligned mm") | mm | **reference size** — subject's true scale divided out by the similarity scale |
 | **NSMcanon** | NSM training-normalized box ~[−1, 1]; each bone has its own canonical space | dimensionless | per-bone canonical |
 | **OSIM** | OpenSim body-local frame, produced by `convert_nsm_recon_to_OSIM_` (see [§4](#4-converter-reference)) | m | reference size, rotated into OpenSim axes |
@@ -59,12 +59,12 @@ the "rotated into OpenSim axes" in the OSIM row above refers to — applied in e
 REFALIGN→OSIM conversion.
 
 !!! info "What 'MRI space' actually is"
-    MRI space is the segmentation mesh's **native anatomical frame** — its convention
-    (typically RAS or LPS) is set by the segmentation/imaging tool, not by nsosim, which reads
-    the meshes as-is and imposes no convention. Because the femur similarity registration in
-    the first step aligns the input onto the fixed reference, everything downstream is
-    agnostic to which convention the input used. *(If you want this pinned to your specific
-    pipeline's convention in the docs, tell me which segmentation tool produces the meshes.)*
+    MRI space is the segmentation mesh's **native anatomical frame**. Following DICOM, the
+    convention is **LPS** — axes point toward the patient's **L**eft, **P**osterior, and
+    **S**uperior (the DICOM patient coordinate system; NIfTI/Slicer pipelines use RAS
+    instead). nsosim reads the meshes as-is and imposes no convention of its own; because the
+    femur similarity registration in the first step aligns the input onto the fixed reference,
+    everything downstream is agnostic to it anyway.
 
 !!! info "Body-local frames and the knee joint center"
     "OSIM" *is* a body-local OpenSim frame. For the knee sub-bodies (`femur_distal_r`,
