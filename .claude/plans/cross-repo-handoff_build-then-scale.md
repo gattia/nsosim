@@ -114,7 +114,11 @@ Mechanism corrections the old `SCALING_WORKFLOW_MAP.md` got wrong (do not propag
 
 - **Mode 4** (keep the knee at the subject's native MRI true size, "Pathway C") is **not
   implemented** in nsosim — design sketch only. Don't assume it exists.
-- A cross-check that build-then-scale ≈ fit-on-scaled-base hasn't been run (needs a fresh GPU fit
-  on a body-scaled base). Optional confidence check; see nsosim `.claude/plans/backlog.md`.
+- A cross-check that build-then-scale ≈ fit-on-scaled-base is **deprioritized — do not attempt at
+  this time.** The "fit at scale" pathway does not exist (it's the route we deliberately chose not
+  to build), so running it means first writing it + a GPU fit per subject; and the two are unlikely
+  to match anyway (non-linear build steps don't commute with scaling). A mismatch would **not**
+  invalidate build-then-scale — that's the chosen, verified route. See nsosim
+  `.claude/plans/backlog.md` for the full rationale and a cheap partial proxy if ever wanted.
 - The built-model test fixture is local-only (too large for git). If you want nsosim's end-to-end
   tests to run in CI, promote it to a GitHub Release (backlog).
