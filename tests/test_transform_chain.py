@@ -30,6 +30,7 @@ import pytest
 from pymskt.mesh import Mesh
 
 from nsosim.nsm_fitting import (
+    OSIM_TO_NSM_TRANSFORM,
     apply_transform,
     convert_nsm_recon_to_OSIM,
     convert_nsm_recon_to_OSIM_,
@@ -466,3 +467,99 @@ class TestFemRefCenter:
             tib_align = json.load(f)
         tib_mean_orig = np.array(tib_align["mean_orig"])
         assert not np.allclose(fem_ref_center, tib_mean_orig)
+
+
+# ==========================================================================
+# Converter `scale` argument is NOT a clean OSIM resize (documented warning)
+# ==========================================================================
+# Guards docs/coordinate-systems.md §3 + docs/deviations.md Mode 3 warning, and
+# the parent plan's "single most important correction": the `scale` arg of the
+# non-underscore convert_nsm_recon_to_OSIM is applied in NSMcanon space, BEFORE
+# the per-bone inverse transform and the +ref_center shift — so it is NOT a clean
+# OSIM-space resize. convert(scale=2) != 2 * convert(scale=1); the difference is a
+# CONSTANT per-bone offset that DIFFERS per bone, so using it to "resize the knee"
+# would scale each bone about a different center and distort the joint. The clean
+# lever is an OSIM-space multiply about the joint-center origin (bake_knee_geometry).
+# JSON-only (no mesh fixtures / GPU) — runs in the standard test env.
+
+_ZERO3 = np.zeros(3)
+
+
+def _canon_points(n=200):
+    """Deterministic pseudo-random points in the ~[-1, 1] NSMcanon box."""
+    rng = np.random.default_rng(0)
+    return rng.random((n, 3)) * 2.0 - 1.0
+
+
+def _osim_at_scale(canon_pts, linear_transform, scale, fem_ref_center):
+    return convert_nsm_recon_to_OSIM(
+        canon_pts.copy(),
+        linear_transform,
+        scale,
+        _ZERO3.copy(),
+        fem_ref_center.copy(),
+    )
+
+
+class TestConverterScaleArgIsNotCleanResize:
+    """The non-underscore converter's `scale` is a canonical-space scale, not a
+    clean OSIM resize. See docs/coordinate-systems.md §3."""
+
+    def test_scale_does_not_resize_about_osim_origin(self, subject_bone_align, fem_ref_center):
+        # The converter's `scale` resizes correctly in SIZE but about the image
+        # of the canonical origin (a per-bone, ~4cm-off-origin center), NOT about
+        # the OSIM joint-center origin — so the absolute points are not a clean
+        # 2x. (A clean OSIM resize about the origin would give out2 == 2*out1.)
+        L = subject_bone_align["linear_transform"]
+        p = _canon_points()
+        out1 = _osim_at_scale(p, L, 1, fem_ref_center)
+        out2 = _osim_at_scale(p, L, 2, fem_ref_center)
+        assert not np.allclose(out2, 2.0 * out1, atol=1e-6), (
+            f"{subject_bone_align['bone']}: convert(scale=2) unexpectedly equals "
+            "2x convert(scale=1) — the documented 'scale is not a clean resize "
+            "about the OSIM origin' behavior changed; revisit docs/coordinate-systems.md §3."
+        )
+
+    def test_difference_is_a_constant_offset(self, subject_bone_align, fem_ref_center):
+        L = subject_bone_align["linear_transform"]
+        p = _canon_points()
+        out1 = _osim_at_scale(p, L, 1, fem_ref_center)
+        out2 = _osim_at_scale(p, L, 2, fem_ref_center)
+        diff = out2 - 2.0 * out1
+        mean_offset = diff.mean(axis=0)
+        # The discrepancy is independent of the point (a pure offset): the spread
+        # across points is float cancellation noise (<1e-7 m = 1e-4 mm), not a
+        # point-dependent distortion (which would be ~0.1 m, the point magnitude).
+        assert np.abs(diff - mean_offset).max() < 1e-7
+        # ...and genuinely non-zero (an mm-scale offset / 1000 -> ~1e-3..1e-2 m).
+        assert np.linalg.norm(mean_offset) > 1e-4
+
+    def test_offset_matches_closed_form(self, subject_bone_align, fem_ref_center):
+        # out(s)_i = ((s*(A p_i) + b + rc)/1000) @ M.T  with A=inv(L)[:3,:3],
+        # b=inv(L)[:3,3], rc=fem_ref_center, M=OSIM_TO_NSM_TRANSFORM.
+        # => out2 - 2*out1 = (-(b + rc)/1000) @ M.T  (constant; per-bone via b).
+        L = subject_bone_align["linear_transform"]
+        b = np.linalg.inv(L)[:3, 3]
+        expected = (-(b + fem_ref_center) / 1000.0) @ OSIM_TO_NSM_TRANSFORM.T
+        p = _canon_points()
+        out1 = _osim_at_scale(p, L, 1, fem_ref_center)
+        out2 = _osim_at_scale(p, L, 2, fem_ref_center)
+        np.testing.assert_allclose((out2 - 2.0 * out1).mean(axis=0), expected, atol=1e-7)
+
+
+def test_converter_scale_offset_differs_per_bone(fem_ref_center):
+    """The per-bone offset differs across bones, so one `scale` applied to all
+    three bones would scale each about a different center and distort the joint.
+    Guards the 'differs per bone' claim in docs/coordinate-systems.md §3."""
+    offsets = []
+    for bone in BONES:
+        with open(os.path.join(SUBJECT_DIR, f"{bone}_alignment.json")) as f:
+            L = np.array(json.load(f)["linear_transform"])
+        b = np.linalg.inv(L)[:3, 3]
+        offsets.append((-(b + fem_ref_center) / 1000.0) @ OSIM_TO_NSM_TRANSFORM.T)
+    for i in range(len(offsets)):
+        for j in range(i + 1, len(offsets)):
+            assert not np.allclose(offsets[i], offsets[j], atol=1e-4), (
+                f"{BONES[i]} and {BONES[j]} share a converter-scale offset — the "
+                "'differs per bone' claim no longer holds."
+            )

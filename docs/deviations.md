@@ -76,10 +76,29 @@ scale that recon to the gait body by `s_wa`, so the shape ends up at the body's 
     `s_wa`-scaled body**. (The body-scaled reference bake from Mode 2 is still produced, but it
     has different filenames and is simply left unused — see [Notes](#notes).)
 
-**How to fix it.** Scale by `s_wa` with a plain OSIM-space multiply (`osim_points *= s_wa`)
-**about the joint-center origin** — the same operation
-[`bake_knee_geometry`][nsosim.scaling.knee_geometry.bake_knee_geometry] uses, **not** the
-converter's `scale` argument (see the warning below). The catch is that the knee build has
+**How to fix it — build, then scale (the clean route).** Run the standard personalized build
+once against a **reference** base (Mode 1), then run COMAK body scaling
+([`scale_comak_model`][nsosim.scaling.orchestrator.scale_comak_model]) on that *built* model
+instead of on the generic reference. By the time the model is built, **both** knee-geometry
+generators (below) have already run and their outputs are attached to the knee bodies, so the
+existing body-scaling machinery scales the whole knee with **no mid-build interception**:
+
+- [`bake_knee_geometry`][nsosim.scaling.knee_geometry.bake_knee_geometry] bakes *whatever STL
+  the knee bodies point at* (it reads `mesh_file` off the model), so it bakes the **recon**
+  STLs by `s_wa` about the joint-center origin — not the reference STLs;
+- OpenSim ScaleTool scales the **wraps, ligaments (slack lengths / reference strains), joint
+  frames, and muscles** — the same path Mode 2 already uses and that
+  `tests/scaling/test_nontrivial.py` already verifies (reference strains preserved ⇒ slack
+  lengths scaled with the path length).
+
+This is exactly the operation Mode 2 performs; the only new thing is that the attached geometry
+is a recon rather than the reference, and the GPU fit is amortized (fit once, scale many). The
+fix plan (`.claude/plans/knee-scaling-fix.md`) lists what to verify on a real built model:
+patella centering × scaling and the PF offset, the `project_coronary=False` meniscus path, and
+a regression test that scaling about OSIM `(0,0,0)` preserves placement for every knee body.
+
+**Alternative — intercept the two generators mid-build.** If you scale *during* a build
+(rather than scaling a finished model), there is no single place to do it: the knee build has
 **two independent geometry generators**, both emitting reference-size OSIM output, and you must
 scale **both**:
 
@@ -94,9 +113,11 @@ scale **both**:
    takes the warped labeled mesh) and **is** the ligament/muscle attachment positions. Scaling
    (1) alone leaves all of these at reference size.
 
-So scale each generator's OSIM output once, early, about the joint-center origin. (This is the
-"latent-interpolation" subtlety: ligaments and wraps are a *separate* product, not a readout of
-the bone mesh.)
+Either way, scale with a plain OSIM-space multiply (`osim_points *= s_wa`) about the
+joint-center origin — the same operation
+[`bake_knee_geometry`][nsosim.scaling.knee_geometry.bake_knee_geometry] uses — **not** the
+converter's `scale` argument. (Mid-build, this is the "latent-interpolation" subtlety:
+ligaments and wraps are a *separate* product, not a readout of the bone mesh.)
 
 !!! warning "Not the converter's `scale` argument"
     The natural-looking lever — passing a `scale` to
@@ -155,10 +176,18 @@ synthetic path.
 
 ## Notes
 
-**Scale both generators early, and the derived quantities follow.** There is no single place
-to scale — the recon meshes and the reference→subject warp are independent (see
-[Mode 3](#mode-3-personalized-knee-scaled-to-the-gait-body)). Scale each generator's OSIM output
-early and everything *downstream of each* is correct without per-quantity fix-up:
+**Build first, then scale — the two-generator problem only exists mid-build.** Once you have a
+*built* model, both generators below have already run and their outputs are attached to the
+knee bodies, so running COMAK body scaling on the built model scales everything at once (the
+recon bake + ScaleTool's wrap / ligament / frame scaling). The "two generators" caveat applies
+**only** if you try to scale *during* a build. See
+[Mode 3](#mode-3-personalized-knee-scaled-to-the-gait-body).
+
+**If you scale mid-build, scale both generators early, and the derived quantities follow.**
+There is no single place to scale — the recon meshes and the reference→subject warp are
+independent (see [Mode 3](#mode-3-personalized-knee-scaled-to-the-gait-body)). Scale each
+generator's OSIM output early and everything *downstream of each* is correct without
+per-quantity fix-up:
 
 - from the **recon meshes**: articular surfaces, meniscus surfaces, fat pad, and `mean_patella`
   (just the mean of the already-scaled patella vertices —
@@ -181,11 +210,22 @@ That's expected; keep the bake for Mode 2, the other modes simply don't use it.
 
 ## For the future fix plan
 
-A verified starting list:
+A verified starting list (full scope in `.claude/plans/knee-scaling-fix.md`):
 
-- **Scale both geometry generators by `s_wa` about the joint-center origin, early**, with a
-  plain OSIM-space multiply (**not** the converter's `scale` argument): (a) the recon meshes
-  from [`nsm_recon_to_osim`][nsosim.nsm_fitting.nsm_recon_to_osim] (covers articular surfaces,
+- **Primary — build, then scale.** Build the personalized knee against a reference base
+  (Mode 1), then run COMAK body scaling
+  ([`scale_comak_model`][nsosim.scaling.orchestrator.scale_comak_model]) on the *built* model.
+  This reuses the Mode-2 machinery wholesale — `bake_knee_geometry` bakes the attached recon
+  STLs, ScaleTool scales the wraps / ligaments (slacks) / frames / muscles — so the GPU fit is
+  amortized across gait subjects (fit once, scale many). Verify on a real built model: patella
+  centering × scaling and the PF offset, the `project_coronary=False` meniscus path, and add a
+  regression test that scaling about OSIM `(0,0,0)` by `s_wa` preserves placement for every
+  knee body (the slack/strain scaling is already covered by
+  `tests/scaling/test_nontrivial.py`).
+- **Alternative — mid-build interception.** Scale **both** geometry generators by `s_wa` about
+  the joint-center origin with a plain OSIM-space multiply (**not** the converter's `scale`
+  argument): (a) the recon meshes from
+  [`nsm_recon_to_osim`][nsosim.nsm_fitting.nsm_recon_to_osim] (covers articular surfaces,
   menisci, fat pad, `mean_patella`), **and** (b) the reference→subject warp output from
   [`interpolate_bone_ligaments`][nsosim.model_building.interpolate_bone_ligaments] / the
   meniscus-ligament warp (covers the wrap-fit input and the ligament/muscle attachments). See
@@ -197,4 +237,5 @@ A verified starting list:
 - For true size (Mode 4), prefer `'similarity'` registration + restore the recorded scale via
   the same OSIM-space multiply; `reg_mode='rigid'` is the simpler but weaker fallback.
 
-See `.claude/plans/scaling-and-spaces-documentation.md` (Stage 5) for the fix-plan scope.
+See `.claude/plans/scaling-and-spaces-documentation.md` (Stage 5) and
+`.claude/plans/knee-scaling-fix.md` for the fix-plan scope.

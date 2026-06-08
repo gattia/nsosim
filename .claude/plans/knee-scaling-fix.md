@@ -96,6 +96,21 @@ fix-implementer must check before trusting it.
 
 ## Verification tasks (write these tests as part of the fix)
 
+**Already locked (build on these, don't redo):**
+- `s_wa` formula + isotropic knee-body scaling + anisotropic non-knee passthrough —
+  `tests/scaling/test_scale_factors.py`.
+- Mode-2 scaling coherence: cart–bone proximity scales by `s_wa`, ligament **reference strains
+  preserved** (⇒ slacks scaled with path length), wrap translations stay in-body —
+  `tests/scaling/test_nontrivial.py`.
+- The converter `scale` arg is NOT a clean OSIM resize (use the OSIM-space multiply instead) —
+  `tests/test_transform_chain.py::TestConverterScaleArgIsNotCleanResize`.
+- Full MRI→OSIM transform chain / spaces / `fem_ref_center` — `tests/test_transform_chain.py`.
+
+**Strategy:** add a focused integration test alongside *each* mode as it is built (Mode 3 first,
+then 4/5), so the documented behavior of every mode gets a guard that fails if it regresses.
+
+**New tests for the Mode-3 fix:**
+
 - **Regression test for origin-scaling placement** (flagged by review, currently missing):
   scaling a built knee about OSIM `(0,0,0)` by `s_wa` must preserve the intended placement for
   **every** knee body (`femur_distal_r`, `tibia_proximal_r`, `patella_r`, both menisci). The

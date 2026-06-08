@@ -90,7 +90,7 @@ These entry points drive the library functions in the inventory below. They are 
 ## Stages
 
 ### Stage 0 — Lock the ground truth (cheap)
-- Treat the "Corrected findings" section above as canonical. (The comak `SCALING_WORKFLOW_MAP.md` will get a correction banner pointing here; do not write docstrings from its uncorrected mechanism text.)
+- Treat the "Corrected findings" section above as canonical. The comak `SCALING_WORKFLOW_MAP.md` is stale/partly-wrong — do not write docstrings from its uncorrected mechanism text. (Cleanup, when next in that repo: correct it in place, replace its body with a one-line pointer to `nsosim/docs/coordinate-systems.md` + `deviations.md`, or delete it if fully superseded — **no banner**, per owner preference 2026-06-07.)
 
 ### Stage 1 — Close the two unverified gaps (do before documenting)
 1. **Read `scaling/scaletool.py`** end-to-end: confirm what `ScaleTool.run()` does to the **knee joint frames / inertia / weld translations** before `bake_knee_geometry` runs. (Neither the walks nor the critic opened it — it's the one "assumed, not read" item.)
@@ -154,7 +154,7 @@ Design choice B (and/or the Pathway C true-size mode). Pre-identified injection 
 1. **Doc home:** `nsosim/docs/SCALING_AND_SPACES.md` + `SCALING_DEVIATIONS.md`. ✅ confirmed.
 2. **Pathway C / future modes:** document only what **exists in the code today** (the true-size restore hook #8). Do **not** write library docs for unbuilt code (a `scale_knee_bodies` flag, the choice-B injection) — that is future stuff for the Stage-5 fix plan. ✅
 3. **Stage 2 execution:** **fan out** agents to draft docstrings per-module against a strict style contract (space/units/scale identity), gated by one consolidation/review pass for consistency. ✅
-4. **comak-side map:** keep the **correction banner** on `SCALING_WORKFLOW_MAP.md` pointing here; full rewrite of its body is optional/not required. ✅
+4. **comak-side map:** ~~keep a correction banner on `SCALING_WORKFLOW_MAP.md`~~ — **superseded 2026-06-07 (owner: no banners).** When next in the comak repo, correct `SCALING_WORKFLOW_MAP.md` in place, replace its body with a one-line pointer to the nsosim docs, or delete it if fully superseded. Do not add a banner.
 
 ## Open items
 
@@ -227,6 +227,33 @@ knee body** (femur_distal_r, tibia_proximal_r, patella_r, both menisci).
 - **Production overrides** — `index.md` notes that production may override library defaults
   (example: `build_joint_model(..., project_coronary=False)`); trace the real call site, not the
   nsosim default, when reasoning about production behavior.
+
+### ALIGNED — docs now lead with "build, then scale" (2026-06-07, pre-fix review)
+A pre-fix review (against code) confirmed two facts the docs had under-stated, and aligned the
+docs with the chosen fix direction in [`knee-scaling-fix.md`](knee-scaling-fix.md):
+1. **`bake_knee_geometry` bakes whatever STL is *attached* to the knee bodies** (reads
+   `mesh.get_mesh_file()` off the model), not fixed reference filenames. The reference STLs are
+   baked today only because of pipeline **order** (body-scale the reference base → then build).
+   Run the bake on a *built* model and it bakes the recon. → `coordinate-systems.md` §5.
+2. **During body scaling, two mechanisms scale the knee:** the **mesh surfaces** via custom
+   `bake_knee_geometry` (JAM ignores `scale_factors`), and the **wraps / ligaments (slack
+   lengths) / frames / muscles** via OpenSim ScaleTool `extendPostScale`. Slack-length scaling
+   is ScaleTool's job during body scaling (the build-side `update_slack_lengths` is a *separate*
+   Stage-5 path) and is already verified by
+   `tests/scaling/test_nontrivial.py::test_blankevoort_reference_strain_preserved` (reference
+   strain preserved ⇒ slacks scaled). → `coordinate-systems.md` §5 Mode-2 success box.
+These two facts are why the fix plan's **build-then-scale** approach works and "dissolves the
+two-generator problem." `deviations.md` Mode 3 / Notes / "For the future fix plan" now lead with
+build-then-scale and demote mid-build interception to the alternative. Doc-reference test: 27
+passing.
+
+Also **locked the "single most important correction" with a permanent guard** (it was only
+ad-hoc-verified before): `TestConverterScaleArgIsNotCleanResize` +
+`test_converter_scale_offset_differs_per_bone` in `tests/test_transform_chain.py` (JSON-only,
+10 tests) assert `convert_nsm_recon_to_OSIM(scale=2) != 2×`, that the discrepancy is a constant
+per-bone offset matching the closed form `-(b+rc)/1000 @ OSIM_TO_NSM_TRANSFORM.T`, and that the
+offset differs per bone. `s_wa` isotropy for knee bodies was already locked by
+`tests/scaling/test_scale_factors.py::test_wa_factor_matches_worked_example`.
 
 ### SCOPE DECISION — deviations.md now carries proposed fix designs (deliberate)
 The original plan boundary was "document current behavior + existing capabilities only." The

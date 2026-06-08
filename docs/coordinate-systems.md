@@ -321,17 +321,31 @@ see [§1](#1-the-coordinate-spaces); not the bone centroid), and resets the visu
 `scale_factors` to `(1,1,1)` so the STL on disk is self-describing. (The JAM
 `Smith2018ContactMesh` loader ignores `scale_factors`, so contact STLs *must* be baked.)
 
-This bake scales the **reference** knee that ships in the base model — the design being
-"scale the reference knee with the body."
+This bake operates on **whatever STL each knee body currently points at** — it reads the
+attached-geometry / contact-mesh `mesh_file` off the model, not a fixed list of reference
+filenames. So *what* gets baked depends on what the model references at bake time, which is
+set by **order**: in the current pipeline, body scaling runs on the **reference base**
+*before* the knee build, so the bake lands on the reference knee STLs ("scale the reference
+knee with the body"). Run the same bake on a model whose knee bodies already point at a
+subject **recon** — i.e. body-scale a *built* model — and it bakes the recon instead. That
+is the lever the
+[Mode 3](deviations.md#mode-3-personalized-knee-scaled-to-the-gait-body) build-then-scale fix
+relies on.
 
 !!! success "This works on its own (Mode 2)"
     Run COMAK body scaling by itself and you get a valid, runnable model with the reference
-    knee resized to the gait body: the STLs are baked by `s_wa`, ScaleTool scales the joint
-    frames/welds to match, and the masses come from AB. The Stage-X tests check exactly this
-    (cartilage–bone proximity, ligament reference strains, and wrap placement all hold up
-    after a non-trivial scale). So if you just want the **generic** knee at a new subject's
-    size, this is complete and correct. The problem is *only* the next step — swapping a
-    subject-specific knee in.
+    knee resized to the gait body. **Two mechanisms** do the scaling, and which does what
+    matters for the fix: the knee **mesh surfaces** (bone visual + contact STLs) are baked by
+    `s_wa` via `bake_knee_geometry` (**custom** nsosim code — the JAM contact loader ignores
+    `scale_factors`), while the knee **wraps, ligaments (including slack lengths / reference
+    strains), joint frames, and muscles** are scaled by **OpenSim ScaleTool**'s
+    `extendPostScale` hooks ([`apply_scaletool`][nsosim.scaling.scaletool.apply_scaletool]);
+    the masses come from AB. The Stage-X tests check exactly this — cartilage–bone proximity,
+    **ligament reference strains preserved** (which can only hold if the slack lengths scaled
+    with the path length), and wrap placement all hold up after a non-trivial scale
+    (`tests/scaling/test_nontrivial.py`). So if you just want the **generic** knee at a new
+    subject's size, this is complete and correct. The problem is *only* the next step —
+    swapping a subject-specific knee in.
 
 !!! bug "The knee build doesn't inherit the body scale"
     When the knee build runs against a body-scaled base model, it writes the
@@ -342,11 +356,12 @@ This bake scales the **reference** knee that ships in the base model — the des
     which has *different filenames* — is left orphaned on disk.
 
     **Net result: a reference-size (unscaled) knee inside a body-scaled body** (the
-    cross-subject case from the top of this page). The fix is to apply `s_wa` to the recon
-    (and to `mean_patella`, the wrap-fit input, etc.) about the shared joint-center origin —
-    or to adopt the cleaner "register-to-native-reference, then resize" design from
-    [§3](#3-the-synthetic-decode-transform-chain-latent-opensim). Tracked as
-    [Knee sizing Mode 3](deviations.md#mode-3-personalized-knee-scaled-to-the-gait-body).
+    cross-subject case from the top of this page). The cleanest fix is to **reverse the
+    order** — build the personalized knee first (against a reference base), then run COMAK
+    body scaling on that *built* model, so the bake lands on the recon and ScaleTool scales
+    its wraps / ligaments / frames exactly as it does for Mode 2. Tracked as
+    [Knee sizing Mode 3](deviations.md#mode-3-personalized-knee-scaled-to-the-gait-body); the
+    fix plan is `.claude/plans/knee-scaling-fix.md`.
 
 ### The scaling report
 [`scale_comak_model`][nsosim.scaling.orchestrator.scale_comak_model] always writes a JSON
