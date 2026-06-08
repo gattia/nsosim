@@ -1,22 +1,56 @@
 # Plan: Document the Scale/Space Behaviour of the Knee-Build Pipeline (then prepare the `s_wa` fix)
 
-**Status:** Stages 0–4 **COMPLETE** (2026-06-07) — docstrings + the mkdocs site (`docs/`,
-`make docs`) are shipped and reviewed across several rounds. Stage 5 (the actual `s_wa` fix)
-is its own plan: [`knee-scaling-fix.md`](knee-scaling-fix.md) and is now **DONE & verified on
-the nsosim side** (2026-06-07): no core code change was needed — `scale_comak_model` already
-performs "build, then scale" when given a built model as `base_osim`; verified end-to-end on a
-real built model and covered by `tests/scaling/test_build_then_scale.py`. Modes 3 & 5 in
-`docs/deviations.md` are updated from "bug/partial" to "works". Remaining: the Pathway-B
-production wiring in the comak repo. See the **Handoff state & docs↔code trust** section at the
-bottom before continuing.
+**Status:** Complete (2026-06-08) — Stages 0–4 (docstrings + the mkdocs site, `docs/`,
+`make docs`) shipped and reviewed across several rounds. Stage 5 (the actual `s_wa` fix) is its
+own plan, [`knee-scaling-fix_COMPLETED.md`](knee-scaling-fix_COMPLETED.md), also done & verified
+on the nsosim side: no core code change was needed — `scale_comak_model` already performs "build,
+then scale" when given a built model as `base_osim`; verified end-to-end on a real built model and
+covered by `tests/scaling/test_build_then_scale.py`. Modes 3 & 5 in `docs/deviations.md` are
+updated from "bug/partial" to "works". Remaining work is external (Pathway-B production wiring in
+the comak repo), tracked in [`backlog.md`](../backlog.md). See **Completion Notes** and the **Handoff
+state & docs↔code trust** section before continuing.
 **Created:** 2026-06-06
 **Owner:** nsosim (this is where the scale/space logic lives; the comak repo only wires it).
 
 **Parent context:**
 - Investigation brief: `comak_gait_simulation/.claude/plans/NSM_CACHE_INVESTIGATION.md`
 - Raw investigation evidence (agent scratch — the corrected synthesis is in §"Corrected findings" below; the critique is the authoritative correction): `comak_gait_simulation/.claude/reports/scaling_map/` (`walk_1..4_*.md` + `consensus_critique.md`)
-- Stage X spec (authoritative for body scaling): [`completed/comak-body-scaling_COMPLETED.md`](completed/comak-body-scaling_COMPLETED.md)
-- Stage Y / knee-assembly spec: [`knee-assembly.md`](knee-assembly.md)
+- Stage X spec (authoritative for body scaling): [`comak-body-scaling_COMPLETED.md`](comak-body-scaling_COMPLETED.md)
+- Stage Y / knee-assembly spec: [`knee-assembly.md`](../knee-assembly.md)
+
+---
+
+## Completion Notes
+
+**Date completed:** 2026-06-08
+
+**Summary.** The scale/space behaviour of the knee-build pipeline is now documented accurately and
+in sync with the code: a four-space model (MRI / REFALIGN / NSMcanon / OSIM), the full MRI→model
+transform chain, the COMAK body-scaling interaction, and a 5-mode "knee sizing" catalog. Shipped
+as a mkdocs + mkdocstrings site under `docs/` with a stdlib guard test that fails if a documented
+symbol is renamed. Stage 5 (the actual fix) shipped separately and is verified — see
+[`knee-scaling-fix_COMPLETED.md`](knee-scaling-fix_COMPLETED.md).
+
+**Changes made (vs. the original plan — layout deviated, see "Handoff state" below).**
+- Docstrings across the scale/space call chain (`nsm_fitting`, `model_building`, `decode`,
+  `osim_utils`, `comak_osim_update`, `scaling/`).
+- `docs/coordinate-systems.md` (was `SCALING_AND_SPACES.md`), `docs/deviations.md` (the 5-mode
+  catalog, was `SCALING_DEVIATIONS.md`), `docs/index.md` production-driver table.
+- `tests/docs/test_doc_references.py` (symbol-reference guard); `tests/test_transform_chain.py`
+  converter-scale-arg guards.
+- Two code changes beyond docs: `rigid_reg_type` default → `'similarity'`; "Stage X" → "COMAK
+  body scaling" in the scaling-module docstrings.
+
+**Tests.** `tests/docs/test_doc_references.py` (27), the converter-scale-arg guards in
+`tests/test_transform_chain.py`, and `tests/scaling/` all pass. (The doc-reference guard's
+full-run encoding fragility was fixed under the Stage-5 plan, 2026-06-08.)
+
+**Things to note for future work.**
+- The deviations page deliberately includes **proposed/unbuilt** fix designs for Modes 3–5,
+  clearly labeled — an intentional scope widening (owner-requested) beyond "document current
+  behaviour only."
+- Remaining work is external (comak repo) and is tracked in [`backlog.md`](../backlog.md): correct or
+  delete the stale `SCALING_WORKFLOW_MAP.md`, and reorder Pathway-B to build-then-scale.
 
 ---
 
@@ -210,13 +244,14 @@ correction is the *lever* (OSIM-space multiply about the joint origin, not the c
 generator 2. Docs corrected: `coordinate-systems.md` §3, §4; `deviations.md` Mode 3/4/5 + Notes
 + future-fix list.
 
-### OPEN — verification task for the fix (do before relying on the common-origin assumption)
+### RESOLVED — origin-scaling regression test now exists (2026-06-08)
 The docs assert recon and reference geometry share the joint-center origin "by construction"
 and that scaling about OSIM `(0,0,0)` preserves placement. Stage-1 measured the origin offsets
 empirically (femur 24.8 mm, tibia 54 mm from origin; the origin is the joint center, not the
-centroid) but there is **no permanent regression test**. Before the fix ships, add a test that
-scaling a built knee about OSIM `(0,0,0)` by `s_wa` preserves the intended placement for **every
-knee body** (femur_distal_r, tibia_proximal_r, patella_r, both menisci).
+centroid). This is now covered by a **permanent regression test**:
+`tests/scaling/test_build_then_scale.py::TestOriginScalingPlacement` (every knee body's centroid
+scales by `s_wa` on the real built model) and `::TestReferenceOriginScalingPlacement` (the same
+on the in-repo reference base with a synthetic `s_wa = 0.9`, so it runs without the large fixture).
 
 ### RESOLVED in the docs (no further action)
 - **REFALIGN frame vs scale identity** — the spaces table now defines REFALIGN as a *frame*,
@@ -235,7 +270,7 @@ knee body** (femur_distal_r, tibia_proximal_r, patella_r, both menisci).
 
 ### ALIGNED — docs now lead with "build, then scale" (2026-06-07, pre-fix review)
 A pre-fix review (against code) confirmed two facts the docs had under-stated, and aligned the
-docs with the chosen fix direction in [`knee-scaling-fix.md`](knee-scaling-fix.md):
+docs with the chosen fix direction in [`knee-scaling-fix_COMPLETED.md`](knee-scaling-fix_COMPLETED.md):
 1. **`bake_knee_geometry` bakes whatever STL is *attached* to the knee bodies** (reads
    `mesh.get_mesh_file()` off the model), not fixed reference filenames. The reference STLs are
    baked today only because of pipeline **order** (body-scale the reference base → then build).
@@ -274,7 +309,7 @@ unbuilt content is marked as such and separated from the verified current-behavi
 
 **For the next agent.** This documentation effort is complete and the docs are safe to build
 the scaling fix on, *with the trust ratings below*. The fix itself is scoped in
-[`knee-scaling-fix.md`](knee-scaling-fix.md).
+[`knee-scaling-fix_COMPLETED.md`](knee-scaling-fix_COMPLETED.md).
 
 ### What was produced (vs. the original plan)
 - **Stage 1** (gaps): closed empirically — ScaleTool's effect on knee welds/inertia/mass and
@@ -314,13 +349,18 @@ the scaling fix on, *with the trust ratings below*. The fix itself is scoped in
   launches the Pathway-B build; `project_coronary=False` at `comak_1_nsm_fitting.py:459`
   (owner-confirmed: `True` makes menisci too taut).
 
-**Use with care (design sketches / not yet verified — do NOT treat as authoritative for impl):**
-- All "how to fix it" content for Modes 3–5 is **proposed**, not built or tested.
-- The claim that scaling about OSIM `(0,0,0)` preserves placement for *every* knee body is
-  grounded in measured origins but has **no regression test** — write one first (Stage-5 plan).
-- The "register to a pre-scaled reference gives the same result" alternative is unverified.
-- Patella centering × scaling, and the meniscus-ligament `project_coronary` variant, are open
-  design knots (see the fix plan).
+**Now verified (updated 2026-06-08 — Stage 5 shipped):**
+- Modes 3 & 5 ("build, then scale") are **built and tested** end-to-end on a real built model —
+  `tests/scaling/test_build_then_scale.py` (per-component scaling, origin placement, inertia,
+  coherence). Patella centering × scaling and the meniscus-ligament path are verified there too.
+- Scaling about OSIM `(0,0,0)` preserving placement for *every* knee body now has a permanent
+  regression test (`TestOriginScalingPlacement` / `TestReferenceOriginScalingPlacement`).
+
+**Use with care (still design sketches / not yet verified — do NOT treat as authoritative):**
+- **Mode 4** (keep native MRI true size) is **not implemented** — its "how to fix it" content is
+  a proposed design only.
+- The "register to a pre-scaled reference gives the same result" alternative is unverified
+  (the contingent fit-on-scaled-base cross-check — see the backlog).
 
 **Bottom line:** the *current-behavior* description and the corrected scaling mechanism are
 trustworthy; the *future-fix* designs are clearly-labeled starting points, not settled.
