@@ -31,7 +31,7 @@ def _collect_targets():
     """Return {dotted_target: source_md_relpath} for every autoref in docs/."""
     targets = {}
     for md in sorted(DOCS_DIR.rglob("*.md")):
-        text = md.read_text()
+        text = md.read_text(encoding="utf-8")
         for m in AUTOREF.finditer(text):
             targets.setdefault(m.group(1), md.relative_to(REPO_ROOT).as_posix())
     return targets
@@ -39,7 +39,11 @@ def _collect_targets():
 
 def _module_symbols(py_path: Path):
     """Top-level def/class names defined in a .py file (via ast, no import)."""
-    tree = ast.parse(py_path.read_text(), filename=str(py_path))
+    # encoding pinned: OpenSim/SimTK XML I/O elsewhere in a full pytest run can
+    # call setlocale() and flip the process default encoding to ASCII, which
+    # would otherwise make read_text() choke on the non-ASCII chars (em-dash,
+    # ·, kg·m²) in the documented module docstrings.
+    tree = ast.parse(py_path.read_text(encoding="utf-8"), filename=str(py_path))
     names = set()
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):

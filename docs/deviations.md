@@ -169,7 +169,9 @@ is identical with `bone_meshes` decoded from latents instead of fit from an MRI.
     A real Mode-1 build (an OAI knee) scaled to a *different* subject's gait body
     (`s_wa ≈ 0.973`) scales **every** knee component by `s_wa`:
     recon bone / cartilage / menisci / fat-pad STLs (per-vertex), wrap translations and radii,
-    all ligament/muscle attachment points, and the patella placement offset — and the scaled
+    all ligament/muscle attachment points (the full point set is preserved exactly — 181 ligament
+    + 5 muscle), the patella placement offset, and each knee body's inertia (specific inertia
+    `I/m` scales by `s_wa²`, the radius-of-gyration change) — and the scaled
     model still initializes. Cartilage-bone proximity and ligament reference strains are
     preserved (slacks scale with path length). Covered by
     `tests/scaling/test_build_then_scale.py` (the recon end-to-end) and
@@ -350,5 +352,5 @@ That's expected; keep the bake for Mode 2, the other modes simply don't use it.
   meniscus-ligament warp (covers the wrap-fit input and the ligament/muscle attachments).
   Build-then-scale (above) is strictly simpler and is the recommended route.
 
-See `.claude/plans/scaling-and-spaces-documentation.md` (Stage 5) and
-`.claude/plans/knee-scaling-fix.md` for the fix-plan scope.
+See `.claude/plans/completed/scaling-and-spaces-documentation_COMPLETED.md` (Stage 5) and
+`.claude/plans/completed/knee-scaling-fix_COMPLETED.md` for the fix-plan scope.

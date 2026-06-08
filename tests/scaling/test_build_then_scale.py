@@ -51,6 +51,15 @@ KNEE_BODIES = (
 
 PF_KNEE_COORDS = ("pf_tx_r", "pf_ty_r", "pf_tz_r")
 
+# Structural path-point counts on the knee bodies of a built Mode-1 model
+# (measured on the 9003175 fixture: 181 Blankevoort ligament points + 5 muscle
+# points). Scaling is a pure resize and must preserve the point set exactly, so
+# the tests assert before==after set-equality (catches any silent drop/add) AND
+# a floor at these counts. A loose floor like ">= 50" would let a silent loss of
+# 100+ points pass unnoticed.
+N_KNEE_LIGAMENT_POINTS = 181
+N_KNEE_MUSCLE_POINTS = 5
+
 # Tolerances are pinned to the MEASURED numerical precision of each mechanism
 # (verified on the real built model, RSubject_121 s_wa), NOT loose round numbers.
 # Use direct abs() comparisons, never pytest.approx(abs=...): approx keeps a
@@ -267,6 +276,22 @@ def _coord_defaults(model_path: Path, names) -> Dict[str, float]:
     return {n: float(cs.get(n).getDefaultValue()) for n in names}
 
 
+def _gather_knee_mass_inertia(model_path: Path) -> Dict[str, Tuple[float, np.ndarray]]:
+    """{body: (mass_kg, diagonal_moments[3])} for each knee body. The diagonal
+    moments of inertia (kg·m²) are enough for the radius-of-gyration check."""
+    m = osim.Model(str(model_path))
+    m.initSystem()
+    out: Dict[str, Tuple[float, np.ndarray]] = {}
+    bs = m.getBodySet()
+    for i in range(bs.getSize()):
+        b = bs.get(i)
+        if b.getName() not in KNEE_BODIES:
+            continue
+        mom = b.getInertia().getMoments()
+        out[b.getName()] = (float(b.getMass()), np.array([mom[0], mom[1], mom[2]]))
+    return out
+
+
 # --- per-component scaling --------------------------------------------------
 
 
@@ -376,9 +401,16 @@ class TestBuiltModelScalesByWA:
         the patella) must scale by s_wa like every other knee attachment."""
         before = _gather_knee_muscle_points(built_mode1_model_path)
         after = _gather_knee_muscle_points(built_subject_scaled_model)
-        common = set(before) & set(after)
-        assert len(common) >= 4, f"expected quadriceps points on knee bodies, got {sorted(common)}"
-        for k in common:
+        # Scaling is a pure resize: the point set must be invariant (no silent
+        # drop/add/rename), and every point present must scale by s_wa.
+        assert set(before) == set(after), (
+            f"scaling changed the knee muscle path-point set "
+            f"(before {len(before)}, after {len(after)})"
+        )
+        assert (
+            len(before) >= N_KNEE_MUSCLE_POINTS
+        ), f"expected >= {N_KNEE_MUSCLE_POINTS} knee muscle points, got {sorted(before)}"
+        for k in before:
             nb = np.linalg.norm(before[k])
             if nb <= 1e-6:
                 continue
@@ -392,18 +424,60 @@ class TestBuiltModelScalesByWA:
     ):
         before = _gather_knee_ligament_points(built_mode1_model_path)
         after = _gather_knee_ligament_points(built_subject_scaled_model)
-        common = set(before) & set(after)
-        assert len(common) >= 50, f"expected many knee ligament points, got {len(common)}"
-        ratios = []
-        for k in common:
-            nb = np.linalg.norm(before[k])
-            if nb > 1e-6:
-                ratios.append(np.linalg.norm(after[k]) / nb)
-        ratios = np.array(ratios)
+        # Scaling is a pure resize: the full ligament point set must survive
+        # unchanged. before==after set-equality catches any silent point loss
+        # (a ">= 50" floor would have let a 100+ point drop pass), and np.all
+        # over the *whole* set requires every one to scale by exactly s_wa.
+        assert set(before) == set(after), (
+            f"scaling changed the knee ligament path-point set "
+            f"(before {len(before)}, after {len(after)})"
+        )
+        assert (
+            len(before) >= N_KNEE_LIGAMENT_POINTS
+        ), f"expected >= {N_KNEE_LIGAMENT_POINTS} knee ligament points, got {len(before)}"
+        ratios = np.array(
+            [
+                np.linalg.norm(after[k]) / np.linalg.norm(before[k])
+                for k in before
+                if np.linalg.norm(before[k]) > 1e-6
+            ]
+        )
         assert np.all(np.abs(ratios - s_wa) < TOL_EXACT), (
             f"ligament points did not all scale by s_wa={s_wa:.12f} "
             f"(max dev {np.max(np.abs(ratios - s_wa)):.2e})"
         )
+
+    def test_knee_inertia_scales_by_s_wa_squared(
+        self, built_mode1_model_path, built_subject_scaled_model, s_wa
+    ):
+        """Each knee body's *specific* inertia (I/m = squared radius of gyration)
+        must scale by exactly s_wa**2 — the physically correct inertia change for
+        an isotropic s_wa resize, independent of the mass the two-pass assigns.
+
+        ScaleTool applies the s_wa geometric factor to the inertia tensor; the
+        orchestrator two-pass then rescales inertia only by the mass ratio
+        (orchestrator.py:121-126). So I/m isolates the geometry and the mass
+        bookkeeping cancels: (I/m)_scaled / (I/m)_base == s_wa**2 for every knee
+        body (measured to ~2e-16 on the RSubject_121 fixture). This guards that
+        inertia is not left unscaled (or double-scaled) when the knee is resized.
+        """
+        before = _gather_knee_mass_inertia(built_mode1_model_path)
+        after = _gather_knee_mass_inertia(built_subject_scaled_model)
+        s2 = s_wa * s_wa
+        checked = []
+        for body in KNEE_BODIES:
+            assert body in before and body in after, f"no inertia for knee body {body}"
+            m0, i0 = before[body]
+            m1, i1 = after[body]
+            assert m0 > 1e-9 and m1 > 1e-9, f"{body}: non-positive mass ({m0} -> {m1})"
+            assert np.all(i0 > 0), f"{body}: non-positive base inertia {i0}"
+            ratio = (i1 / m1) / (i0 / m0)
+            assert np.all(np.abs(ratio - s2) < TOL_EXACT), (
+                f"{body}: specific inertia (I/m) scaled by {ratio}, expected "
+                f"s_wa^2={s2:.12f} (max dev {np.max(np.abs(ratio - s2)):.2e})"
+            )
+            checked.append(body)
+        assert len(checked) == len(KNEE_BODIES), f"only inertia-checked {checked}"
 
     def test_scaled_model_initializes(self, built_subject_scaled_model):
         """A scaled built model must still load and realize — i.e. be runnable."""
