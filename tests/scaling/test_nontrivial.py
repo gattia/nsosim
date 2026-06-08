@@ -181,16 +181,19 @@ class TestSubjectNontrivial:
         p95_b, p95_s = float(np.percentile(d_base, 95)), float(np.percentile(d_subj, 95))
         expected_mean = mean_b * s_wa
         expected_p95 = p95_b * s_wa
-        # 0.5 mm = 0.0005 m absolute tolerance (per plan)
-        assert abs(mean_s - expected_mean) < 5e-4, (
+        # Cart-bone distances scale by s_wa to ~1e-9 m (measured worst p95 dev
+        # 9.3e-10 m on this reference knee — STL write precision; the kdtree
+        # nearest-neighbour pairing is scale-invariant). 1e-8 m keeps ~10x
+        # margin while being 5e4x tighter than the original "0.5 mm" guess.
+        assert abs(mean_s - expected_mean) < 1e-8, (
             f"{bone_body}: cart-bone mean drifted. "
-            f"baseline={mean_b:.6f}m, scaled={mean_s:.6f}m, "
-            f"expected={expected_mean:.6f}m (s_wa={s_wa:.4f})"
+            f"baseline={mean_b:.8f}m, scaled={mean_s:.8f}m, "
+            f"expected={expected_mean:.8f}m (s_wa={s_wa:.4f})"
         )
-        assert abs(p95_s - expected_p95) < 5e-4, (
+        assert abs(p95_s - expected_p95) < 1e-8, (
             f"{bone_body}: cart-bone p95 drifted. "
-            f"baseline={p95_b:.6f}m, scaled={p95_s:.6f}m, "
-            f"expected={expected_p95:.6f}m"
+            f"baseline={p95_b:.8f}m, scaled={p95_s:.8f}m, "
+            f"expected={expected_p95:.8f}m"
         )
 
     def test_blankevoort_reference_strain_preserved(self, base_model, subj_model):
@@ -198,10 +201,15 @@ class TestSubjectNontrivial:
         s = _gather_blankevoort(subj_model)
         common = set(b) & set(s)
         assert len(common) >= 80, "expected at least 80 ligaments to compare"
+        # Reference strain (path - slack)/slack is preserved EXACTLY: path and
+        # slack scale by the same factor, so it cancels. Measured max drift
+        # 1.3e-16 (machine eps) here; assert at 1e-12 (direct abs, not
+        # pytest.approx whose default rel=1e-6 would mask this).
         for name in common:
-            assert s[name]["ref_strain"] == pytest.approx(b[name]["ref_strain"], abs=1e-4), (
-                f"{name}: reference strain drifted "
-                f"({b[name]['ref_strain']:.6f} → {s[name]['ref_strain']:.6f})"
+            drift = abs(s[name]["ref_strain"] - b[name]["ref_strain"])
+            assert drift < 1e-12, (
+                f"{name}: reference strain drifted by {drift:.2e} "
+                f"({b[name]['ref_strain']:.6f} -> {s[name]['ref_strain']:.6f})"
             )
 
     def test_wrap_translations_inside_parent_aabb(self, subj_model, subj_geom):

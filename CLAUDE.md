@@ -19,8 +19,10 @@ A browsable docs site lives under `docs/` and builds with mkdocs (`make docs`, o
   conversion.**
 - `docs/deviations.md` ("Knee sizing modes") — the ways to size a knee placed into a model
   (unscaled-model / generic-gait-scaled / subject-gait-scaled / subject-true-size /
-  synthetic), how each is achieved, and
-  which are built (including the active reference-size-knee-in-a-scaled-body bug).
+  synthetic), how each is achieved, and which are built. Modes 3 & 5 (personalized/synthetic
+  knee scaled to a gait body) are done via **build, then scale** — run `scale_comak_model` on
+  a built model; verified in `tests/scaling/test_build_then_scale.py`. The Pathway-B production
+  wiring (comak repo) still needs to adopt that order; Mode 4 (true size) is not implemented.
 
 Cross-references in the docs use mkdocstrings symbol links (never line numbers).
 `tests/docs/test_doc_references.py` (pure stdlib, runs in any env) fails if a documented

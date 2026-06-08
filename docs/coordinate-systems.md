@@ -26,8 +26,8 @@ The **size** question only arises when the body is **scaled to a gait subject** 
 should be depends on whose gait it is:
 
 - **A different person's gait** (e.g. an OAI knee under someone else's gait) — scale the knee
-  to the gait body's size. → currently an active **bug**: the body is scaled but the
-  swapped-in knee is not
+  to the gait body's size. → done in the library via **build, then scale** (run COMAK body
+  scaling on the *built* model); production wiring still pending
   ([Mode 3](deviations.md#mode-3-personalized-knee-scaled-to-the-gait-body)).
 - **The MRI subject's own gait** — keep the knee at its true MRI size instead. → **not
   implemented** ([Mode 4](deviations.md#mode-4-personalized-knee-true-anatomical-size)).
@@ -347,21 +347,26 @@ relies on.
     subject's size, this is complete and correct. The problem is *only* the next step —
     swapping a subject-specific knee in.
 
-!!! bug "The knee build doesn't inherit the body scale"
-    When the knee build runs against a body-scaled base model, it writes the
-    **reference-size recon** (`femur_nsm_recon_osim.stl`, …) and repoints the `.osim` at it
-    ([`save_geometry_files`][nsosim.model_building.save_geometry_files] copies the new files;
-    the `update_*` helpers repoint via `set_mesh_file`; `scale_factors` stay `1,1,1`). The
-    recon is **never multiplied by `s_wa`**, and the body-scaled `smith2019-R-*.stl` bake —
-    which has *different filenames* — is left orphaned on disk.
+!!! success "Build, then scale — the personalized knee inherits the body scale"
+    Run the two steps **in this order** and the whole personalized knee is sized to the gait
+    body: build the personalized (or synthetic) knee first against a **reference** base, then
+    run COMAK body scaling on that *built* model. The bake lands on the **recon** STLs (it reads
+    `mesh_file` off the model — [`bake_knee_geometry`][nsosim.scaling.knee_geometry.bake_knee_geometry]),
+    and ScaleTool scales the recon knee's wraps / ligaments / frames / muscles and the patella
+    placement offset by `s_wa` — exactly as it does for the reference knee in Mode 2. Verified
+    end-to-end on a real built model (`tests/scaling/test_build_then_scale.py`): every knee
+    component scales by `s_wa` and the GPU fit is amortized across gait subjects (fit once, scale
+    many). See [Knee sizing Mode 3](deviations.md#mode-3-personalized-knee-scaled-to-the-gait-body).
 
-    **Net result: a reference-size (unscaled) knee inside a body-scaled body** (the
-    cross-subject case from the top of this page). The cleanest fix is to **reverse the
-    order** — build the personalized knee first (against a reference base), then run COMAK
-    body scaling on that *built* model, so the bake lands on the recon and ScaleTool scales
-    its wraps / ligaments / frames exactly as it does for Mode 2. Tracked as
-    [Knee sizing Mode 3](deviations.md#mode-3-personalized-knee-scaled-to-the-gait-body); the
-    fix plan is `.claude/plans/knee-scaling-fix.md`.
+    The order matters because the **wrong** order silently mis-sizes the knee: if the knee build
+    runs against an *already* body-scaled base, it writes the **reference-size recon**
+    (`femur_nsm_recon_osim.stl`, …) and repoints the `.osim` at it with `scale_factors = 1,1,1`
+    ([`save_geometry_files`][nsosim.model_building.save_geometry_files] +
+    [`update_body_geometry_meshfile`][nsosim.osim_utils.update_body_geometry_meshfile]) — the
+    recon is never multiplied by `s_wa`, leaving a **reference-size knee inside a body-scaled
+    body** (and the body-scaled `smith2019-R-*.stl` bake, with different filenames, orphaned on
+    disk). The current Pathway-B production scripts (in the `comak_gait_simulation` repo) still
+    use that wrong order; adopting build-then-scale there is the remaining integration step.
 
 ### The scaling report
 [`scale_comak_model`][nsosim.scaling.orchestrator.scale_comak_model] always writes a JSON

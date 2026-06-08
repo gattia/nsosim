@@ -172,6 +172,24 @@ def scale_comak_model(
         translations are in meters, masses in kg, inertia in kg·m², and all
         scale factors are dimensionless ratios (1.0 = no change).
 
+    Build, then scale (the personalized-knee path):
+        ``base_osim`` may be the *generic reference* COMAK model (scales the
+        reference knee to the gait body — "Mode 2") OR an already-built
+        personalized model: a Mode-1 MRI build or a synthetic decode whose recon
+        knee has been swapped onto the knee bodies. Because ``bake_knee_geometry``
+        bakes *whatever STL each knee body points at* (it reads ``mesh_file`` off
+        the model) and ScaleTool scales the wraps / ligaments / joint frames /
+        muscles and the patella placement offset (``pf_tx/ty/tz_r``), running
+        this on a *built* model scales the whole personalized knee by ``s_wa`` —
+        no mid-build interception and no GPU re-fit. That is the "build, then
+        scale" route (``docs/deviations.md`` Mode 3 for MRI builds, Mode 5 for
+        synthetic), which amortizes the expensive NSM fit across gait subjects:
+        build once on a reference base, then scale the built model per subject.
+        Verified end-to-end in ``tests/scaling/test_build_then_scale.py``. Worked
+        examples (scale existing models / build-once-scale-many / single pair)
+        are in the docs: "Knee sizing modes" → Mode 3. The build step is
+        ``nsosim.model_building.build_joint_model``.
+
     Pipeline:
       1. Read AB per-body scale factors.
       2. Build a ScaleSet according to `mode`.

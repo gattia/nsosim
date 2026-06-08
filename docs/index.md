@@ -28,9 +28,10 @@ hand-off — is documented in **[Coordinate systems & pipeline](coordinate-syste
 
 A separate **COMAK body scaling** step ([`nsosim.scaling`](reference/scaling.md)) sizes a
 whole-body COMAK model to a subject by applying AddBiomechanics-derived scale factors and
-masses; where it meets the knee build (and the active bug there) is covered in the
-coordinate-systems page §5, with the full set of sizing modes (and the active bug) in
-**[Knee sizing modes](deviations.md)**.
+masses. To put a *personalized* knee into a gait-scaled body, **build the knee first (on a
+reference base), then run COMAK body scaling on the built model** — the library-verified
+"build, then scale" route. How it meets the knee build is covered in the coordinate-systems
+page §5, with the full set of sizing modes in **[Knee sizing modes](deviations.md)**.
 
 ---
 
@@ -79,9 +80,9 @@ of the [knee sizing modes](deviations.md):
 
 | Driver (in `comak_gait_simulation/run_simulations/scripts`) | What it does | Mode |
 |---|---|---|
-| `comak_1_nsm_fitting.py` | **The** MRI→model build (`align → recon → assemble`). Against a reference base it's the standard build; against a config whose `paths.base_model_dir` is a Stage-X-scaled model it builds the knee into a body-scaled base. | [1](deviations.md#mode-1-personalized-knee-unscaled-reference-size-model) / [3](deviations.md#mode-3-personalized-knee-scaled-to-the-gait-body) |
+| `comak_1_nsm_fitting.py` | **The** MRI→model build (`align → recon → assemble`). Against a reference base it's the standard build ([Mode 1](deviations.md#mode-1-personalized-knee-unscaled-reference-size-model)). | [1](deviations.md#mode-1-personalized-knee-unscaled-reference-size-model) |
 | `comak_1_nsm_model_run.py` (+ `submit_nsm_slurm_job.py`) | Queue/batch wrapper that loads a `--config` and drives the fit across subjects. | — |
-| `multigait/prepare_gait_subject.py` + `submit_stage_y.sh` | `prepare_*` runs COMAK body scaling (`scale_comak_model`), writes the Stage-Y config (`base_model_dir` → the scaled model), and prints the submit commands; `submit_stage_y.sh` then launches `comak_1_nsm_fitting.py` against that scaled base. | sets up [3](deviations.md#mode-3-personalized-knee-scaled-to-the-gait-body) |
+| `multigait/prepare_gait_subject.py` + `submit_stage_y.sh` | Current Pathway-B wiring: `prepare_*` runs COMAK body scaling first, then `submit_stage_y.sh` builds the knee **against that scaled base** — the *wrong order*, which yields a reference-size knee in a scaled body (the [Mode 3](deviations.md#mode-3-personalized-knee-scaled-to-the-gait-body) mismatch). The library-verified fix is to reverse it (build on a reference base, then scale the built model); adopting that here is the remaining wiring step. | [3](deviations.md#mode-3-personalized-knee-scaled-to-the-gait-body) (mismatch — pending reorder) |
 | `comak_1_synthetic.py` | Builds a model from latents via [`nsosim.decode`](reference/decode.md) (no MRI). | [5](deviations.md#mode-5-synthetic-knee-scaled-to-a-model) |
 
 !!! note "Production overrides some library defaults — verified example"

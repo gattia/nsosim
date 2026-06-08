@@ -1084,6 +1084,15 @@ def build_joint_model(
     the recon/derived STLs via ``save_geometry_files``, and finalizes the
     ``.osim`` via ``finalize_osim_model``.
 
+    Sizing the result to a gait body
+    --------------------------------
+    Build against a *reference* base here, then size the returned model to a gait
+    subject by running ``nsosim.scaling.scale_comak_model`` on it (``base_osim`` =
+    this function's return path) — the "build, then scale" route. Build once and
+    scale per gait subject (do not rebuild per gait). Worked examples for all
+    cases (scale existing models / build-once-scale-many / single pair) are in
+    the docs: "Knee sizing modes" → Mode 3.
+
     Coordinate space
     ----------------
     Every mesh in ``bone_meshes`` is in **OSIM space** (metres, rotated). The

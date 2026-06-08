@@ -2,8 +2,13 @@
 
 **Status:** Stages 0–4 **COMPLETE** (2026-06-07) — docstrings + the mkdocs site (`docs/`,
 `make docs`) are shipped and reviewed across several rounds. Stage 5 (the actual `s_wa` fix)
-is now its own plan: [`knee-scaling-fix.md`](knee-scaling-fix.md). See the **Handoff state &
-docs↔code trust** section at the bottom before continuing.
+is its own plan: [`knee-scaling-fix.md`](knee-scaling-fix.md) and is now **DONE & verified on
+the nsosim side** (2026-06-07): no core code change was needed — `scale_comak_model` already
+performs "build, then scale" when given a built model as `base_osim`; verified end-to-end on a
+real built model and covered by `tests/scaling/test_build_then_scale.py`. Modes 3 & 5 in
+`docs/deviations.md` are updated from "bug/partial" to "works". Remaining: the Pathway-B
+production wiring in the comak repo. See the **Handoff state & docs↔code trust** section at the
+bottom before continuing.
 **Created:** 2026-06-06
 **Owner:** nsosim (this is where the scale/space logic lives; the comak repo only wires it).
 

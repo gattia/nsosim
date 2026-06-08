@@ -1,10 +1,63 @@
 # Plan: Scale a built knee to a gait body (the Mode-3 `s_wa` fix)
 
-**Status:** Proposed — design/verification, not started. This is "Stage 5" of
+**Status:** **nsosim deliverable DONE & verified end-to-end (2026-06-07).** No core code change
+was needed — `scale_comak_model` already performs the whole "build, then scale" operation when
+handed a built model as `base_osim`. The work was verification + tests + docs. The only remaining
+item is the **production wiring in the comak repo** (reorder Pathway-B to build-then-scale), which
+this plan explicitly delegates there. See **Verification results** below.
+This is "Stage 5" of
 [`scaling-and-spaces-documentation.md`](scaling-and-spaces-documentation.md); read that plan's
 **Handoff state & docs↔code trust** section first.
 **Created:** 2026-06-07
 **Owner:** nsosim (geometry); the comak repo wires it.
+
+---
+
+## Verification results (2026-06-07)
+
+Ran `scale_comak_model(base_osim=<built Mode-1 model>, ab_scaled_osim=<RSubject_121 AB>)` on a
+**real built Mode-1 model** (OAI subject 9003175's personalized recon knee in a reference-size
+COMAK body) scaled to a **different** gait subject (RSubject_121, `s_wa = 0.97298`) — the genuine
+Pathway-B Mode-3 scenario. Scaling needs **no GPU** (the fit is already amortized in the built
+model). Every knee component scaled by exactly `s_wa`:
+
+| Component | Result |
+|---|---|
+| Recon bone/cartilage/menisci/fat-pad STLs | × `s_wa`, per-vertex to ~1e-8 m ✓ |
+| Wraps (translation + radius/dims) | × `s_wa` ✓ |
+| Ligament/muscle path points (all 181 on knee bodies) | × `s_wa` ✓ |
+| Patella placement offset (`pf_tx/ty/tz_r` = `mean_patella`) | × `s_wa` ✓ |
+| Origin-scaling placement, every knee body | preserved (centroid × `s_wa`) ✓ |
+| Cart–bone proximity / ligament reference strains | preserved under scale ✓ |
+| Scaled model `initSystem()` / `realizePosition()` | loads & realizes ✓ |
+| Mass/inertia | owned by the orchestrator two-pass (untouched) ✓ |
+
+**Resolutions to the open questions below:**
+- **Q1 (every component scales):** yes — table above.
+- **Q2 / Q4 (patella centering × scaling, PF offset):** RESOLVED — ScaleTool scales the
+  `pf_tx/ty/tz_r` coordinate *defaults* by the body factor (probed: ratio == scale), and both PF
+  bodies are knee bodies (so the factor is `s_wa`). The centered patella shape scales by `s_wa`
+  about origin *and* its offset scales by `s_wa` → placement preserved. No explicit fix needed.
+- **Q3 (`project_coronary=False` meniscus path):** the meniscus/coronary attachments are warp
+  products that ride ScaleTool's ligament scaling; all 181 knee ligament points scaled by `s_wa`
+  and reference strains held — tautness unchanged.
+- **Q5 (fallback / mid-build interception):** not needed; build-then-scale is correct.
+
+**Deliverable shape (decided with owner):** **no new public API.** `scale_comak_model` covers
+Modes 2/3/5 — they differ only in what `base_osim` points at (reference base / MRI-built /
+synthetic-built). A wrapper would add a name and no logic. Discoverability handled by a docstring
+note + the docs flip. Mode 5 is the same call (decode → `build_joint_model` → `scale_comak_model`).
+
+**Tests:** `tests/scaling/test_build_then_scale.py` (11 tests) — per-component scaling on the real
+built model (skips if absent), origin-placement regression on both the built model and the
+reference base (synthetic in-repo `s_wa`), and coherence (cart–bone, reference strains). The
+built-model fixture lives at `untracked/built_models/mode1_9003175_00m_RIGHT/` (too large for git;
+override with `NSOSIM_BUILT_MODEL_OSIM`).
+
+**Remaining (comak repo, out of nsosim scope):** the Pathway-B scripts still build the knee on a
+body-scaled base (wrong order). Switch them to build on a reference base, then call
+`scale_comak_model` on the built model. Optional future: promote the built-model fixture to a
+GitHub-Releases download so the end-to-end tests run without local data.
 
 Docs to lean on (trustworthy — see the trust summary in the parent plan):
 `docs/coordinate-systems.md` §3 (scale lever), §5 (COMAK body scaling); `docs/deviations.md`
