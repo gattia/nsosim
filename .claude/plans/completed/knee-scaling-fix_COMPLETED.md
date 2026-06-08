@@ -1,15 +1,69 @@
 # Plan: Scale a built knee to a gait body (the Mode-3 `s_wa` fix)
 
-**Status:** **nsosim deliverable DONE & verified end-to-end (2026-06-07).** No core code change
-was needed — `scale_comak_model` already performs the whole "build, then scale" operation when
-handed a built model as `base_osim`. The work was verification + tests + docs. The only remaining
-item is the **production wiring in the comak repo** (reorder Pathway-B to build-then-scale), which
-this plan explicitly delegates there. See **Verification results** below.
+**Status:** Complete (2026-06-08) — nsosim deliverable DONE & verified end-to-end. No core code
+change was needed — `scale_comak_model` already performs the whole "build, then scale" operation
+when handed a built model as `base_osim`. The work was verification + tests + docs. The only
+remaining item is the **production wiring in the comak repo** (reorder Pathway-B to
+build-then-scale), tracked in [`../backlog.md`](../backlog.md). See **Completion Notes** and
+**Verification results** below.
 This is "Stage 5" of
-[`scaling-and-spaces-documentation.md`](scaling-and-spaces-documentation.md); read that plan's
+[`scaling-and-spaces-documentation_COMPLETED.md`](scaling-and-spaces-documentation_COMPLETED.md); read that plan's
 **Handoff state & docs↔code trust** section first.
 **Created:** 2026-06-07
 **Owner:** nsosim (geometry); the comak repo wires it.
+
+---
+
+## Completion Notes
+
+**Date completed:** 2026-06-08
+
+**Summary.** The Mode-3/5 "build, then scale" deliverable is done on the nsosim side with no core
+code change: `scale_comak_model` already scales an entire built personalized knee by `s_wa` when
+given the built model as `base_osim`. Verified end-to-end on a real built Mode-1 model
+(OAI 9003175) scaled to a different gait subject (RSubject_121, `s_wa ≈ 0.973`). A post-completion
+review (2026-06-08) hardened the test coverage and confirmed inertia is correctly scaled.
+
+**Changes made.**
+- Docstring-only notes added to `nsosim/scaling/orchestrator.py` and `nsosim/model_building.py`
+  documenting the build-then-scale route (commit 09c4459).
+- `tests/scaling/test_build_then_scale.py` — the 12-test build-then-scale suite (commit 09c4459;
+  hardened 2026-06-08, see below).
+- Docs: `docs/coordinate-systems.md` §5, `docs/deviations.md` Modes 3/5 set to "works" (09c4459).
+- 2026-06-08 hardening: tightened the ligament/muscle point tests to assert `before==after`
+  set-equality + the real counts (181 lig + 5 muscle) instead of a loose `≥50` floor; added
+  `test_knee_inertia_scales_by_s_wa_squared`; fixed the `tests/docs/test_doc_references.py`
+  encoding bug (`read_text(encoding="utf-8")`); refreshed the verification table + the parent
+  plan's stale "no regression test" caveats.
+
+**Tests.** `tests/scaling/test_build_then_scale.py` — 14 test items (incl. parametrized), all pass
+against the real built-model fixture (~4 min; skips if absent). Full `tests/scaling/`,
+`tests/test_transform_chain.py`, `tests/docs/` run green after the encoding fix.
+
+**Additional issues resolved (beyond original scope).**
+- Doc-reference guard `tests/docs/test_doc_references.py` failed 26× in a *full* `pytest` run
+  (OpenSim XML I/O flips the process locale to ASCII mid-run; the un-encoded `read_text()` then
+  choked on non-ASCII docstring chars). Fixed by pinning UTF-8. It passed in isolation before, so
+  this was masked.
+- Verified inertia is genuinely correct (not just mass): specific inertia `I/m` scales by exactly
+  `s_wa²` for every knee body (ScaleTool applies the geometric factor; the two-pass only adjusts
+  the mass dimension). Now permanently tested.
+
+**Challenges / design decisions.**
+- **No new public API** (owner decision): Modes 2/3/5 are the same `scale_comak_model` call — they
+  differ only in what `base_osim` points at. A wrapper would add a name and no logic.
+- **Point-count robustness:** chose `before==after` set-equality over a hardcoded count check as
+  the primary guard, with the measured counts as floors — catches silent point loss without being
+  brittle to legitimate model changes.
+
+**Things to note for future work.**
+- The remaining work is **external** (comak repo): reorder Pathway-B to build-then-scale. Tracked
+  in [`../backlog.md`](../backlog.md), and detailed in the cross-repo handoff summary.
+- Mode 4 (keep native MRI true size) is **not implemented** — see backlog.
+- The built-model fixture is untracked (too large for git); promoting it to GitHub Releases would
+  let the end-to-end tests run without local data (backlog).
+- The contingent cross-check (build-then-scale ≈ fit-on-scaled-base) was not run — it needs a fresh
+  GPU fit on a body-scaled base (backlog).
 
 ---
 
@@ -25,12 +79,13 @@ model). Every knee component scaled by exactly `s_wa`:
 |---|---|
 | Recon bone/cartilage/menisci/fat-pad STLs | × `s_wa`, per-vertex to ~1e-8 m ✓ |
 | Wraps (translation + radius/dims) | × `s_wa` ✓ |
-| Ligament/muscle path points (all 181 on knee bodies) | × `s_wa` ✓ |
+| Ligament + muscle path points (186 on knee bodies: 181 lig + 5 muscle) | × `s_wa`; point set preserved exactly ✓ |
 | Patella placement offset (`pf_tx/ty/tz_r` = `mean_patella`) | × `s_wa` ✓ |
 | Origin-scaling placement, every knee body | preserved (centroid × `s_wa`) ✓ |
 | Cart–bone proximity / ligament reference strains | preserved under scale ✓ |
 | Scaled model `initSystem()` / `realizePosition()` | loads & realizes ✓ |
-| Mass/inertia | owned by the orchestrator two-pass (untouched) ✓ |
+| Knee-body inertia | specific inertia `I/m` × `s_wa²` (radius-of-gyration), every knee body, to ~2e-16 ✓ |
+| Mass | set by the orchestrator two-pass (AB per-body + global renorm); inertia rescaled by mass ratio ✓ |
 
 **Resolutions to the open questions below:**
 - **Q1 (every component scales):** yes — table above.
@@ -48,11 +103,13 @@ Modes 2/3/5 — they differ only in what `base_osim` points at (reference base /
 synthetic-built). A wrapper would add a name and no logic. Discoverability handled by a docstring
 note + the docs flip. Mode 5 is the same call (decode → `build_joint_model` → `scale_comak_model`).
 
-**Tests:** `tests/scaling/test_build_then_scale.py` (11 tests) — per-component scaling on the real
-built model (skips if absent), origin-placement regression on both the built model and the
-reference base (synthetic in-repo `s_wa`), and coherence (cart–bone, reference strains). The
-built-model fixture lives at `untracked/built_models/mode1_9003175_00m_RIGHT/` (too large for git;
-override with `NSOSIM_BUILT_MODEL_OSIM`).
+**Tests:** `tests/scaling/test_build_then_scale.py` (12 tests) — per-component scaling on the real
+built model (skips if absent): STLs, wraps, the full 181-point ligament + 5-point muscle sets
+(asserted with before==after set-equality so a silent point drop fails, not a loose floor),
+patella offset, knee-body inertia (`I/m` × `s_wa²`), origin-placement regression on both the built
+model and the reference base (synthetic in-repo `s_wa`), and coherence (cart–bone, reference
+strains). The built-model fixture lives at `untracked/built_models/mode1_9003175_00m_RIGHT/` (too
+large for git; override with `NSOSIM_BUILT_MODEL_OSIM`).
 
 **Remaining (comak repo, out of nsosim scope):** the Pathway-B scripts still build the knee on a
 body-scaled base (wrong order). Switch them to build on a reference base, then call
