@@ -14,9 +14,19 @@ one of these becomes real work, spin it into its own plan. Last touched: 2026-06
   is done & verified here; the external `comak_gait_simulation` scripts still build the knee on a
   body-scaled base (old order). Adopting build-then-scale there is the remaining integration step.
   (See the cross-repo handoff summary.)
-- **Cross-check: build-then-scale ≈ fit-on-scaled-base.** Confidence check that reusing+scaling a
-  Mode-1 knee matches a knee freshly fit on an already-body-scaled base. Needs a fresh GPU fit to
-  produce the comparison model — listed as contingent in the fix plan, not run.
+- **Cross-check: build-then-scale ≈ fit-on-scaled-base. (VERY LOW PRIORITY — likely never.)**
+  The idea was to confirm that scaling a finished reference-size knee gives the same result as
+  *fitting* one at gait-body size. Two reasons this is parked indefinitely: (1) the "fit at scale"
+  path **does not exist** — it's the pathway we deliberately chose not to build, so running the
+  check means first writing it (scale the registration reference + the warp reference, then a full
+  GPU fit per subject — exactly the cost build-then-scale avoids); (2) the two are **unlikely to
+  match exactly anyway**, because the non-linear build steps (wrap SDF fit, articular ray-casting,
+  the registration similarity-scale) don't necessarily commute with scaling. Crucially, a mismatch
+  would **not** invalidate build-then-scale — that's the chosen, verified route (every component
+  resizes by exactly `s_wa`); the check only asks "would the rejected alternative have agreed?"
+  If anyone ever wants partial confidence cheaply (no GPU, no new pathway): scale the built recon
+  meshes by `s_wa` and re-run only the deterministic OSIM-space surface/wrap builders on the scaled
+  inputs, comparing to those surfaces scaled directly — that isolates the non-linear steps.
 - **`LA` / `AB` scaling modes.** `build_scale_set` documents long-axis and anisotropic-passthrough
   modes for future resurrection; only `WA` (isotropic weighted-average) is implemented. `AB` would
   also require generalizing `bake_knee_geometry` to per-axis scaling.
