@@ -1,5 +1,7 @@
 # Cross-repo handoff: "build, then scale" is ready in nsosim
 
+**Status:** Complete (2026-06-09) — delivered and consumed by the comak repo.
+
 **For:** the AIs working in `comak_gait_simulation` (the production/wiring repo).
 **From:** nsosim. **Date:** 2026-06-08.
 **TL;DR:** nsosim can now size a personalized knee to a gait body **without re-fitting** — build
@@ -122,3 +124,44 @@ Mechanism corrections the old `SCALING_WORKFLOW_MAP.md` got wrong (do not propag
   `.claude/plans/backlog.md` for the full rationale and a cheap partial proxy if ever wanted.
 - The built-model test fixture is local-only (too large for git). If you want nsosim's end-to-end
   tests to run in CI, promote it to a GitHub Release (backlog).
+
+---
+
+## Completion Notes
+
+**Date completed:** 2026-06-09
+
+**Summary:** This was an outbound cross-repo handoff brief, not an nsosim work plan — every
+action item in §3 was work for the `comak_gait_simulation` repo. The nsosim side it announced was
+already done and verified (see "Changes made" below) at the time the brief was written. The brief
+has now been received, acted on, and closed out by the comak repo, so the nsosim copy is archived.
+
+**Changes made:** No nsosim code change — the brief itself introduced none (it was a verification +
+docs effort, captured in the two completed plans it cites). Brief authored in commit `fecaf22`
+("Add cross-repo handoff brief for build-then-scale (Pathway-B adoption)") and updated in `bc81baa`
+("Handoff: mark the fit-on-scaled-base cross-check as deprioritized / do not attempt"). The nsosim
+capability it hands off is delivered by the two cited completed plans:
+- `completed/scaling-and-spaces-documentation_COMPLETED.md`
+- `completed/knee-scaling-fix_COMPLETED.md` (the Mode-3/5 "build, then scale" fix)
+
+**Tests:** Verified by `tests/scaling/test_build_then_scale.py` (real built Mode-1 model, OAI
+9003175, scaled to RSubject_121, `s_wa ≈ 0.973`) — covered fully in the cited completed plans; no
+new tests added by this brief.
+
+**Consumed by (comak repo, `/dataNAS/people/aagatti/projects/comak_gait_simulation`):**
+- `.claude/plans/completed/cross-repo-handoff_build-then-scale_COMPLETED.md` — the receiving end,
+  closed out.
+- `.claude/plans/MULTIGAIT_BUILD_THEN_SCALE.md` — the active adoption work (Pathway-B reorder +
+  CPU-only scale-and-simulate pipeline).
+
+**Challenges / Design decisions:** Archived via `/complete-plan` (move to `completed/` with a
+`_COMPLETED.md` suffix) rather than deleted, to preserve the §2 mechanism corrections — repoint+
+orphan vs overwrite-by-filename, Step 1 + Stage-Y config vs `comak_2_pathway_b.py`, OSIM-space
+multiply vs the converter's `scale` arg — which are accurate history worth keeping. Mirrors how the
+comak repo archived its own copy. This is a completion note on a finished plan, not a correction
+banner on a stale/wrong doc, so it does not run afoul of the no-banner preference.
+
+**Things to note for future work:** Mode 4 (true size, "Pathway C") remains not implemented in
+nsosim — design sketch only; it is now being picked up in `.claude/plans/mode4-true-size.md`. The
+deprioritized "build-then-scale ≈ fit-on-scaled-base" cross-check is still a do-not-attempt item
+(see `.claude/plans/backlog.md`).
