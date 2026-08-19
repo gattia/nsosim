@@ -8,6 +8,7 @@ import opensim as osim
 import pymskt as mskt
 import pytest
 from scipy.spatial import cKDTree
+from nsosim.scaling.config import LONG_AXIS_INDEX
 
 # --- helpers ----------------------------------------------------------------
 
@@ -150,7 +151,7 @@ class TestSubjectNontrivial:
         from nsosim.scaling.scale_factors import read_ab_factors
 
         f = read_ab_factors(rsubject121_ab_path)
-        return (f["femur_r"][2] + f["tibia_r"][2]) / 2.0
+        return (f["femur_r"][LONG_AXIS_INDEX] + f["tibia_r"][LONG_AXIS_INDEX]) / 2.0
 
     # The central correctness check: cart STL was pre-scaled, bone is
     # frame-scaled by ScaleTool. If we forgot the pre-scale, this fails.

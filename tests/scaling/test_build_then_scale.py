@@ -40,6 +40,7 @@ from nsosim.scaling.scale_factors import read_ab_factors
 # Reuse the coherence helpers that already guard Mode 2 — the checks are
 # identical, only the base model differs.
 from .test_nontrivial import _cart_to_bone_distances, _gather_blankevoort
+from nsosim.scaling.config import LONG_AXIS_INDEX
 
 KNEE_BODIES = (
     "femur_distal_r",
@@ -303,7 +304,7 @@ class TestBuiltModelScalesByWA:
     @pytest.fixture(scope="class")
     def s_wa(self, rsubject121_ab_path) -> float:
         f = read_ab_factors(rsubject121_ab_path)
-        s = (f["femur_r"][2] + f["tibia_r"][2]) / 2.0
+        s = (f["femur_r"][LONG_AXIS_INDEX] + f["tibia_r"][LONG_AXIS_INDEX]) / 2.0
         # The whole suite is vacuous if s_wa == 1 (everything trivially matches).
         assert abs(s - 1.0) > 0.01, f"need a non-trivial s_wa to test scaling, got {s}"
         return s
@@ -502,7 +503,7 @@ class TestOriginScalingPlacement:
     @pytest.fixture(scope="class")
     def s_wa(self, rsubject121_ab_path) -> float:
         f = read_ab_factors(rsubject121_ab_path)
-        return (f["femur_r"][2] + f["tibia_r"][2]) / 2.0
+        return (f["femur_r"][LONG_AXIS_INDEX] + f["tibia_r"][LONG_AXIS_INDEX]) / 2.0
 
     def test_every_knee_body_centroid_scales_by_s_wa(
         self, built_mode1_model_path, built_subject_scaled_model, s_wa
@@ -587,7 +588,7 @@ class TestBuiltModelScalingCoherence:
     @pytest.fixture(scope="class")
     def s_wa(self, rsubject121_ab_path) -> float:
         f = read_ab_factors(rsubject121_ab_path)
-        return (f["femur_r"][2] + f["tibia_r"][2]) / 2.0
+        return (f["femur_r"][LONG_AXIS_INDEX] + f["tibia_r"][LONG_AXIS_INDEX]) / 2.0
 
     @pytest.mark.parametrize(
         "bone_body,bone_file,cart_file",

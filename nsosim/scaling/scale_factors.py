@@ -46,10 +46,13 @@ def build_scale_set(
     All scale factors here are dimensionless ratios (mm/mm). ``s_wa`` is the
     isotropic weighted-average knee factor:
 
-        s_wa = (ab_factors['femur_r'][2] + ab_factors['tibia_r'][2]) / 2
+        s_wa = (ab_factors['femur_r'][1] + ab_factors['tibia_r'][1]) / 2
 
-    i.e. the mean of the femur and tibia LONG-AXIS factors (index 2 =
-    ``LONG_AXIS_INDEX``, the OSIM long/superior-inferior axis). It is a single
+    i.e. the mean of the femur and tibia LONG-AXIS factors (index 1 =
+    ``LONG_AXIS_INDEX``). In the femur_r/tibia_r body frames x = anterior-
+    posterior, y = superior-inferior, z = mediolateral, so the long axis is
+    index 1 -- see the HISTORY note in ``config.py``, this was index 2
+    (mediolateral) until 2026-07-25. It is a single
     isotropic, dimensionless ratio (1.0 = no change). It is returned so
     ``bake_knee_geometry`` can multiply the knee STL vertices (meters) on disk
     by it, and so ``scale_comak_model`` can record it in the report.
@@ -58,14 +61,14 @@ def build_scale_set(
     -----
     "WA" (weighted-average, implemented):
         Every knee subbody (femur_distal_r, tibia_proximal_r, patella_r, the
-        two menisci) is scaled isotropically by ``s_wa = mean(femur_r.z,
-        tibia_r.z)``. AB-provided bodies pass their per-axis factors through
+        two menisci) is scaled isotropically by ``s_wa = mean(femur_r.y,
+        tibia_r.y)``. AB-provided bodies pass their per-axis factors through
         unchanged, except patella_r (AB returns identity → use s_wa).
 
     "LA" (long-axis, NOT IMPLEMENTED):
         Each knee subbody would receive ``(s_long, s_long, s_long)`` from its
         own parent bone's long-axis factor — i.e. femur subbodies use
-        femur_r.z, tibia subbodies use tibia_r.z, patella uses its own (or
+        femur_r.y, tibia subbodies use tibia_r.y, patella uses its own (or
         the femur's). To add: branch in this function on ``mode == "LA"`` and
         build per-body isotropic Scales from the appropriate long-axis index
         in ``ab_factors``.

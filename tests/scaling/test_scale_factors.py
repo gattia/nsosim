@@ -64,18 +64,26 @@ class TestBuildScaleSetWA:
         assert s_wa == pytest.approx(1.0, abs=1e-12)
 
     def test_wa_factor_matches_worked_example(self):
+        # NOTE: all three axes are deliberately DISTINCT so this test can tell
+        # index 0 / 1 / 2 apart. The previous fixture used (0.945, 0.890, 0.945)
+        # -- x == z -- which could not distinguish the mediolateral axis from the
+        # anteroposterior one, and so silently passed while LONG_AXIS_INDEX was
+        # wrong (see config.py HISTORY).
         ab = {
-            "femur_r": (0.945, 0.890, 0.945),
-            "tibia_r": (0.920, 0.870, 0.920),
+            "femur_r": (0.945, 0.890, 0.960),
+            "tibia_r": (0.920, 0.870, 0.935),
             "patella_r": (1.0, 1.0, 1.0),
         }
         ss, s_wa = build_scale_set(ab, mode="WA")
         d = _ss_to_dict(ss)
-        expected = (0.945 + 0.920) / 2  # 0.9325
+        expected = (0.890 + 0.870) / 2  # 0.880 -- mean of the LONG (y) axis
         assert s_wa == pytest.approx(expected, abs=1e-9)
+        # and it must not be either transverse axis
+        assert s_wa != pytest.approx((0.945 + 0.920) / 2, abs=1e-6)
+        assert s_wa != pytest.approx((0.960 + 0.935) / 2, abs=1e-6)
         # AB rows pass through unchanged
-        assert d["femur_r"] == pytest.approx((0.945, 0.890, 0.945), abs=1e-9)
-        assert d["tibia_r"] == pytest.approx((0.920, 0.870, 0.920), abs=1e-9)
+        assert d["femur_r"] == pytest.approx((0.945, 0.890, 0.960), abs=1e-9)
+        assert d["tibia_r"] == pytest.approx((0.920, 0.870, 0.935), abs=1e-9)
         # patella overridden with WA isotropic
         assert d["patella_r"] == pytest.approx((s_wa, s_wa, s_wa), abs=1e-9)
         # knee subbodies get WA isotropic
