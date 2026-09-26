@@ -1031,6 +1031,94 @@ def _extract_meniscus_centers(tibia_labeled_mesh, tibia_labeled_mesh_points):
     return med_center, lat_center
 
 
+# Where the meniscus radial-envelope trim takes its polar origin.
+#   "auto" (default): "midline" when the labelled tibia carries the plateau-centre labels
+#       (tibia_labeled_v2.vtk), otherwise "as_run" -- so a caller still pointing at the original
+#       tibia_labeled.vtk builds exactly what it always built.
+#   "midline": ONE point per knee, the midpoint of the two hand-picked tibial
+#       plateau centres (``{med,lat}_plateau_center_binary``, added by preprocessing script 8
+#       in ``tibia_labeled_v2.vtk``), at the intercondylar eminence; used for both menisci.
+#   "as_run": per-meniscus centroids of ``{med,lat}_meniscus_center_binary``. These are the
+#       labels every model in the Paper-1 data was built with; they sit near the midline because
+#       they were applied by stale vertex ID. Use to reproduce those models exactly.
+# Both put the origin outside the meniscus, in the opening of the C; "midline" reproduces the
+# as-run contact surfaces to ~3 % (comak_gait_simulation MENISCUS_CENTER_LABEL_IMPACT, Phase 2b).
+MENISCUS_CENTER_MODES = ("auto", "midline", "as_run")
+DEFAULT_MENISCUS_CENTER_MODE = "auto"
+_PLATEAU_LABELS = ("med_plateau_center_binary", "lat_plateau_center_binary")
+
+
+def meniscus_trim_centers(
+    tibia_labeled_mesh, tibia_labeled_mesh_points, mode=DEFAULT_MENISCUS_CENTER_MODE
+):
+    """Radial-envelope trim origins ``(medial, lateral)`` for the chosen ``mode``.
+
+    ``"auto"`` resolves to ``"midline"`` if the plateau-centre arrays are present, else
+    ``"as_run"`` (the original behaviour). An explicit ``"midline"`` on a labelled tibia without
+    them raises ValueError; so does an unknown mode.
+    """
+    if mode == "auto":
+        has_plateau = all(a in tibia_labeled_mesh.point_data.keys() for a in _PLATEAU_LABELS)
+        mode = "midline" if has_plateau else "as_run"
+    if mode == "as_run":
+        return _extract_meniscus_centers(tibia_labeled_mesh, tibia_labeled_mesh_points)
+    if mode == "midline":
+        missing = [a for a in _PLATEAU_LABELS if a not in tibia_labeled_mesh.point_data.keys()]
+        if missing:
+            raise ValueError(
+                f"meniscus_center_mode='midline' needs {missing} on the labelled tibia. Point "
+                f"dict_bones['tibia']['wrap']['path_labeled_bone'] at tibia_labeled_v2.vtk "
+                f"(written by COMAK_OAI_2025 script 8), or use meniscus_center_mode='as_run'."
+            )
+        med = tibia_labeled_mesh_points[np.asarray(tibia_labeled_mesh[_PLATEAU_LABELS[0]]) == 1]
+        lat = tibia_labeled_mesh_points[np.asarray(tibia_labeled_mesh[_PLATEAU_LABELS[1]]) == 1]
+        midline = 0.5 * (med.mean(axis=0) + lat.mean(axis=0))
+        return midline, midline
+    raise ValueError(f"meniscus_center_mode must be one of {MENISCUS_CENTER_MODES}, got {mode!r}")
+
+
+def build_meniscus_articular_surfaces(
+    med_men_mesh,
+    lat_men_mesh,
+    femur_mesh,
+    tibia_mesh,
+    tibia_labeled_mesh,
+    tibia_labeled_mesh_points,
+    mode=DEFAULT_MENISCUS_CENTER_MODE,
+    config=None,
+    center_check=None,
+):
+    """Upper and lower articular (contact) surfaces of both menisci, all in OSIM metres.
+
+    Returns ``(med_upper, med_lower, lat_upper, lat_lower)``. Parameters come from ``config``
+    with the production defaults (``build_joint_model`` docstring). Factored out of
+    ``build_joint_model`` so it can be run on saved per-knee meshes. ``center_check`` is
+    forwarded to ``create_meniscus_articulating_surface`` (None = no check, the default;
+    "external" is the convention both modes follow).
+    """
+    config = config or {}
+    med_center, lat_center = meniscus_trim_centers(
+        tibia_labeled_mesh, tibia_labeled_mesh_points, mode=mode
+    )
+    kwargs = dict(
+        upper_articulating_bone_mesh=femur_mesh,
+        lower_articulating_bone_mesh=tibia_mesh,
+        ray_length=config.get("meniscus_ray_length", 15.0),
+        n_largest=config.get("meniscus_n_largest", 1),
+        smooth_iter=config.get("meniscus_smooth_iter", 10),
+        boundary_smoothing=config.get("meniscus_boundary_smoothing", False),
+        radial_percentile=config.get("meniscus_radial_percentile", 95.0),
+        center_check=center_check,
+    )
+    med_upper, med_lower = create_meniscus_articulating_surface(
+        meniscus_mesh=med_men_mesh, meniscus_center=med_center, theta_offset=np.pi, **kwargs
+    )
+    lat_upper, lat_lower = create_meniscus_articulating_surface(
+        meniscus_mesh=lat_men_mesh, meniscus_center=lat_center, theta_offset=0.0, **kwargs
+    )
+    return med_upper, med_lower, lat_upper, lat_lower
+
+
 def _save_bone_intermediates(folder_save_bones, bone_name, **meshes):
     """Save intermediate mesh files for a bone."""
     bone_dir = os.path.join(folder_save_bones, bone_name)
@@ -1171,6 +1259,12 @@ def build_joint_model(
         - 'meniscus_smooth_iter': int (default 10)
         - 'meniscus_boundary_smoothing': bool (default False)
         - 'meniscus_radial_percentile': float (default 95.0)
+        - 'meniscus_center_mode': str (default 'auto'). Polar origin of the meniscus
+          radial-envelope trim: 'midline' (one point midway between the two hand-picked
+          plateau centres; needs tibia_labeled_v2.vtk), 'as_run' (the per-meniscus
+          *_meniscus_center_binary labels the Paper-1 models were built with), or 'auto'
+          (midline when the plateau labels are present, else as_run). See
+          ``meniscus_trim_centers``.
         - 'smith2019_osim_path': str or None (default None). When set, Procrustes
           anchors are built from the named Smith2019 osim and passed to each
           wrap fit as the init + regularizer target. Biases fits toward
@@ -1454,38 +1548,21 @@ def build_joint_model(
     # Apply ligament updates
     _apply_ligament_updates(dict_lig_musc_attach_params, tib_lig_updated, tib_lig_idx)
 
-    # Extract meniscus centers from labeled tibia
-    med_meniscus_center, lat_meniscus_center = _extract_meniscus_centers(
-        tib_labeled_mesh, tib_labeled_points
-    )
-
     # -----------------------------------------------------------------------
     # MENISCUS ARTICULATING SURFACES
     # -----------------------------------------------------------------------
     print("=== Meniscus Articulating Surfaces ===")
-
-    meniscus_kwargs = dict(
-        upper_articulating_bone_mesh=fem_mesh_osim,
-        lower_articulating_bone_mesh=tib_mesh_osim,
-        ray_length=cfg("meniscus_ray_length", 15.0),
-        n_largest=cfg("meniscus_n_largest", 1),
-        smooth_iter=cfg("meniscus_smooth_iter", 10),
-        boundary_smoothing=cfg("meniscus_boundary_smoothing", False),
-        radial_percentile=cfg("meniscus_radial_percentile", 95.0),
-    )
-
-    med_upper, med_lower = create_meniscus_articulating_surface(
-        meniscus_mesh=fem_med_men_mesh_osim,
-        meniscus_center=med_meniscus_center,
-        theta_offset=np.pi,
-        **meniscus_kwargs,
-    )
-
-    lat_upper, lat_lower = create_meniscus_articulating_surface(
-        meniscus_mesh=fem_lat_men_mesh_osim,
-        meniscus_center=lat_meniscus_center,
-        theta_offset=0.0,
-        **meniscus_kwargs,
+    meniscus_center_mode = cfg("meniscus_center_mode", DEFAULT_MENISCUS_CENTER_MODE)
+    print(f"  meniscus_center_mode = {meniscus_center_mode!r}")
+    med_upper, med_lower, lat_upper, lat_lower = build_meniscus_articular_surfaces(
+        fem_med_men_mesh_osim,
+        fem_lat_men_mesh_osim,
+        fem_mesh_osim,
+        tib_mesh_osim,
+        tib_labeled_mesh,
+        tib_labeled_points,
+        mode=meniscus_center_mode,
+        config=config,
     )
 
     # Save meniscus meshes

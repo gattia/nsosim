@@ -20,6 +20,12 @@ logger = logging.getLogger(__name__)
 DEFAULT_MENISCUS_SDF_THRESHOLD = 0.1  # mm, SDF label threshold
 DEFAULT_RADIAL_PERCENTILE = 95.0  # percentile for radial envelope
 DEFAULT_TRIANGLE_DENSITY = 4_000_000  # target triangle density (~2.6 tri/mm²)
+# Radial-envelope centre checks (see check_meniscus_center). An "inside" centre sits in the
+# C-shaped meniscus's hollow, which then wraps ~230-360 deg around it; an "external" centre
+# (the model-building convention, e.g. the tibial-midline point) sees the whole meniscus
+# within a half-plane (as-run max 171 deg, midline max 155 deg over 756 knees).
+MIN_INSIDE_CENTER_ARC_DEG = 200.0
+MAX_EXTERNAL_CENTER_SPAN_DEG = 180.0
 
 # Prefemoral fat pad
 DEFAULT_FATPAD_BASE_MM = 0.5
@@ -69,6 +75,67 @@ def add_polar_coordinates_about_center(mesh: pv.PolyData, center=None, theta_off
     mesh["r"] = r
     mesh["y_rel"] = y_rel
     return center
+
+
+def meniscus_arc_about_center(points, center) -> float:
+    """Angular extent (deg) of ``points`` around ``center`` in the x-z plane.
+
+    Computed as 360 deg minus the largest angular gap between consecutive points,
+    so a C-shaped meniscus seen from inside its opening covers most of the circle,
+    while one seen from a point outside it covers well under 180 deg.
+    """
+    rel = np.asarray(points)[:, [0, 2]] - np.asarray(center)[[0, 2]]
+    theta = np.sort(np.arctan2(rel[:, 0], rel[:, 1]))
+    gaps = np.diff(np.concatenate([theta, theta[:1] + 2 * np.pi]))
+    return float(360.0 - np.degrees(gaps.max()))
+
+
+def check_meniscus_center(points, center, expected="external", theta_offset=0.0):
+    """Check that a radial-envelope centre is consistent with its intended convention.
+
+    Raises ValueError when it is not -- a violation means corrupt centre labels (the
+    failure documented in comak_gait_simulation ``.claude/plans/MENISCUS_CENTER_LABEL_IMPACT.md``),
+    not a condition to warn about and carry on.
+
+    Args:
+        points: Meniscus vertex coordinates (same units as ``center``).
+        center: The polar origin.
+        expected: ``"external"`` -- the origin lies outside the meniscus footprint, in the
+            opening of the C (the model-building convention). The meniscus must then span
+            < MAX_EXTERNAL_CENTER_SPAN_DEG in theta (with ``theta_offset`` applied), which also
+            guarantees the +/-pi seam does not cut through tissue, so the angular bins are
+            well-posed.
+            ``"inside"`` -- the origin lies in the C's hollow; the meniscus must wrap at least
+            MIN_INSIDE_CENTER_ARC_DEG around it.
+        theta_offset: The polar offset the trim uses (radians).
+
+    Returns:
+        The arc (deg) the meniscus covers around ``center``.
+    """
+    arc = meniscus_arc_about_center(points, center)
+    where = np.asarray(center).round(3).tolist()
+    if expected == "inside":
+        if arc < MIN_INSIDE_CENTER_ARC_DEG:
+            raise ValueError(
+                f"Meniscus trim centre {where} should lie inside the meniscus but the meniscus "
+                f"covers only {arc:.0f} deg around it (need >= {MIN_INSIDE_CENTER_ARC_DEG:.0f})."
+            )
+    elif expected == "external":
+        rel = np.asarray(points)[:, [0, 2]] - np.asarray(center)[[0, 2]]
+        theta = np.arctan2(rel[:, 0], rel[:, 1]) + theta_offset
+        theta = np.arctan2(np.sin(theta), np.cos(theta))
+        span = float(np.degrees(np.ptp(theta)))
+        if span >= MAX_EXTERNAL_CENTER_SPAN_DEG:
+            raise ValueError(
+                f"Meniscus trim centre {where} should lie outside the meniscus, in the opening of "
+                f"the C, but the meniscus spans {span:.0f} deg of theta around it (arc {arc:.0f} "
+                f"deg; need < {MAX_EXTERNAL_CENTER_SPAN_DEG:.0f}). Either the centre is inside or "
+                f"on the wrong side of the meniscus, or theta_offset puts the +/-pi seam through "
+                f"it. Check the tibial centre labels."
+            )
+    else:
+        raise ValueError(f"expected must be 'external' or 'inside', got {expected!r}")
+    return arc
 
 
 def label_meniscus_regions_with_sdf(
@@ -364,6 +431,7 @@ def refine_meniscus_articular_surfaces(
     smooth_window: int = 7,
     n_theta_grid: int = 200,
     theta_offset: float = 0.0,
+    center_check: str = None,
 ):
     """
     Full pipeline for refining meniscus articular surfaces using radial envelope.
@@ -390,6 +458,9 @@ def refine_meniscus_articular_surfaces(
         theta_offset: Rotation offset for polar coordinates in radians (default: 0.0).
                      Use to avoid discontinuity cutting through tissue.
                      Typically: π/2 for medial meniscus, 0.0 for lateral meniscus.
+        center_check: None (default, no check), "external" or "inside" -- verify ``center``
+                     against that convention and raise if it does not hold
+                     (see ``check_meniscus_center``).
 
     Returns:
         lower_surface_trimmed: Refined lower surface
@@ -400,6 +471,10 @@ def refine_meniscus_articular_surfaces(
     center = add_polar_coordinates_about_center(
         meniscus_mesh, center=center, theta_offset=theta_offset
     )
+    if center_check is not None:
+        check_meniscus_center(
+            meniscus_mesh.points, center, expected=center_check, theta_offset=theta_offset
+        )
 
     # 2. Region labels
     label_meniscus_regions_with_sdf(
@@ -772,6 +847,7 @@ def create_meniscus_articulating_surface(
     smooth_window=7,
     n_theta_grid=200,
     theta_offset=0.0,  # radians, rotate polar coords to avoid discontinuity
+    center_check=None,  # None, "external" or "inside"; see check_meniscus_center
     # Extraction method selection
     extraction_method="ray_casting",  # "ray_casting" or "scored"
     score_threshold=DEFAULT_SCORE_THRESHOLD,
@@ -811,6 +887,8 @@ def create_meniscus_articulating_surface(
         theta_offset: Rotation offset for polar coordinates in radians (default: 0.0).
                      Use to avoid polar discontinuity cutting through meniscus tissue.
                      Typically: np.pi/2 for medial meniscus, 0.0 for lateral meniscus.
+        center_check: None (default), "external" or "inside": verify ``meniscus_center``
+            against that convention and raise if it does not hold (see ``check_meniscus_center``).
         extraction_method: Method for initial surface extraction (default: "ray_casting").
             "ray_casting": Binary ray-casting via remove_intersecting_vertices.
                           Uses ray_length parameter.
@@ -951,6 +1029,7 @@ def create_meniscus_articulating_surface(
             smooth_window=smooth_window,
             n_theta_grid=n_theta_grid,
             theta_offset=theta_offset,  # Rotate polar coords to avoid discontinuity
+            center_check=center_check,
         )
 
         # Final cleanup: get largest component and remove isolated cells

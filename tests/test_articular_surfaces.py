@@ -9,6 +9,7 @@ Covers:
 - trim_mesh_by_radial_envelope()
 - create_articular_surfaces() (smoke test)
 - create_meniscus_articulating_surface() (smoke test)
+- meniscus_arc_about_center() / check_meniscus_center() (centre-outside-meniscus guard)
 """
 
 import numpy as np
@@ -19,9 +20,11 @@ from pymskt.mesh import Mesh
 from nsosim.articular_surfaces import (
     add_polar_coordinates_about_center,
     build_min_radial_envelope,
+    check_meniscus_center,
     create_articular_surfaces,
     create_meniscus_articulating_surface,
     mask_points_by_radial_envelope,
+    meniscus_arc_about_center,
     smooth_1d,
     trim_mesh_by_radial_envelope,
 )
@@ -364,3 +367,63 @@ class TestCreateMeniscusArticulatingSurface:
         assert lower_surf is not None
         assert hasattr(upper_surf, "point_coords")
         assert hasattr(lower_surf, "point_coords")
+
+
+# ---------------------------------------------------------------------------
+# meniscus_arc_about_center / check_meniscus_center
+# ---------------------------------------------------------------------------
+
+
+def _c_shaped_meniscus(arc_deg=300.0, radius=15.0, width=4.0, n=400):
+    """Points of a C-shaped band in the x-z plane (mm), open towards +z, centred on the origin."""
+    rng = np.random.default_rng(0)
+    half = np.radians(arc_deg) / 2
+    phi = rng.uniform(np.pi - half, np.pi + half, n)  # centred on -z, gap facing +z
+    r = radius + rng.uniform(-width / 2, width / 2, n)
+    y = rng.uniform(-2, 2, n)
+    return np.c_[r * np.sin(phi), y, r * np.cos(phi)]
+
+
+class TestMeniscusCenterGuard:
+    """The radial-envelope centre must match its convention; violations raise, never warn."""
+
+    OUTSIDE = np.array([0.0, 0.0, 45.0])  # in the C's opening, beyond the horn tips
+
+    def test_arc_inside_is_large(self):
+        pts = _c_shaped_meniscus(arc_deg=300.0)
+        assert meniscus_arc_about_center(pts, np.zeros(3)) == pytest.approx(300.0, abs=5.0)
+
+    def test_arc_from_external_point_is_small(self):
+        assert meniscus_arc_about_center(_c_shaped_meniscus(), self.OUTSIDE) < 180.0
+
+    def test_external_convention_passes_silently(self, caplog):
+        """The model-building convention: an origin in the C's opening. No log output."""
+        with caplog.at_level("DEBUG", logger="nsosim.articular_surfaces"):
+            arc = check_meniscus_center(
+                _c_shaped_meniscus(), self.OUTSIDE, expected="external", theta_offset=np.pi
+            )
+        assert arc < 180.0
+        assert not caplog.records
+
+    def test_inside_convention_passes(self):
+        assert check_meniscus_center(_c_shaped_meniscus(), np.zeros(3), expected="inside") > 200.0
+
+    def test_external_expected_but_inside_raises(self):
+        with pytest.raises(ValueError, match="should lie outside the meniscus"):
+            check_meniscus_center(_c_shaped_meniscus(), np.zeros(3), expected="external")
+
+    def test_inside_expected_but_external_raises(self):
+        with pytest.raises(ValueError, match="should lie inside the meniscus"):
+            check_meniscus_center(_c_shaped_meniscus(), self.OUTSIDE, expected="inside")
+
+    def test_external_with_seam_through_tissue_raises(self):
+        """theta_offset that puts the +/-pi seam through the meniscus makes the bins ill-posed."""
+        pts = _c_shaped_meniscus()
+        # seen from +z the meniscus sits around theta = pi; offset 0 puts the seam through it
+        with pytest.raises(ValueError, match="seam"):
+            check_meniscus_center(pts, self.OUTSIDE, expected="external", theta_offset=0.0)
+        check_meniscus_center(pts, self.OUTSIDE, expected="external", theta_offset=np.pi)
+
+    def test_invalid_convention(self):
+        with pytest.raises(ValueError, match="expected must be"):
+            check_meniscus_center(_c_shaped_meniscus(), np.zeros(3), expected="nope")
