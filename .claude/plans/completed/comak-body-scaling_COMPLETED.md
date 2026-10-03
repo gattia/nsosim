@@ -4,6 +4,20 @@
 **Created:** 2026-05-13.
 **Parent:** Pathway B of [`comak_gait_simulation/.claude/plans/PAPER1_MULTIGAIT.md`](../../../comak_gait_simulation/.claude/plans/PAPER1_MULTIGAIT.md).
 
+> ⛔ **Correction (2026-10-03, comak rerun-v3 sub-plan 01).** This plan assumes AddBiomechanics (AB) scaled
+> "our stripped, marker-renamed COMAK base". It did not. `tests/fixtures/osim_models/unscaled_generic_tian.osim`
+> is AB's stock **ArmlessRajagopal** (model name `ArmlessRajagopal`, `walker_knee_r`, 14 bodies, 75.3 kg). It
+> carries the same 41 Tian marker names, which is why nothing errored. Every AB output used so far (RSubject_121
+> here; all nine Paper-1 v2 donors, `unscaled_generic.osim` md5 `ae509ca6…`) is relative to that skeleton: femur
+> 0.408 vs COMAK 0.374 m (+9 %), hip half-width 0.077 vs 0.092 m (−16 %). AB's factors were therefore applied to a
+> skeleton they were not fitted to, and its marker set was copied onto it (comak E2E audit F15/A11).
+> - `scale_comak_model` now checks AB's `unscaled_generic.osim` against the base skeleton and raises on a
+>   mismatch (`nsosim/scaling/validate.py`), unless `allow_generic_mismatch=True`.
+> - The intended COMAK upload skeleton is built by the comak clean repo's
+>   `pipeline/prepare_addbiomechanics_skeleton.py`.
+> - The statements below that call the fixture "the stripped Tian base" or "our uploaded base" are wrong; they are
+>   kept as written, with notes.
+
 ---
 
 ## Goal
@@ -41,7 +55,7 @@ Three pathways currently in scope, all decomposing cleanly around this contract:
 
 **Scope of scaling — full ScaleSet spec for `'WA'` mode:**
 
-Per-body scale factors are read from `match_markers_and_physics.osim`'s `<attached_geometry>/scale_factors` fields. AB only sees the **stripped** model we upload (14 bodies, no knee subbodies), so it provides factors only for those. Example real values from RSubject_121:
+Per-body scale factors are read from `match_markers_and_physics.osim`'s `<attached_geometry>/scale_factors` fields. AB only sees the **stripped** model we upload (14 bodies, no knee subbodies), so it provides factors only for those. *(⛔ 2026-10-03: in practice AB saw ArmlessRajagopal, which also has 14 bodies; see the correction at the top. Rajagopal has a `patella_r`, for which AB returns identity; a stripped COMAK skeleton has none, and `build_scale_set` now gives `patella_r` the knee factor in both cases.)* Example real values from RSubject_121:
 
 ```
 pelvis:     (1.2973, 1.0179, 1.1566)
@@ -156,7 +170,7 @@ Also at this step, **copy the entire base-model `Geometry/` folder** into `outpu
 
 **Strategy: full MarkerSet replace via OpenSim API.**
 
-Why: AB took our marker-renamed COMAK base (the `unscaled_generic_tian.osim` produced by `scripts/phase6_rajagopal_audit/` — same body names, Tian-named markers) as input and ran static-trial IK on it. Its output `.osim` therefore has:
+Why: AB took our marker-renamed COMAK base (the `unscaled_generic_tian.osim` produced by `scripts/phase6_rajagopal_audit/` — same body names, Tian-named markers) as input and ran static-trial IK on it. *(⛔ 2026-10-03: false. `unscaled_generic_tian.osim` is ArmlessRajagopal, and AB ran on it. The marker positions are therefore placed on a Rajagopal femur 9 % longer, and copying them verbatim onto COMAK is the transplant that comak audit A11 measured: cIK marker RMS 19–27 mm vs AB's own 12–17 mm. The COMAK skeleton that was meant to go to AB is `full_body_healthy_knee_armless_trc.osim`, stripped by the comak clean repo's `prepare_addbiomechanics_skeleton.py`.)* Its output `.osim` therefore has:
 - The same body names we use.
 - The same marker names we'll match against Tian's TRC.
 - Refined marker positions on the AB-scaled body.
@@ -590,7 +604,7 @@ def identity_ab_osim(tmp_path_factory):
     return out
 ```
 
-The stripped Tian base (`unscaled_generic_tian.osim`) is what AB takes as input, so its body+marker structure matches AB's output structure. With factors set to identity, `scale_comak_model(base=full_comak, ab_scaled_osim=this)` produces the round-tripped baseline.
+The stripped Tian base (`unscaled_generic_tian.osim`) is what AB takes as input, so its body+marker structure matches AB's output structure. *(⛔ 2026-10-03: it is ArmlessRajagopal, not a stripped COMAK base. The identity fixtures still work, because they need only AB-shaped factors; they now also place the COMAK base beside them as `unscaled_generic.osim`, so the AB-input check passes.)* With factors set to identity, `scale_comak_model(base=full_comak, ab_scaled_osim=this)` produces the round-tripped baseline.
 
 Two ways snapshots are captured, depending on what's being measured:
 
@@ -718,7 +732,7 @@ AB outputs for RSubject_121 are already on disk (extracted from the zip you uplo
 ├── Models/
 │   ├── match_markers_and_physics.osim    ← input for scale_comak_model
 │   ├── match_markers_but_ignore_physics.osim
-│   ├── unscaled_generic.osim              ← AB's copy of our uploaded base
+│   ├── unscaled_generic.osim              ← AB's copy of the generic it scaled (ArmlessRajagopal here, md5 ae509ca6…; checked by validate.py)
 │   └── Geometry/                          ← AB's *.vtp.ply files (not needed by us)
 ├── IK/  (per-segment .mot files + IK setup XMLs)
 ├── ID/  (per-segment GRF .mot + external_forces.xml)

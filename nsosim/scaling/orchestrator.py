@@ -14,6 +14,7 @@ from .model_fixes import fix_in_place
 from .report import write_report
 from .scale_factors import build_scale_set, read_ab_factors
 from .scaletool import apply_scaletool
+from .validate import check_ab_generic
 
 log = logging.getLogger(__name__)
 
@@ -157,6 +158,7 @@ def scale_comak_model(
     subject_mass: Optional[float] = None,
     report_json: Optional[Path] = None,
     backup_markerset_xml: Optional[Path] = None,
+    allow_generic_mismatch: bool = False,
 ) -> Path:
     """Produce a scaled COMAK model from a base + AB output.
 
@@ -191,6 +193,12 @@ def scale_comak_model(
         ``nsosim.model_building.build_joint_model``.
 
     Pipeline:
+      0. Check that AB's generic model (``unscaled_generic.osim`` beside
+         ``ab_scaled_osim``) is the skeleton of ``base_osim``
+         (``validate.check_ab_generic``). AB's factors are ratios to that
+         generic, so on another skeleton they would size the body wrongly. This
+         raises unless ``allow_generic_mismatch=True``; it runs before anything
+         is written.
       1. Read AB per-body scale factors.
       2. Build a ScaleSet according to `mode`.
       3. ScaleTool.run() → output_osim (geometry-only scaling in meters via the
@@ -235,6 +243,16 @@ def scale_comak_model(
         exactly even though COMAK has bodies that AB doesn't model (which
         otherwise causes a ~18% overcount).
 
+    AB-input check (``allow_generic_mismatch``):
+        Raises ``GenericSkeletonMismatchError`` if AB's generic model is missing
+        or differs from ``base_osim``'s skeleton by more than 1 % (femur and
+        tibia joint-centre vectors, hip half-width). Pass
+        ``allow_generic_mismatch=True`` only when the mismatch is intended, e.g.
+        to reproduce results built on another generic model (the Paper-1 v2
+        measured arm used AB's ArmlessRajagopal). The check's outcome, including
+        any override and both sets of landmarks, is the report's
+        ``ab_generic_check``.
+
     The report is always written so the scaling is recoverable from disk — the
     baked STLs and the model's reset ``scale_factors = [1, 1, 1]`` would
     otherwise hide how much the knee was scaled. The JSON records the isotropic
@@ -253,6 +271,16 @@ def scale_comak_model(
         raise ValueError(
             f"output_geometry_dir must be {expected_geom} "
             f"(output_osim.parent / 'Geometry'), got {output_geometry_dir}"
+        )
+
+    ab_generic_check = check_ab_generic(
+        ab_scaled_osim, base_osim, allow_generic_mismatch=allow_generic_mismatch
+    )
+    if ab_generic_check["status"] != "match":
+        log.warning(
+            "AB-input check overridden (%s): scale factors are not relative to %s",
+            ab_generic_check["status"],
+            base_osim.name,
         )
 
     output_osim.parent.mkdir(parents=True, exist_ok=True)
@@ -326,6 +354,7 @@ def scale_comak_model(
     write_report(
         report_path,
         mode=mode,
+        ab_generic_check=ab_generic_check,
         ab_scaled_osim=str(ab_scaled_osim),
         base_osim=str(base_osim),
         output_osim=str(output_osim),

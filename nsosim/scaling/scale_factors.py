@@ -62,8 +62,13 @@ def build_scale_set(
     "WA" (weighted-average, implemented):
         Every knee subbody (femur_distal_r, tibia_proximal_r, patella_r, the
         two menisci) is scaled isotropically by ``s_wa = mean(femur_r.y,
-        tibia_r.y)``. AB-provided bodies pass their per-axis factors through
-        unchanged, except patella_r (AB returns identity → use s_wa).
+        tibia_r.y)``, whether or not AB returned a factor for it. AB-provided
+        bodies pass their per-axis factors through unchanged. patella_r needs
+        this in both AB setups: a Rajagopal-style skeleton has a patella and AB
+        returns identity for it (no static-trial signal); a stripped COMAK
+        skeleton has none, so AB returns nothing. Without a Scale, ScaleTool
+        would leave the patella frames, and the tendon and ligament attachments
+        on it, at reference size while ``bake_knee_geometry`` resizes its mesh.
 
     "LA" (long-axis, NOT IMPLEMENTED):
         Each knee subbody would receive ``(s_long, s_long, s_long)`` from its
@@ -94,18 +99,14 @@ def build_scale_set(
 
     scale_set = osim.ScaleSet()
 
-    # 1. AB-provided bodies pass through unchanged, except patella_r (AB returns
-    #    identity, no static-trial signal).
+    # 1. AB-provided bodies pass through unchanged. Knee bodies are left to step 2,
+    #    whatever AB returned for them (patella_r: identity, or nothing).
     for body_name, sf in ab_factors.items():
-        if body_name == "patella_r":
-            scale_set.adoptAndAppend(_make_scale(body_name, (s_wa, s_wa, s_wa)))
-        else:
+        if body_name not in WA_KNEE_BODIES:
             scale_set.adoptAndAppend(_make_scale(body_name, sf))
 
-    # 2. Knee subbodies stripped before AB upload → isotropic WA.
+    # 2. Every knee subbody → isotropic WA.
     for body_name in WA_KNEE_BODIES:
-        if body_name == "patella_r":
-            continue  # already added above
         scale_set.adoptAndAppend(_make_scale(body_name, (s_wa, s_wa, s_wa)))
 
     return scale_set, s_wa
