@@ -1,7 +1,9 @@
 """Unit tests for nsosim.scaling.scale_factors."""
 
+import json
 from pathlib import Path
 
+import numpy as np
 import opensim as osim
 import pytest
 
@@ -106,3 +108,94 @@ class TestBuildScaleSetWA:
         d = _ss_to_dict(ss)
         assert d["torso"] == pytest.approx((1.5, 0.8, 1.2), abs=1e-9)
         assert d["talus_r"] == pytest.approx((0.7, 0.8, 0.9), abs=1e-9)
+
+    def test_patella_gets_wa_when_ab_has_no_patella(self):
+        """A stripped COMAK skeleton has no patella_r, so AB returns no factor for it."""
+        ab = {
+            "femur_r": (0.95, 1.03, 0.97),
+            "tibia_r": (0.96, 1.01, 0.94),
+            "pelvis": (1.1, 1.0, 1.2),
+        }
+        ss, s_wa = build_scale_set(ab, mode="WA")
+        d = _ss_to_dict(ss)
+        assert d["patella_r"] == pytest.approx((s_wa, s_wa, s_wa), abs=1e-12)
+
+    def test_each_body_scaled_once(self):
+        """Knee bodies AB happens to return (patella_r, or any other) are not added twice."""
+        ab = {
+            "femur_r": (1.0, 0.9, 1.0),
+            "tibia_r": (1.0, 0.9, 1.0),
+            "patella_r": (1.0, 1.0, 1.0),
+            "femur_distal_r": (1.2, 1.2, 1.2),
+        }
+        ss, s_wa = build_scale_set(ab, mode="WA")
+        names = [ss.get(i).getSegmentName() for i in range(ss.getSize())]
+        assert sorted(names) == sorted(set(names))
+        assert _ss_to_dict(ss)["femur_distal_r"] == pytest.approx((s_wa,) * 3, abs=1e-12)
+
+
+def _path_points_on(osim_path: Path, body: str) -> dict:
+    """{(force, point): location} for every path point attached to `body`."""
+    model = osim.Model(str(osim_path))
+    model.initSystem()
+    out = {}
+    fs = model.getForceSet()
+    for i in range(fs.getSize()):
+        force = fs.get(i)
+        prop = next((p for p in ("GeometryPath", "path") if force.hasProperty(p)), None)
+        path = prop and osim.GeometryPath.safeDownCast(
+            force.getPropertyByName(prop).getValueAsObject()
+        )
+        if path is None:
+            continue
+        points = path.getPathPointSet()
+        for k in range(points.getSize()):
+            pp = osim.PathPoint.safeDownCast(points.get(k))
+            if pp is not None and pp.getParentFrame().getName() == body:
+                loc = pp.get_location()
+                out[(force.getName(), pp.getName())] = np.array([loc.get(j) for j in range(3)])
+    return out
+
+
+@pytest.mark.slow
+def test_patella_attachments_scale_when_ab_has_no_patella(
+    base_comak_path: Path, synthetic_wa_ab_osim: Path, tmp_path: Path, monkeypatch
+):
+    """Rerun-v3 task 1.3: with no AB patella factor, patella attachments still scale by s_wa.
+
+    Before the fix, build_scale_set added no Scale for patella_r in this case, so
+    ScaleTool left the tendon and ligament attachments on it at reference size
+    while bake_knee_geometry resized the patella mesh.
+    """
+    from .conftest import _base_geometry_has_knee_stls
+
+    if not _base_geometry_has_knee_stls(base_comak_path):
+        pytest.skip("Reference base Geometry STLs absent")
+    from nsosim.scaling import orchestrator
+
+    real = orchestrator.read_ab_factors
+    monkeypatch.setattr(
+        orchestrator,
+        "read_ab_factors",
+        lambda p: {k: v for k, v in real(p).items() if k != "patella_r"},
+    )
+    out = tmp_path / "scaled.osim"
+    report = json.loads(
+        Path(
+            orchestrator.scale_comak_model(
+                base_osim=base_comak_path,
+                ab_scaled_osim=synthetic_wa_ab_osim,
+                output_osim=out,
+                output_geometry_dir=tmp_path / "Geometry",
+                mode="WA",
+            )
+        ).read_text()
+    )
+    assert "patella_r" not in report["ab_factors"]
+    s_wa = report["wa_scale"]
+    assert s_wa == pytest.approx(0.9, abs=1e-12)
+
+    base, scaled = _path_points_on(base_comak_path, "patella_r"), _path_points_on(out, "patella_r")
+    assert len(base) >= 20 and scaled.keys() == base.keys()
+    for key, loc in base.items():
+        assert scaled[key] == pytest.approx(s_wa * loc, abs=1e-12), key

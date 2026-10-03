@@ -292,6 +292,14 @@ it is specific to whether the recon came from an MRI fit or a latent.
 
 ## Notes
 
+**AddBiomechanics must have scaled the COMAK skeleton.** AB's factors are ratios to the generic model it was given,
+which it copies to `Models/unscaled_generic.osim` beside the `ab_scaled_osim` in these examples.
+`scale_comak_model` checks that file against `base_osim`'s skeleton: the femur and tibia joint-centre vectors and the
+hip half-width, within 1 %. It raises `GenericSkeletonMismatchError` if they differ or the file is missing. Upload the
+COMAK skeleton with its knee stripped to a hinge. Pass `allow_generic_mismatch=True` only to reproduce results built
+on another generic, e.g. AB's `ArmlessRajagopal`, which the Paper-1 v2 measured gaits used. The override is recorded
+in the report's `ab_generic_check`.
+
 **Build first, then scale — the two-generator problem only exists mid-build.** Once you have a
 *built* model, both generators below have already run and their outputs are attached to the
 knee bodies, so running COMAK body scaling on the built model scales everything at once (the

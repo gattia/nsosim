@@ -9,6 +9,8 @@ import pytest
 
 FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
 BASE_COMAK = FIXTURES / "osim_models" / "full_body_healthy_knee.osim"
+# NOTE: despite the name, this is AB's stock ArmlessRajagopal (the generic the
+# Paper-1 v2 AB runs scaled), NOT a stripped COMAK model. See fixtures README.
 STRIPPED_TIAN = FIXTURES / "osim_models" / "unscaled_generic_tian.osim"
 RSUBJECT121_AB = (
     Path(__file__).resolve().parents[2]
@@ -27,6 +29,15 @@ RSUBJECT121_AB = (
 # tests skip gracefully when it is absent (same convention as RSUBJECT121_AB
 # and the @requires_nsm_models tests). Override with NSOSIM_BUILT_MODEL_OSIM
 # to point at any other built model (its Geometry/ must sit beside it).
+#
+# NOTE (2026-10-03, comak rerun-v3 sub-plan 01): this file's BODY is not
+# reference-size. Its skeleton (femur 0.3606, tibia 0.4090, hip half-width
+# 0.1069 m) equals the COMAK reference scaled by RSubject_121's v2 AB factors
+# (comak audit A11: 0.36064 / 0.40899 / 0.10686), not the reference (0.3742 /
+# 0.4033 / 0.0924). So the "subject" fixtures below scale an already-scaled
+# body. The knee-coherence assertions compare ratios and still hold. A
+# production build from the reference base keeps the reference skeleton
+# exactly. nsosim.scaling.validate flags the mismatch, hence the overrides below.
 BUILT_MODE1 = (
     Path(__file__).resolve().parents[2]
     / "untracked"
@@ -62,14 +73,31 @@ def rsubject121_ab_path() -> Path:
     return RSUBJECT121_AB
 
 
+def place_ab_generic(ab_dir: Path, generic_osim: Path) -> Path:
+    """Put ``generic_osim`` beside an AB-shaped model as AB's ``unscaled_generic.osim``.
+
+    ``scale_comak_model`` checks that file against the base model's skeleton. A
+    COMAK model only loads with its Geometry/ beside it, so that is linked too.
+    """
+    target = Path(ab_dir) / "unscaled_generic.osim"
+    target.symlink_to(Path(generic_osim).resolve())
+    geometry = Path(generic_osim).resolve().parent / "Geometry"
+    if geometry.is_dir() and not (Path(ab_dir) / "Geometry").exists():
+        (Path(ab_dir) / "Geometry").symlink_to(geometry)
+    return target
+
+
 @pytest.fixture(scope="session")
-def identity_ab_osim(stripped_tian_path: Path, tmp_path_factory) -> Path:
+def identity_ab_osim(stripped_tian_path: Path, base_comak_path: Path, tmp_path_factory) -> Path:
     """Build a synthetic AB-shaped model with every body's scale_factors = (1,1,1).
 
     Mirrors AB's output convention so scale_comak_model treats it as an
-    identity-scale run.
+    identity-scale run. The factors are synthetic, so the Rajagopal model they
+    are written into does not matter; AB's generic beside it is the COMAK base,
+    i.e. this stands for an AB run on the COMAK skeleton.
     """
     out = tmp_path_factory.mktemp("identity_ab") / "match_markers_and_physics.osim"
+    place_ab_generic(out.parent, base_comak_path)
     model = osim.Model(str(stripped_tian_path))
     model.initSystem()
     bs = model.getBodySet()
@@ -85,16 +113,18 @@ def identity_ab_osim(stripped_tian_path: Path, tmp_path_factory) -> Path:
 
 
 @pytest.fixture(scope="session")
-def synthetic_wa_ab_osim(stripped_tian_path: Path, tmp_path_factory) -> Path:
+def synthetic_wa_ab_osim(stripped_tian_path: Path, base_comak_path: Path, tmp_path_factory) -> Path:
     """AB-shaped model with a non-trivial, in-repo-derived knee scale.
 
     Like ``identity_ab_osim`` but with ``femur_r`` and ``tibia_r`` set to an
     isotropic 0.9 — so ``build_scale_set`` yields ``s_wa = 0.9`` with no
     dependence on the untracked RSubject_121 AB output. Lets the origin-scaling
     placement regression run on the reference base wherever the reference
-    Geometry is present.
+    Geometry is present. AB's generic beside it is the COMAK base, as for
+    ``identity_ab_osim``.
     """
     out = tmp_path_factory.mktemp("synthetic_wa_ab") / "match_markers_and_physics.osim"
+    place_ab_generic(out.parent, base_comak_path)
     model = osim.Model(str(stripped_tian_path))
     model.initSystem()
     bs = model.getBodySet()
@@ -165,7 +195,11 @@ def subject_scaled_model(
     rsubject121_ab_path: Path,
     tmp_path_factory,
 ) -> Path:
-    """Run scale_comak_model on RSubject_121's AB output once per session."""
+    """Run scale_comak_model on RSubject_121's AB output once per session.
+
+    That AB run scaled ArmlessRajagopal (Paper-1 v2), so the AB-input check is
+    overridden: the legitimate use, reproducing results built on that generic.
+    """
     from nsosim.scaling import scale_comak_model
 
     out_dir = tmp_path_factory.mktemp("subject_scaled")
@@ -176,6 +210,7 @@ def subject_scaled_model(
         output_osim=out_osim,
         output_geometry_dir=out_dir / "Geometry",
         mode="WA",
+        allow_generic_mismatch=True,
     )
     return out_osim
 
@@ -213,7 +248,10 @@ def built_identity_scaled_model(
     """Scale the built Mode-1 model by an identity AB run (s_wa == 1).
 
     The s_wa = 1 baseline processed through the *same* pipeline as the subject
-    case — so per-component comparisons are apples-to-apples.
+    case — so per-component comparisons are apples-to-apples. The AB-input check
+    is overridden: this built model's body is not the reference skeleton that
+    ``identity_ab_osim``'s generic is (see the BUILT_MODE1 note), and identity
+    factors do not depend on it.
     """
     from nsosim.scaling import scale_comak_model
 
@@ -225,6 +263,7 @@ def built_identity_scaled_model(
         output_osim=out_osim,
         output_geometry_dir=out_dir / "Geometry",
         mode="WA",
+        allow_generic_mismatch=True,
     )
     return out_osim
 
@@ -239,6 +278,8 @@ def built_subject_scaled_model(
 
     This is the real Mode-3 scenario: a personalized (OAI) knee scaled to a
     *different* subject's gait body. RSubject_121 gives s_wa ~= 0.973.
+    Its AB run scaled ArmlessRajagopal, so the AB-input check is overridden
+    (see ``subject_scaled_model``).
     """
     from nsosim.scaling import scale_comak_model
 
@@ -250,5 +291,6 @@ def built_subject_scaled_model(
         output_osim=out_osim,
         output_geometry_dir=out_dir / "Geometry",
         mode="WA",
+        allow_generic_mismatch=True,
     )
     return out_osim

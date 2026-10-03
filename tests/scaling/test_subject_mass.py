@@ -71,6 +71,7 @@ class TestSubjectMassTransfer:
             output_osim=out_osim,
             output_geometry_dir=tmp_path / "Geometry",
             mode="WA",
+            allow_generic_mismatch=True,  # v2 AB output: ArmlessRajagopal generic
         )
 
         out_total = _total_body_mass(out_osim)
@@ -93,6 +94,7 @@ class TestSubjectMassTransfer:
             output_osim=out_osim,
             output_geometry_dir=tmp_path / "Geometry",
             mode="WA",
+            allow_generic_mismatch=True,  # v2 AB output: ArmlessRajagopal generic
             subject_mass=target,
         )
         assert _total_body_mass(out_osim) == pytest.approx(target, rel=1e-5)
@@ -111,6 +113,7 @@ class TestSubjectMassTransfer:
             output_osim=out_osim,
             output_geometry_dir=tmp_path / "Geometry",
             mode="WA",
+            allow_generic_mismatch=True,  # v2 AB output: ArmlessRajagopal generic
         )
         with open(report_path) as f:
             r = json.load(f)
@@ -152,6 +155,7 @@ class TestSubjectMassTransfer:
             output_osim=out_osim,
             output_geometry_dir=tmp_path / "Geometry",
             mode="WA",
+            allow_generic_mismatch=True,  # v2 AB output: ArmlessRajagopal generic
         )
         final_masses = _per_body(out_osim)
 
@@ -182,6 +186,7 @@ class TestSubjectMassTransfer:
             output_osim=out_osim,
             output_geometry_dir=tmp_path / "Geometry",
             mode="WA",
+            allow_generic_mismatch=True,  # v2 AB output: ArmlessRajagopal generic
         )
         with open(report_path) as f:
             audit = json.load(f)["per_body_mass_audit"]
