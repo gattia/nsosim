@@ -200,14 +200,13 @@ class TestScaleComakModelRunsTheCheck:
         self,
         comak_base: Path,
         stripped_tian_path: Path,
-        identity_ab_osim: Path,
         tmp_path: Path,
     ):
-        """Identity factors next to a Rajagopal generic, scaled with the override."""
+        """A v2-style AB output (Rajagopal at identity, beside its Rajagopal generic), with the override."""
         models = tmp_path / "Models"
         models.mkdir()
         ab = models / "match_markers_and_physics.osim"
-        shutil.copy(identity_ab_osim, ab)
+        shutil.copy(stripped_tian_path, ab)
         shutil.copy(stripped_tian_path, models / "unscaled_generic.osim")
         out_dir = tmp_path / "scaled"
         report_path = scale_comak_model(

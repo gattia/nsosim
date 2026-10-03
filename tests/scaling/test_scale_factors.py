@@ -44,6 +44,38 @@ class TestReadAbFactors:
         assert "tibia_proximal_r" in factors
 
 
+class TestReadAbFactorsAgainstGeneric:
+    """AB writes (generic mesh scale) x (body scale); COMAK's generic mesh scales are not 1."""
+
+    def test_divides_by_the_generic_mesh_scale(self, synthetic_wa_ab_osim: Path):
+        generic = synthetic_wa_ab_osim.parent / "unscaled_generic.osim"
+        raw = read_ab_factors(synthetic_wa_ab_osim)
+        factors = read_ab_factors(synthetic_wa_ab_osim, generic_osim=generic)
+        # femur_l's generic mesh is at 0.925: raw reading would call that a 7.5 % smaller femur.
+        assert raw["femur_l"] == pytest.approx((0.92521836,) * 3, abs=1e-6)
+        assert factors["femur_l"] == pytest.approx((1.0, 1.0, 1.0), abs=1e-12)
+        assert factors["femur_r"] == pytest.approx((0.9, 0.9, 0.9), abs=1e-12)
+        assert factors["tibia_r"] == pytest.approx((0.9, 0.9, 0.9), abs=1e-12)
+        assert all(
+            f == pytest.approx((1.0, 1.0, 1.0), abs=1e-12)
+            for b, f in factors.items()
+            if b not in ("femur_r", "tibia_r")
+        )
+
+    def test_a_generic_without_the_same_meshes_raises(
+        self, synthetic_wa_ab_osim: Path, stripped_tian_path: Path
+    ):
+        with pytest.raises(ValueError, match="no counterpart in the generic"):
+            read_ab_factors(synthetic_wa_ab_osim, generic_osim=stripped_tian_path)
+
+    def test_unit_generic_scales_change_nothing(self, rsubject121_ab_path: Path):
+        """v2 (Rajagopal: every generic mesh at scale 1) reads the same either way."""
+        generic = rsubject121_ab_path.parent / "unscaled_generic.osim"
+        assert read_ab_factors(rsubject121_ab_path, generic_osim=generic) == read_ab_factors(
+            rsubject121_ab_path
+        )
+
+
 class TestBuildScaleSetWA:
     def test_rejects_missing_femur_or_tibia(self):
         with pytest.raises(ValueError, match="femur_r or tibia_r"):
@@ -177,7 +209,9 @@ def test_patella_attachments_scale_when_ab_has_no_patella(
     monkeypatch.setattr(
         orchestrator,
         "read_ab_factors",
-        lambda p: {k: v for k, v in real(p).items() if k != "patella_r"},
+        lambda p, generic_osim=None: {
+            k: v for k, v in real(p, generic_osim).items() if k != "patella_r"
+        },
     )
     out = tmp_path / "scaled.osim"
     report = json.loads(

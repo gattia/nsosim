@@ -199,7 +199,8 @@ def scale_comak_model(
          generic, so on another skeleton they would size the body wrongly. This
          raises unless ``allow_generic_mismatch=True``; it runs before anything
          is written.
-      1. Read AB per-body scale factors.
+      1. Read AB per-body scale factors: each body's mesh scale over the same
+         mesh's scale in AB's generic (``read_ab_factors``).
       2. Build a ScaleSet according to `mode`.
       3. ScaleTool.run() → output_osim (geometry-only scaling in meters via the
          dimensionless ScaleSet; the knee weld translation is scaled per-axis by
@@ -285,7 +286,10 @@ def scale_comak_model(
 
     output_osim.parent.mkdir(parents=True, exist_ok=True)
 
-    factors = read_ab_factors(ab_scaled_osim)
+    # AB writes (generic mesh scale) x (body scale): divide by the generic's, when there is one.
+    generic = Path(ab_generic_check["ab_generic_path"])
+    generic = generic if generic.is_file() else None
+    factors = read_ab_factors(ab_scaled_osim, generic_osim=generic)
     scale_set, s_wa = build_scale_set(factors, mode=mode)
 
     if subject_mass is None:
@@ -355,6 +359,9 @@ def scale_comak_model(
         report_path,
         mode=mode,
         ab_generic_check=ab_generic_check,
+        ab_factors_relative_to=(
+            f"generic mesh scales ({generic})" if generic else "raw scale_factors (no generic)"
+        ),
         ab_scaled_osim=str(ab_scaled_osim),
         base_osim=str(base_osim),
         output_osim=str(output_osim),
