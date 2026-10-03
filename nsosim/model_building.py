@@ -1254,6 +1254,9 @@ def build_joint_model(
         - 'fatpad_ray_cast_length': float (default 10.0)
         - 'fatpad_norm_function': str (default 'log')
         - 'fatpad_final_smooth_iter': int (default 100)
+        - 'fatpad_clearance_rays': str (default 'auto_oriented', how the Paper-1 models were
+          built). 'dilation_normals' casts the patella-clearance rays along the normals the fat
+          pad is dilated along; see ``dilate_mesh_with_profile_and_clearance``.
         - 'meniscus_ray_length': float (default 15.0)
         - 'meniscus_n_largest': int (default 1)
         - 'meniscus_smooth_iter': int (default 10)
@@ -1698,6 +1701,7 @@ def build_joint_model(
         ray_cast_length=cfg("fatpad_ray_cast_length", 10.0),
         norm_function=cfg("fatpad_norm_function", "log"),
         final_smooth_iter=cfg("fatpad_final_smooth_iter", 100),
+        clearance_rays=cfg("fatpad_clearance_rays", "auto_oriented"),
     )
 
     fatpad_dir = os.path.join(folder_save_bones, "femur")
