@@ -1327,11 +1327,35 @@ def _finalize_fatpad_mesh(
     return fatpad_mesh
 
 
+FATPAD_CLEARANCE_RAYS = ("auto_oriented", "dilation_normals")
+
+
+def _ray_distances_along(source_points, target, directions, ray_cast_length, percent_opposite):
+    """Distance from each point to ``target`` along that point's own direction; 0 = no hit.
+
+    The same ray as pymskt's ``calc_distance_to_other_mesh``: from
+    ``percent_opposite * ray_cast_length`` behind the point to ``ray_cast_length``
+    ahead of it, distance to the first intersection -- only the directions differ.
+    """
+    from pymskt.mesh.utils import get_intersect, get_obb_surface, is_hit
+
+    obb = get_obb_surface(target)
+    out = np.zeros(len(source_points))
+    for i, (point, direction) in enumerate(zip(source_points, directions)):
+        start = point - ray_cast_length * percent_opposite * direction
+        end = point + ray_cast_length * direction
+        if is_hit(obb, list(start), list(end)):
+            hits, _ = get_intersect(obb, list(start), list(end))
+            out[i] = np.sqrt(np.sum(np.square(point - np.asarray(hits[0]))))
+    return out
+
+
 def _forward_clearance_to_targets(
     source_mesh: Mesh,
     targets: list,  # [patella_bone_mesh, patella_cart_mesh]
     ray_cast_length: float = 6.0,
     safety_mm: float = 0.0,
+    directions: np.ndarray = None,
 ) -> np.ndarray:
     """
     For each vertex, compute forward ray-cast distance to targets.
@@ -1342,6 +1366,11 @@ def _forward_clearance_to_targets(
         targets: List of target meshes (e.g., patella bone and cartilage)
         ray_cast_length: Length of ray to cast (in mm)
         safety_mm: Safety margin to subtract from clearance
+        directions: Optional (n_points, 3) unit ray directions. None (the original behaviour)
+            casts along normals pymskt recomputes on ``source_mesh`` with VTK auto-orientation,
+            which on an open patch can point every ray into the bone -- every ray then misses and
+            the clearance is infinite. Passing the normals the mesh will be dilated along measures
+            the clearance in the direction the surface actually moves.
 
     Returns:
         np.ndarray: Per-vertex minimum clearance to any target (minus safety)
@@ -1354,13 +1383,18 @@ def _forward_clearance_to_targets(
 
     clearances = []
     for i, tgt in enumerate(targets):
-        source_mesh.calc_distance_to_other_mesh(
-            list_other_meshes=[tgt],
-            ray_cast_length=ray_cast_length,
-            percent_ray_length_opposite_direction=0.1,
-            name=f"clear_{i}",
-        )
-        d = source_mesh.get_scalar(f"clear_{i}")
+        if directions is None:
+            source_mesh.calc_distance_to_other_mesh(
+                list_other_meshes=[tgt],
+                ray_cast_length=ray_cast_length,
+                percent_ray_length_opposite_direction=0.1,
+                name=f"clear_{i}",
+            )
+            d = source_mesh.get_scalar(f"clear_{i}")
+        else:
+            d = _ray_distances_along(
+                np.asarray(source_mesh.points), tgt, directions, ray_cast_length, 0.1
+            )
         d = np.where(d > 0, d, np.inf)  # no-hit = infinite clearance
         clearances.append(d)
 
@@ -1452,6 +1486,7 @@ def dilate_mesh_with_profile_and_clearance(
     ray_cast_length: float = 6.0,
     safety_mm: float = 0.0,
     mask=None,
+    clearance_rays: str = "auto_oriented",
 ):
     """
     Dilate femur bone limited by both y-profile and clearance to patella.
@@ -1474,10 +1509,18 @@ def dilate_mesh_with_profile_and_clearance(
         ray_cast_length: Ray length for clearance calculation
         safety_mm: Safety margin to maintain from patella
         mask: Optional boolean mask to restrict dilation
+        clearance_rays: Direction of the clearance rays. "auto_oriented" (default; how every
+            Paper-1 model was built): normals pymskt recomputes on this open patch, which can
+            point into the bone so the cap never engages. "dilation_normals": the normals the
+            surface is dilated along (step 5), so the cap measures the path the surface takes.
 
     Returns:
         tuple: (dilated_mesh, per_vertex_dilation_mm)
     """
+    if clearance_rays not in FATPAD_CLEARANCE_RAYS:
+        raise ValueError(
+            f"clearance_rays must be one of {FATPAD_CLEARANCE_RAYS}, got {clearance_rays!r}"
+        )
     if not isinstance(femur_bone_mesh, Mesh):
         femur_bone_mesh = Mesh(femur_bone_mesh)
 
@@ -1499,6 +1542,11 @@ def dilate_mesh_with_profile_and_clearance(
         targets=[patella_bone_mesh, patella_cart_mesh],
         ray_cast_length=ray_cast_length,
         safety_mm=safety_mm,
+        directions=(
+            np.asarray(femur_bone_mesh.point_normals)
+            if clearance_rays == "dilation_normals"
+            else None
+        ),
     )
 
     # 3. Actual dilation = min(profile, clearance)
@@ -1540,6 +1588,7 @@ def create_prefemoral_fatpad_noboolean(
     safety_mm: float = 0.0,
     norm_function: str = "log",
     final_smooth_iter: int = 100,
+    clearance_rays: str = "auto_oriented",
 ):
     """
     Creates a prefemoral fatpad mesh using clearance-limited dilation (no boolean operations).
@@ -1573,6 +1622,9 @@ def create_prefemoral_fatpad_noboolean(
         safety_mm: Safety margin from patella (default: 0.0 mm)
         norm_function: Dilation scaling function - 'linear', 'pow', 'exp', 'log' (default: 'log')
         final_smooth_iter: Final smoothing iterations (default: 100)
+        clearance_rays: Direction of the patella-clearance rays, 'auto_oriented' (default, as
+            every Paper-1 model was built) or 'dilation_normals' (see
+            ``dilate_mesh_with_profile_and_clearance``)
 
     Returns:
         pymskt.mesh.Mesh: The processed prefemoral fatpad mesh
@@ -1643,6 +1695,7 @@ def create_prefemoral_fatpad_noboolean(
         ray_cast_length=ray_cast_length,
         safety_mm=safety_mm,
         mask=None,  # already filtered to anterior+exposed
+        clearance_rays=clearance_rays,
     )
 
     fatpad_dilated.point_data["offset_mm"] = per_vertex_mm
