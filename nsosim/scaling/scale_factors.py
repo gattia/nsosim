@@ -1,31 +1,63 @@
 """Read AB scale factors and assemble a COMAK ScaleSet."""
 
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 import opensim as osim
 
 from .config import LONG_AXIS_INDEX, WA_KNEE_BODIES, ScalingMode
 
 
-def read_ab_factors(ab_scaled_osim: Path) -> Dict[str, Tuple[float, float, float]]:
-    """Extract per-body scale factors from AB's match_markers_and_physics.osim.
-
-    Reads each Body's first <attached_geometry>/scale_factors field. Bodies
-    with zero attached geometries are skipped (no signal to read).
-    """
-    model = osim.Model(str(ab_scaled_osim))
+def _first_geometry(osim_path: Path) -> Dict[str, Tuple[str, Tuple[float, float, float]]]:
+    """{body: (mesh file or geometry type, scale_factors)} of each body's first attached geometry."""
+    model = osim.Model(str(osim_path))
     model.initSystem()
-
-    factors: Dict[str, Tuple[float, float, float]] = {}
+    out = {}
     bs = model.getBodySet()
     for i in range(bs.getSize()):
         body = bs.get(i)
-        n_geom = body.getPropertyByName("attached_geometry").size()
-        if n_geom == 0:
+        if body.getPropertyByName("attached_geometry").size() == 0:
             continue
-        sf = body.upd_attached_geometry(0).get_scale_factors()
-        factors[body.getName()] = (float(sf[0]), float(sf[1]), float(sf[2]))
+        geom = body.upd_attached_geometry(0)
+        mesh = osim.Mesh.safeDownCast(geom)
+        sf = geom.get_scale_factors()
+        key = mesh.get_mesh_file() if mesh is not None else geom.getConcreteClassName()
+        out[body.getName()] = (key, (float(sf[0]), float(sf[1]), float(sf[2])))
+    return out
+
+
+def read_ab_factors(
+    ab_scaled_osim: Path, generic_osim: Optional[Path] = None
+) -> Dict[str, Tuple[float, float, float]]:
+    """Extract per-body scale factors from AB's match_markers_and_physics.osim.
+
+    AB records a body's scale only in its attached geometry: it writes each
+    mesh's ``scale_factors`` as (generic mesh scale) x (body scale). Bodies with
+    no attached geometry carry no record and are skipped.
+
+    ``generic_osim`` is AB's generic, i.e. ``Models/unscaled_generic.osim``. With
+    it, each factor is the ratio of a body's first mesh scale to that same mesh's
+    scale in the generic. This is needed for a COMAK skeleton, whose meshes carry
+    generic scales such as femur 0.925 and torso 0.80-0.93. The mesh must match
+    by file, or the call raises.
+
+    Without ``generic_osim``, the raw ``scale_factors`` are returned. That is
+    right only when every generic mesh has scale 1, as in AB's stock Rajagopal
+    models.
+    """
+    scaled = _first_geometry(ab_scaled_osim)
+    if generic_osim is None:
+        return {body: sf for body, (_, sf) in scaled.items()}
+    generic = _first_geometry(generic_osim)
+    factors: Dict[str, Tuple[float, float, float]] = {}
+    for body, (key, sf) in scaled.items():
+        if body not in generic or generic[body][0] != key:
+            raise ValueError(
+                f"{body}: AB's scaled mesh {key!r} has no counterpart in the generic {generic_osim} "
+                f"(it has {generic.get(body, ('nothing',))[0]!r}); the scale cannot be recovered"
+            )
+        g = generic[body][1]
+        factors[body] = (sf[0] / g[0], sf[1] / g[1], sf[2] / g[2])
     return factors
 
 

@@ -12,6 +12,8 @@ BASE_COMAK = FIXTURES / "osim_models" / "full_body_healthy_knee.osim"
 # NOTE: despite the name, this is AB's stock ArmlessRajagopal (the generic the
 # Paper-1 v2 AB runs scaled), NOT a stripped COMAK model. See fixtures README.
 STRIPPED_TIAN = FIXTURES / "osim_models" / "unscaled_generic_tian.osim"
+# The COMAK skeleton with the Tian markers, without arms: the model that is stripped and uploaded to AB.
+ARMLESS_TRC = FIXTURES / "osim_models" / "full_body_healthy_knee_armless_trc.osim"
 RSUBJECT121_AB = (
     Path(__file__).resolve().parents[2]
     / "untracked"
@@ -87,56 +89,63 @@ def place_ab_generic(ab_dir: Path, generic_osim: Path) -> Path:
     return target
 
 
-@pytest.fixture(scope="session")
-def identity_ab_osim(stripped_tian_path: Path, base_comak_path: Path, tmp_path_factory) -> Path:
-    """Build a synthetic AB-shaped model with every body's scale_factors = (1,1,1).
+def make_comak_ab_output(out_dir: Path, factors: Optional[dict] = None) -> Path:
+    """Write an AB-shaped output for the COMAK skeleton: ``unscaled_generic.osim`` + scaled model.
 
-    Mirrors AB's output convention so scale_comak_model treats it as an
-    identity-scale run. The factors are synthetic, so the Rajagopal model they
-    are written into does not matter; AB's generic beside it is the COMAK base,
-    i.e. this stands for an AB run on the COMAK skeleton.
+    The generic is the armless COMAK model with the Tian markers (what goes to AB), plus a mesh on femur_r and
+    tibia_r. A stripped upload carries those meshes too, because AB records a body's scale only in its meshes.
+    The "AB output" is that generic with each body's first mesh scale multiplied by ``factors[body]`` (default
+    1). AB writes (generic mesh scale) x (body scale), so ``read_ab_factors(output, generic)`` must return
+    exactly ``factors``.
     """
-    out = tmp_path_factory.mktemp("identity_ab") / "match_markers_and_physics.osim"
-    place_ab_generic(out.parent, base_comak_path)
-    model = osim.Model(str(stripped_tian_path))
-    model.initSystem()
-    bs = model.getBodySet()
-    for i in range(bs.getSize()):
-        body = bs.get(i)
-        n_geom = body.getPropertyByName("attached_geometry").size()
-        if n_geom == 0:
-            continue
-        body.upd_attached_geometry(0).set_scale_factors(osim.Vec3(1.0, 1.0, 1.0))
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if not (out_dir / "Geometry").exists():
+        (out_dir / "Geometry").symlink_to(ARMLESS_TRC.resolve().parent / "Geometry")
+    model = osim.Model(str(ARMLESS_TRC))
+    for body_name, mesh_file in (("femur_r", "femur_r.vtp"), ("tibia_r", "tibia_r.vtp")):
+        model.updBodySet().get(body_name).attachGeometry(osim.Mesh(mesh_file))
     model.finalizeConnections()
+    model.initSystem()
+    model.printToXML(str(out_dir / "unscaled_generic.osim"))
+    bs = model.updBodySet()
+    for name, f in (factors or {}).items():
+        geom = bs.get(name).upd_attached_geometry(0)
+        g = geom.get_scale_factors()
+        geom.set_scale_factors(osim.Vec3(g[0] * f[0], g[1] * f[1], g[2] * f[2]))
+    model.finalizeConnections()
+    out = out_dir / "match_markers_and_physics.osim"
     model.printToXML(str(out))
     return out
 
 
 @pytest.fixture(scope="session")
-def synthetic_wa_ab_osim(stripped_tian_path: Path, base_comak_path: Path, tmp_path_factory) -> Path:
-    """AB-shaped model with a non-trivial, in-repo-derived knee scale.
+def identity_ab_osim(base_comak_path: Path, tmp_path_factory) -> Path:
+    """AB-shaped output for the COMAK skeleton with every body factor = (1, 1, 1).
 
-    Like ``identity_ab_osim`` but with ``femur_r`` and ``tibia_r`` set to an
-    isotropic 0.9 — so ``build_scale_set`` yields ``s_wa = 0.9`` with no
-    dependence on the untracked RSubject_121 AB output. Lets the origin-scaling
-    placement regression run on the reference base wherever the reference
-    Geometry is present. AB's generic beside it is the COMAK base, as for
-    ``identity_ab_osim``.
+    scale_comak_model on it must reproduce the base (an identity scaling).
     """
-    out = tmp_path_factory.mktemp("synthetic_wa_ab") / "match_markers_and_physics.osim"
-    place_ab_generic(out.parent, base_comak_path)
-    model = osim.Model(str(stripped_tian_path))
-    model.initSystem()
-    bs = model.getBodySet()
-    for i in range(bs.getSize()):
-        body = bs.get(i)
-        if body.getPropertyByName("attached_geometry").size() == 0:
-            continue
-        sf = (0.9, 0.9, 0.9) if body.getName() in ("femur_r", "tibia_r") else (1.0, 1.0, 1.0)
-        body.upd_attached_geometry(0).set_scale_factors(osim.Vec3(*sf))
-    model.finalizeConnections()
-    model.printToXML(str(out))
-    return out
+    if not _base_geometry_has_knee_stls(base_comak_path):
+        pytest.skip("Reference base Geometry STLs absent")
+    return make_comak_ab_output(tmp_path_factory.mktemp("identity_ab"))
+
+
+@pytest.fixture(scope="session")
+def synthetic_wa_ab_osim(base_comak_path: Path, tmp_path_factory) -> Path:
+    """AB-shaped output with a non-trivial, in-repo-derived knee scale.
+
+    Like ``identity_ab_osim`` but with ``femur_r`` and ``tibia_r`` at an
+    isotropic 0.9, so ``build_scale_set`` yields ``s_wa = 0.9``, with no
+    dependence on the untracked RSubject_121 AB output. This lets the
+    origin-scaling placement regression run on the reference base wherever the
+    reference Geometry is present.
+    """
+    if not _base_geometry_has_knee_stls(base_comak_path):
+        pytest.skip("Reference base Geometry STLs absent")
+    return make_comak_ab_output(
+        tmp_path_factory.mktemp("synthetic_wa_ab"),
+        {"femur_r": (0.9, 0.9, 0.9), "tibia_r": (0.9, 0.9, 0.9)},
+    )
 
 
 def _base_geometry_has_knee_stls(base_osim: Path) -> bool:
