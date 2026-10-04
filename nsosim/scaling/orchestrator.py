@@ -161,11 +161,57 @@ def volume_rule_masses(
     return {name: w * c for name, w in weighted.items()}, c
 
 
+def derive_mass_proxies(ab_scaled_osim: Path, ab_bodies, exclude=()) -> Tuple[Dict[str, str], list]:
+    """Bodies of AB's skeleton that no marker observes, each mapped to an observed neighbour.
+
+    AB still returns factors for a body with no marker on it, but nothing constrains them: on the COMAK v7 skeleton
+    the head (``neckhead``) comes back at 1.4-1.9x its volume in every donor. Under the volume rule that factor would
+    set the body's mass. So, for mass and inertia only, such a body borrows an observed neighbour's factors
+    (comak rerun-v3, owner ruling 2026-10-04): an observed child if it has one, otherwise its nearest observed
+    ancestor. On the v7 skeleton that gives talus -> calcaneus, toes -> calcaneus, neckhead -> torso and
+    patella_l -> femur_l.
+
+    Observed = carries at least one marker of AB's MarkerSet. The topology is AB's model's joints. ``exclude``
+    (the knee bodies, which take ``s_wa`` regardless) is left out. Returns ``({body: proxy}, sorted observed bodies)``;
+    raises if an unobserved body has no observed neighbour.
+    """
+    model = osim.Model(str(ab_scaled_osim))
+    model.initSystem()
+    ms = model.getMarkerSet()
+    observed = {
+        ms.get(i).getParentFrame().findBaseFrame().getName() for i in range(ms.getSize())
+    }
+    parent: Dict[str, str] = {}
+    js = model.getJointSet()
+    for i in range(js.getSize()):
+        j = js.get(i)
+        parent[j.getChildFrame().findBaseFrame().getName()] = j.getParentFrame().findBaseFrame().getName()
+    children: Dict[str, list] = {}
+    for child, par in parent.items():
+        children.setdefault(par, []).append(child)
+
+    proxies: Dict[str, str] = {}
+    for body in sorted(set(ab_bodies) - observed - set(exclude)):
+        seen = [c for c in sorted(children.get(body, [])) if c in observed]
+        if seen:
+            proxies[body] = seen[0]
+            continue
+        up = parent.get(body)
+        while up is not None and up not in observed:
+            up = parent.get(up)
+        if up is None or up == "ground":
+            raise ValueError(f"{body}: no marker observes it, and no observed neighbour was found in AB's skeleton")
+        proxies[body] = up
+    return proxies, sorted(observed)
+
+
 def _apply_volume_rule_masses(
     output_osim: Path,
-    volume_factors: Dict[str, float],
+    base_osim: Path,
+    scale_factors: Dict[str, Tuple[float, float, float]],
     ab_bodies: set,
     target_total_mass: float,
+    proxies: Optional[Dict[str, str]] = None,
 ) -> Dict[str, dict]:
     """Set the scaled model's masses by the volume rule (``mass_rule="volume"``).
 
@@ -175,19 +221,43 @@ def _apply_volume_rule_masses(
     geometric scaling. AB's own per-body masses are not read: they are this same rule applied to AB's generic, and
     on a COMAK model they would leave out the bodies AB does not model.
 
+    ``proxies`` ({body: observed neighbour}, see ``derive_mass_proxies``): a proxied body's mass uses its neighbour's
+    volume factor, and its inertia is re-scaled from ``base_osim``'s with the neighbour's factors
+    (``Body.scaleInertialProperties``, the call ScaleTool itself makes). Its geometry and joint frames keep AB's
+    factors, so AB's marker fit is untouched.
+
     Returns a per-body audit, plus ``__c`` (the normalisation) and ``__fraction_absent_from_ab`` (the share of the
     final mass in bodies that AB's skeleton does not have: the arms on an armless skeleton, the knee sub-bodies).
     """
+    proxies = dict(proxies or {})
     model = osim.Model(str(output_osim))
     model.initSystem()
     bs = model.updBodySet()
     names = [bs.get(i).getName() for i in range(bs.getSize())]
+    missing = [b for b in list(proxies) + list(proxies.values()) if b not in names or b not in scale_factors]
+    if missing:
+        raise ValueError(f"mass proxies name bodies the scaled model or the scale set lacks: {missing}")
     base = {name: float(bs.get(name).getMass()) for name in names}
-    final, c = volume_rule_masses(base, volume_factors, target_total_mass)
+
+    def volume(name: str) -> float:
+        sf = scale_factors.get(proxies.get(name, name))
+        return abs(sf[0] * sf[1] * sf[2]) if sf is not None else 1.0
+
+    final, c = volume_rule_masses(base, {n: volume(n) for n in names}, target_total_mass)
+
+    base_bodies = None
+    if proxies:
+        base_model = osim.Model(str(base_osim))
+        base_model.initSystem()
+        base_bodies = base_model.getBodySet()
 
     audit: Dict[str, dict] = {}
     for name in names:
         body = bs.get(name)
+        if name in proxies:
+            # Geometric inertia from the neighbour's factors instead of AB's, then the mass ratio below.
+            body.setInertia(base_bodies.get(name).getInertia())
+            body.scaleInertialProperties(osim.Vec3(*scale_factors[proxies[name]]), False)
         body.setMass(final[name])
         if base[name] > 1e-12:
             ratio = final[name] / base[name]
@@ -195,12 +265,16 @@ def _apply_volume_rule_masses(
             mo = [inertia.getMoments()[k] * ratio for k in range(3)]
             po = [inertia.getProducts()[k] * ratio for k in range(3)]
             body.setInertia(osim.Inertia(mo[0], mo[1], mo[2], po[0], po[1], po[2]))
-        audit[name] = {
+        entry = {
             "base_kg": base[name],
-            "volume_factor": abs(volume_factors.get(name, 1.0)),
+            "volume_factor": volume(name),
             "final_kg": final[name],
             "in_ab_skeleton": name in ab_bodies,
         }
+        if name in proxies:
+            sf = scale_factors[name]
+            entry.update(mass_proxy=proxies[name], ab_volume_factor=abs(sf[0] * sf[1] * sf[2]))
+        audit[name] = entry
 
     model.finalizeConnections()
     model.printToXML(str(output_osim))
@@ -231,6 +305,7 @@ def scale_comak_model(
     allow_generic_mismatch: bool = False,
     mass_rule: MassRule = "as_run",
     recorded_mass_kg: Optional[float] = None,
+    mass_proxies: Optional[Dict[str, str]] = None,
 ) -> Path:
     """Produce a scaled COMAK model from a base + AB output.
 
@@ -330,6 +405,17 @@ def scale_comak_model(
         ``mass_fraction_in_bodies_absent_from_ab`` and per body
         ``{base_kg, volume_factor, final_kg, in_ab_skeleton}``.
 
+        Bodies no marker observes (``mass_proxies``, volume rule only): AB
+        returns factors for them that nothing constrains (the head comes back
+        at 1.4-1.9x its volume). With ``mass_proxies=None`` (the default) they
+        are derived from AB's marker set (``derive_mass_proxies``: an observed
+        child, else the nearest observed ancestor) and each such body takes its
+        proxy's factors for mass and inertia only; its geometry and joint
+        frames keep AB's factors. Pass a dict to set them explicitly, or ``{}``
+        for none. Report: ``unobserved_bodies``, ``mass_proxies``,
+        ``mass_proxy_source``, ``marker_observed_bodies``; per proxied body
+        ``mass_proxy`` and ``ab_volume_factor``.
+
     AB-input check (``allow_generic_mismatch``):
         Raises ``GenericSkeletonMismatchError`` if AB's generic model is missing
         or differs from ``base_osim``'s skeleton by more than 1 % (femur and
@@ -362,6 +448,8 @@ def scale_comak_model(
 
     if mass_rule not in ("as_run", "volume"):
         raise ValueError(f"mass_rule must be 'as_run' or 'volume', got {mass_rule!r}")
+    if mass_rule != "volume" and mass_proxies:
+        raise ValueError("mass_proxies apply only to mass_rule='volume'; as_run reproduces v2 and takes none")
     if mass_rule == "volume" and not preserve_mass_distribution:
         raise ValueError(
             "mass_rule='volume' sets every mass itself and needs ScaleTool to scale the geometry only: "
@@ -427,13 +515,28 @@ def scale_comak_model(
 
     # Per-body masses -- AFTER the geometry copy + bake so the model loads
     # cleanly (contact meshes are resolvable).
+    proxy_fields: dict = {}
     if mass_rule == "volume":
+        observed = None
+        if mass_proxies is None:
+            proxies, observed = derive_mass_proxies(ab_scaled_osim, factors, exclude=WA_KNEE_BODIES)
+            source = "derived from AB's marker set"
+        else:
+            proxies, source = dict(mass_proxies), "explicit argument"
         mass_audit = _apply_volume_rule_masses(
             output_osim=output_osim,
-            volume_factors={k: v[0] * v[1] * v[2] for k, v in scale_set_dump.items()},
+            base_osim=base_osim,
+            scale_factors=scale_set_dump,
             ab_bodies=set(factors),
             target_total_mass=subject_mass_effective,
+            proxies=proxies,
         )
+        proxy_fields = {
+            "unobserved_bodies": sorted(proxies),
+            "mass_proxies": proxies,
+            "mass_proxy_source": source,
+            "marker_observed_bodies": observed,
+        }
     else:
         ab_masses = _read_ab_per_body_masses(ab_scaled_osim)
         mass_audit = _apply_per_body_masses(
@@ -461,6 +564,7 @@ def scale_comak_model(
         mass_fields = {
             "mass_normalisation_c": mass_audit["__c"],
             "mass_fraction_in_bodies_absent_from_ab": mass_audit["__fraction_absent_from_ab"],
+            **proxy_fields,
         }
     else:
         mass_fields = {

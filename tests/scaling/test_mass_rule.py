@@ -12,6 +12,10 @@ The test list is the spec in comak ``.claude/reports/rerun_v3/mass_decisions.md`
 
 Plus: the default (``mass_rule="as_run"``) is the v2 code path, unchanged; the two rules give the same geometry
 and the same inertia per unit mass; and ``"volume"`` refuses ``preserve_mass_distribution=False``.
+
+Bodies no marker observes (owner ruling 2026-10-04) take an observed neighbour's factors for mass and inertia only:
+the proxy map is derived from the marker set, the head follows the torso, the geometry and joints keep AB's factors,
+and ``mass_proxies={}`` gives the plain rule back.
 """
 
 import hashlib
@@ -21,7 +25,7 @@ from pathlib import Path
 import opensim as osim
 import pytest
 
-from nsosim.scaling import WA_KNEE_BODIES, scale_comak_model, volume_rule_masses
+from nsosim.scaling import WA_KNEE_BODIES, derive_mass_proxies, scale_comak_model, volume_rule_masses
 from nsosim.scaling.scale_factors import read_ab_factors
 
 from .conftest import ARMLESS_TRC, _base_geometry_has_knee_stls, make_comak_ab_output
@@ -43,6 +47,18 @@ FACTORS = {
     "tibia_l": (1.00, 1.05, 1.01),
     "torso": (0.94, 1.01, 0.90),
     "calcn_r": (1.05, 0.95, 1.00),
+    # No marker observes these two (as on AB's real outputs, where the head comes back at 1.4-1.9x its volume).
+    "neckhead": (1.25, 1.15, 1.07),
+    "talus_r": (0.91, 1.12, 0.97),
+}
+# What derive_mass_proxies must find on this skeleton (the armless COMAK model with the Tian markers).
+EXPECTED_PROXIES = {
+    "neckhead": "torso",
+    "patella_l": "femur_l",
+    "talus_l": "calcn_l",
+    "talus_r": "calcn_r",
+    "toes_l": "calcn_l",
+    "toes_r": "calcn_r",
 }
 SUBJECT_MASS = 80.0
 RECORDED_MASS = 79.2
@@ -180,10 +196,12 @@ class TestVolumeRule:
         )
         # This fixture's AB skeleton is the armless COMAK model *with* its knee bodies (a stripped upload has none);
         # whatever AB returns for those, they take s_wa, so they are checked by (iv), not here.
+        # Bodies no marker observes take a neighbour's factors for mass (TestMassProxies), so only the observed
+        # ones keep AB's ratios.
         ab_bodies = [
             b
             for b, entry in report["per_body_mass_audit"].items()
-            if entry["in_ab_skeleton"] and b not in WA_KNEE_BODIES
+            if entry["in_ab_skeleton"] and b not in WA_KNEE_BODIES and "mass_proxy" not in entry
         ]
         assert "pelvis" in ab_bodies and "humerus_r" not in ab_bodies
         for name in ab_bodies:
@@ -208,16 +226,19 @@ class TestVolumeRule:
         assert report["ab_total_minus_recorded_kg"] == pytest.approx(
             report["ab_total_mass_kg"] - RECORDED_MASS, rel=1e-12
         )
-        for entry in report["per_body_mass_audit"].values():
-            assert set(entry) == {"base_kg", "volume_factor", "final_kg", "in_ab_skeleton"}
+        for name, entry in report["per_body_mass_audit"].items():
+            extra = {"mass_proxy", "ab_volume_factor"} if name in report["mass_proxies"] else set()
+            assert set(entry) == {"base_kg", "volume_factor", "final_kg", "in_ab_skeleton"} | extra, name
 
     def test_same_geometry_and_inertia_per_mass_as_as_run(self, volume_scaled, as_run_scaled):
         """Only the masses differ: the baked geometry is identical, and inertia / mass is ScaleTool's geometric
         scaling in both."""
-        (vol, _), (old, _) = volume_scaled, as_run_scaled
+        (vol, report), (old, _) = volume_scaled, as_run_scaled
         assert _md5_tree(vol.parent / "Geometry") == _md5_tree(old.parent / "Geometry")
         mv, mo, iv, io = _masses(vol), _masses(old), _inertia(vol), _inertia(old)
         for name in mv:
+            if name in report["mass_proxies"]:  # inertia re-scaled by the proxy's factors (TestMassProxies)
+                continue
             if mo[name] > 1e-12:
                 assert [x / mv[name] for x in iv[name]] == pytest.approx(
                     [x / mo[name] for x in io[name]], rel=1e-9, abs=1e-15
@@ -234,3 +255,116 @@ class TestVolumeRule:
     def test_volume_requires_preserved_mass_distribution(self, base_comak_path, mass_rule_ab, tmp_path):
         with pytest.raises(ValueError, match="preserve_mass_distribution"):
             _scale(base_comak_path, mass_rule_ab, tmp_path, mass_rule="volume", preserve_mass_distribution=False)
+
+
+# ------------------------------------------------------- unobserved-body proxies ----
+
+
+@pytest.fixture(scope="session")
+def no_proxy_scaled(base_comak_path: Path, mass_rule_ab: Path, tmp_path_factory):
+    return _scale(base_comak_path, mass_rule_ab, tmp_path_factory.mktemp("no_proxy"), mass_rule="volume",
+                  mass_proxies={})
+
+
+def _geometry_scales(path: Path) -> dict:
+    m = osim.Model(str(path))
+    m.initSystem()
+    bs = m.getBodySet()
+    out = {}
+    for i in range(bs.getSize()):
+        b = bs.get(i)
+        if b.getPropertyByName("attached_geometry").size():
+            sf = b.get_attached_geometry(0).get_scale_factors()
+            out[b.getName()] = (sf[0], sf[1], sf[2])
+    return out
+
+
+def _joint_frames(path: Path) -> dict:
+    m = osim.Model(str(path))
+    m.initSystem()
+    js = m.getJointSet()
+    out = {}
+    for i in range(js.getSize()):
+        j = js.get(i)
+        for k in range(j.getPropertyByName("frames").size()):
+            t = j.get_frames(k).get_translation()
+            out[f"{j.getName()}/{k}"] = (t[0], t[1], t[2])
+    return out
+
+
+def test_proxies_derived_from_marker_set(mass_rule_ab: Path):
+    """Unobserved = no marker on the body; an observed child first, else the nearest observed ancestor."""
+    generic = mass_rule_ab.parent / "unscaled_generic.osim"
+    factors = read_ab_factors(mass_rule_ab, generic_osim=generic)
+    proxies, observed = derive_mass_proxies(mass_rule_ab, factors, exclude=WA_KNEE_BODIES)
+    assert proxies == EXPECTED_PROXIES
+    assert set(observed) >= {"pelvis", "torso", "femur_r", "tibia_r", "calcn_r", "femur_l", "tibia_l", "calcn_l"}
+
+
+def test_proxies_on_real_v7_output():
+    """The same map on AB's own output for a real donor (untracked; skipped when absent)."""
+    models = UNTRACKED_AB / "Subject_119_v7" / "Models"
+    ab = models / "match_markers_and_physics.osim"
+    if not ab.is_file():
+        pytest.skip(f"real AB output absent: {models}")
+    factors = read_ab_factors(ab, generic_osim=models / "unscaled_generic.osim")
+    proxies, _ = derive_mass_proxies(ab, factors, exclude=WA_KNEE_BODIES)
+    assert proxies == EXPECTED_PROXIES
+
+
+@pytest.mark.slow
+class TestMassProxies:
+    def test_total_still_equals_subject_mass(self, volume_scaled):
+        out, report = volume_scaled
+        assert sum(_masses(out).values()) == pytest.approx(SUBJECT_MASS, rel=1e-9)
+        assert report["mass_proxies"] == EXPECTED_PROXIES
+        assert report["mass_proxy_source"] == "derived from AB's marker set"
+        assert report["unobserved_bodies"] == sorted(EXPECTED_PROXIES)
+
+    def test_head_mass_follows_the_torso(self, base_comak_path, volume_scaled):
+        out, report = volume_scaled
+        base, final = _masses(base_comak_path), _masses(out)
+        c = report["mass_normalisation_c"]
+        assert final["neckhead"] == pytest.approx(base["neckhead"] * _volume(FACTORS["torso"]) * c, rel=1e-9)
+        assert final["talus_r"] == pytest.approx(base["talus_r"] * _volume(FACTORS["calcn_r"]) * c, rel=1e-9)
+        entry = report["per_body_mass_audit"]["neckhead"]
+        assert entry["mass_proxy"] == "torso"
+        assert entry["ab_volume_factor"] == pytest.approx(_volume(FACTORS["neckhead"]), rel=1e-12)
+
+    def test_head_inertia_follows_the_torso(self, base_comak_path, volume_scaled):
+        """Inertia per unit mass = the base inertia scaled geometrically by the proxy's factors (OpenSim's rule)."""
+        out, _ = volume_scaled
+        base = osim.Model(str(base_comak_path))
+        base.initSystem()
+        for body, proxy in (("neckhead", "torso"), ("talus_r", "calcn_r")):
+            b = base.updBodySet().get(body)
+            b.scaleInertialProperties(osim.Vec3(*FACTORS[proxy]), False)
+            expected = [x / b.getMass() for x in _inertia_of(b)]
+            got = _inertia(out)[body]
+            got = [x / _masses(out)[body] for x in got]
+            assert got == pytest.approx(expected, rel=1e-9, abs=1e-15), body
+
+    def test_geometry_and_joints_keep_ab_factors(self, volume_scaled, no_proxy_scaled):
+        """The proxy touches mass and inertia only: geometry, joint frames and markers are as AB fitted them."""
+        (out, _), (ref, _) = volume_scaled, no_proxy_scaled
+        assert _geometry_scales(out) == _geometry_scales(ref)
+        assert _joint_frames(out) == _joint_frames(ref)
+        assert _md5_tree(out.parent / "Geometry") == _md5_tree(ref.parent / "Geometry")
+
+    def test_no_proxies_reproduces_the_plain_volume_rule(self, base_comak_path, no_proxy_scaled):
+        """mass_proxies={} is the volume rule as first merged: every body by its own AB factor."""
+        out, report = no_proxy_scaled
+        base, final = _masses(base_comak_path), _masses(out)
+        assert report["mass_proxies"] == {} and report["mass_proxy_source"] == "explicit argument"
+        assert final["neckhead"] == pytest.approx(
+            base["neckhead"] * _volume(FACTORS["neckhead"]) * report["mass_normalisation_c"], rel=1e-9
+        )
+
+    def test_proxies_refused_with_as_run(self, base_comak_path, mass_rule_ab, tmp_path):
+        with pytest.raises(ValueError, match="mass_proxies"):
+            _scale(base_comak_path, mass_rule_ab, tmp_path, mass_rule="as_run", mass_proxies={"neckhead": "torso"})
+
+
+def _inertia_of(body) -> list:
+    inertia = body.getInertia()
+    return [inertia.getMoments()[k] for k in range(3)] + [inertia.getProducts()[k] for k in range(3)]

@@ -10,7 +10,7 @@ applies the ITB1 path-point fix-up.
 """
 
 from .config import LONG_AXIS_INDEX, WA_KNEE_BODIES, MassRule, ScalingMode
-from .orchestrator import scale_comak_model, volume_rule_masses
+from .orchestrator import derive_mass_proxies, scale_comak_model, volume_rule_masses
 from .validate import GenericSkeletonMismatchError, check_ab_generic, measure_skeleton
 
 __all__ = [
@@ -20,6 +20,7 @@ __all__ = [
     "MassRule",
     "ScalingMode",
     "check_ab_generic",
+    "derive_mass_proxies",
     "measure_skeleton",
     "scale_comak_model",
     "volume_rule_masses",
