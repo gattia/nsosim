@@ -40,6 +40,7 @@ from nsosim.articular_surfaces import (
     create_prefemoral_fatpad_noboolean,
 )
 from nsosim.comak_osim_update import update_osim_model
+from nsosim.geometry_staging import check_mode, stage_model_folder
 from nsosim.meniscal_ligaments import project_meniscal_attachments_to_tibia
 from nsosim.nsm_fitting import interp_ref_to_subject_to_osim
 from nsosim.osim_utils import (
@@ -844,6 +845,10 @@ def save_geometry_files(folder_save_bones, path_save_model, geometry_dict=None):
     geometry_dict : dict or None
         {bone_name: [filename, ...]} mapping of files to copy. If None, uses
         DEFAULT_GEOMETRY_FILES.
+
+    Raises if a destination is a symlink: copying onto it would write through
+    the link into the file it points at (with ``geometry_staging="link"``, a
+    shared template mesh).
     """
     if geometry_dict is None:
         geometry_dict = DEFAULT_GEOMETRY_FILES
@@ -855,6 +860,11 @@ def save_geometry_files(folder_save_bones, path_save_model, geometry_dict=None):
         for filename in geom_list:
             src = os.path.join(folder_save_bones, bone, filename)
             dst = os.path.join(geometry_dir, filename)
+            if os.path.islink(dst):
+                raise FileExistsError(
+                    f"{dst} is a symlink; copying the subject's {filename} onto it would "
+                    "overwrite the file it points at"
+                )
             shutil.copy(src, dst)
 
 
@@ -1149,6 +1159,7 @@ def build_joint_model(
     triangle_density=3_000_000,
     folder_save_bones=None,
     seed=0,
+    geometry_staging="copy",
 ):
     """Build a subject-specific OpenSim knee model from OSIM-space meshes.
 
@@ -1168,7 +1179,8 @@ def build_joint_model(
     (``create_articular_surfaces``, ``interpolate_bone_ligaments``,
     ``fit_bone_wrap_surfaces``, ``create_meniscus_articulating_surface``,
     ``interpolate_meniscus_ligaments``, ``create_prefemoral_fatpad_noboolean``,
-    ``center_patella_meshes``), ``copytree``s the base model directory, writes
+    ``center_patella_meshes``), starts the model folder from the base model
+    directory (copied, or its meshes linked: ``geometry_staging``), writes
     the recon/derived STLs via ``save_geometry_files``, and finalizes the
     ``.osim`` via ``finalize_osim_model``.
 
@@ -1303,6 +1315,14 @@ def build_joint_model(
         flags). Pinned at the top of the orchestrator so wrap-surface fitting
         and any downstream sampling are deterministic. Defaults to 0. Pass
         ``None`` to opt out.
+    geometry_staging : {"copy", "link"}
+        How the new model folder is started from ``path_base_osim_model``.
+        ``"copy"`` (default) copies the whole folder. ``"link"`` copies its
+        top-level files (the template ``.osim``) and makes ``Geometry/`` a real
+        folder of relative symlinks to the template's meshes, which every model
+        carries unchanged (``nsosim.geometry_staging.stage_model_folder``). The
+        subject's own meshes are copied in as real files either way. The model
+        is identical either way.
 
     Returns
     -------
@@ -1311,6 +1331,7 @@ def build_joint_model(
     """
     import opensim as osim
 
+    check_mode(geometry_staging)
     if seed is not None:
         from ._determinism import set_global_seed
 
@@ -1713,10 +1734,10 @@ def build_joint_model(
     # -----------------------------------------------------------------------
     print("=== OpenSim Model Assembly ===")
 
-    # Copy template model
+    # Start the model folder from the template (copied, or its meshes linked)
     path_save_model = os.path.join(save_dir, model_name)
     if not os.path.exists(path_save_model):
-        shutil.copytree(path_base_osim_model, path_save_model)
+        stage_model_folder(path_base_osim_model, path_save_model, mode=geometry_staging)
 
     # Copy geometry files
     save_geometry_files(folder_save_bones, path_save_model)

@@ -7,8 +7,9 @@ from typing import Dict, Optional, Tuple
 
 import opensim as osim
 
+from ..geometry_staging import check_mode, stage_geometry
 from .config import WA_KNEE_BODIES, MassRule, ScalingMode
-from .knee_geometry import bake_knee_geometry
+from .knee_geometry import bake_knee_geometry, knee_geometry_files
 from .markers import swap_markerset
 from .model_fixes import fix_in_place
 from .report import write_report
@@ -231,6 +232,7 @@ def scale_comak_model(
     allow_generic_mismatch: bool = False,
     mass_rule: MassRule = "as_run",
     recorded_mass_kg: Optional[float] = None,
+    geometry_staging: str = "copy",
 ) -> Path:
     """Produce a scaled COMAK model from a base + AB output.
 
@@ -281,7 +283,7 @@ def scale_comak_model(
          path; inertia (kg·m²) is scaled geometrically by scale².
       4. Per-body masses, by ``mass_rule`` (see "Mass rule" below); the total
          body mass equals ``subject_mass`` exactly either way.
-      5. Copy base Geometry/ → output_geometry_dir/.
+      5. Copy base Geometry/ → output_geometry_dir/ (``geometry_staging``).
       6. Bake the knee-body geometry into its STLs: multiply each knee STL's
          vertices (meters) by the isotropic, dimensionless ``s_wa`` about the
          body-local origin (= knee joint center, not the bone centroid), then
@@ -295,6 +297,15 @@ def scale_comak_model(
     The output `.osim` is at `output_osim`; the orchestrator requires
     `output_geometry_dir == output_osim.parent / "Geometry"` so OpenSim's default
     relative-path resolution finds the meshes.
+
+    Geometry staging (``geometry_staging``):
+        ``"copy"`` (default) copies the whole base Geometry folder, then step 6
+        rewrites the knee meshes in it. ``"link"`` writes real copies only of the
+        files step 6 rewrites (``knee_geometry_files``, read from ``base_osim``;
+        17 for a COMAK knee) and relative symlinks to ``base_osim``'s Geometry for
+        the rest (``nsosim.geometry_staging``). The scaled model and its results
+        are identical either way; the report records the mode and the counts. The
+        bake raises on a symlink, and the files it wrote must equal the staged set.
 
     Subject mass handling:
         ``subject_mass``, when None (the default), is auto-detected by summing
@@ -348,6 +359,7 @@ def scale_comak_model(
     is None, it defaults to ``output_osim.with_suffix(".scaling.json")``.
     Returns the report path.
     """
+    check_mode(geometry_staging)
     base_osim = Path(base_osim)
     ab_scaled_osim = Path(ab_scaled_osim)
     output_osim = Path(output_osim)
@@ -410,7 +422,14 @@ def scale_comak_model(
     base_geom = _resolve_base_geometry_dir(base_osim)
     if output_geometry_dir.exists():
         shutil.rmtree(output_geometry_dir)
-    shutil.copytree(base_geom, output_geometry_dir)
+    rewritten = set()
+    if geometry_staging == "link":
+        # The scaled model cannot load until its meshes resolve, so the files the
+        # bake rewrites are read off the base model (same bodies, same file names).
+        base_model = osim.Model(str(base_osim))
+        base_model.initSystem()
+        rewritten = knee_geometry_files(base_model, WA_KNEE_BODIES)
+    staging = stage_geometry(base_geom, output_geometry_dir, real=rewritten, mode=geometry_staging)
 
     baked_geometry = bake_knee_geometry(
         scaled_osim=output_osim,
@@ -418,6 +437,12 @@ def scale_comak_model(
         scale=s_wa,
         geometry_dir=output_geometry_dir,
     )
+    if geometry_staging == "link" and set(baked_geometry) != rewritten:
+        raise RuntimeError(
+            "the bake wrote a different file set than was staged as real copies: "
+            f"baked only {sorted(set(baked_geometry) - rewritten)}, "
+            f"staged only {sorted(rewritten - set(baked_geometry))}"
+        )
 
     scale_set_dump = {}
     for i in range(scale_set.getSize()):
@@ -497,6 +522,7 @@ def scale_comak_model(
         scale_set=scale_set_dump,
         wa_scale=s_wa,
         knee_geometry_baked={k: str(v) for k, v in baked_geometry.items()},
+        geometry_staging=staging,
         marker_added=n_added,
         marker_dropped=n_dropped,
         backup_markerset_xml=str(backup_markerset_xml) if backup_markerset_xml else None,

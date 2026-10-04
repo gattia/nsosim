@@ -19,11 +19,42 @@ The generic body (torso, pelvis, limbs) is left on ScaleTool's `scale_factors`
 """
 
 from pathlib import Path
-from typing import Dict, Iterable
+from typing import Dict, Iterable, Set
 
 import numpy as np
 import opensim as osim
 import pymskt as mskt
+
+
+def knee_geometry_files(model: "osim.Model", knee_bodies: Iterable[str]) -> Set[str]:
+    """The mesh files ``bake_knee_geometry`` rewrites, for a loaded model.
+
+    Every ``attached_geometry`` Mesh on a knee body, plus the ``mesh_file`` of every
+    ``Smith2018ContactMesh`` whose frame is a knee body. Body names, frames and file
+    names are the same before and after ScaleTool, so this can be read from the
+    unscaled model too -- which is how ``scale_comak_model`` knows, before the scaled
+    model can load, which files must be real copies rather than links.
+    """
+    knee_bodies = set(knee_bodies)
+    files = set()
+    bs = model.getBodySet()
+    for bi in range(bs.getSize()):
+        body = bs.get(bi)
+        if body.getName() not in knee_bodies:
+            continue
+        for gi in range(body.getPropertyByName("attached_geometry").size()):
+            mesh = osim.Mesh.safeDownCast(body.get_attached_geometry(gi))
+            if mesh is not None:
+                files.add(mesh.get_mesh_file())
+    cg = model.getContactGeometrySet()
+    for i in range(cg.getSize()):
+        g = cg.get(i)
+        if g.getConcreteClassName() != "Smith2018ContactMesh":
+            continue
+        scm = osim.Smith2018ContactMesh.safeDownCast(g)
+        if scm.getFrame().getName() in knee_bodies:
+            files.add(scm.get_mesh_file())
+    return files
 
 
 def bake_knee_geometry(
@@ -55,6 +86,11 @@ def bake_knee_geometry(
     Each unique STL file is scaled exactly once (a file referenced by both a
     contact mesh and a visual mesh is not double-scaled). The model is saved
     back to `scaled_osim`. Returns {stl_filename: stl_path} for files written.
+
+    Every file it rewrites must be a real file in `geometry_dir`: the rewrite is a
+    VTK (C++) write in place, which would go straight through a symlink and
+    overwrite the file it points at (the unscaled model's mesh, or a shared
+    input). A symlink raises before anything is written.
     """
     scaled_osim = Path(scaled_osim)
     geometry_dir = Path(geometry_dir)
@@ -63,9 +99,12 @@ def bake_knee_geometry(
     model = osim.Model(str(scaled_osim))
     model.initSystem()
 
-    stl_files = set()
+    # Visual attached_geometry on knee bodies plus Smith2018ContactMesh STLs
+    # parented to a knee body (the JAM contact loader ignores scale_factors, so
+    # these must be pre-scaled regardless).
+    stl_files = knee_geometry_files(model, knee_bodies)
 
-    # Visual attached_geometry on knee bodies: collect STLs, zero scale_factors.
+    # Zero the visual scale_factors on the knee bodies.
     bs = model.getBodySet()
     for bi in range(bs.getSize()):
         body = bs.get(bi)
@@ -73,22 +112,15 @@ def bake_knee_geometry(
             continue
         for gi in range(body.getPropertyByName("attached_geometry").size()):
             mesh = osim.Mesh.safeDownCast(body.upd_attached_geometry(gi))
-            if mesh is None:
-                continue
-            stl_files.add(mesh.get_mesh_file())
-            mesh.set_scale_factors(osim.Vec3(1.0, 1.0, 1.0))
+            if mesh is not None:
+                mesh.set_scale_factors(osim.Vec3(1.0, 1.0, 1.0))
 
-    # Smith2018ContactMesh STLs parented to a knee body (the JAM contact loader
-    # ignores scale_factors, so these must be pre-scaled regardless).
-    cg = model.getContactGeometrySet()
-    for i in range(cg.getSize()):
-        g = cg.get(i)
-        if g.getConcreteClassName() != "Smith2018ContactMesh":
-            continue
-        scm = osim.Smith2018ContactMesh.safeDownCast(g)
-        if scm.getFrame().getName() not in knee_bodies:
-            continue
-        stl_files.add(scm.get_mesh_file())
+    linked = sorted(f for f in stl_files if (geometry_dir / f).is_symlink())
+    if linked:
+        raise RuntimeError(
+            f"refusing to bake through symlinks in {geometry_dir}: {linked}. The bake rewrites "
+            "each file in place, which would overwrite the file the link points at."
+        )
 
     # NOTE: an STL stores a triangle soup with no vertex indexing, so this
     # read -> scale -> write -> (later) read round-trip can permute the vertex
