@@ -152,10 +152,13 @@ def _knee_centroid_by_body(model_path: Path) -> Dict[str, np.ndarray]:
 
     for body_name, files in body_files.items():
         pts = []
-        for f in files:
+        # Sorted, and accumulated in float64: the STL points are float32, and a float32 mean over a set's
+        # (hash-seed-dependent) order moved tibia_proximal_r's ratio by ~1e-5, i.e. across TOL_CENTROID, so the
+        # test passed or failed with PYTHONHASHSEED (comak rerun-v3 01, 2026-10-03).
+        for f in sorted(files):
             p = geom / f
             if p.is_file():
-                pts.append(np.asarray(mskt.mesh.Mesh(str(p)).point_coords))
+                pts.append(np.asarray(mskt.mesh.Mesh(str(p)).point_coords, dtype=np.float64))
         if pts:
             out[body_name] = np.concatenate(pts, axis=0).mean(axis=0)
     return out
