@@ -9,16 +9,18 @@ subject-specific knee geometry into its STLs, transplants AB's MarkerSet, and
 applies the ITB1 path-point fix-up.
 """
 
-from .config import LONG_AXIS_INDEX, WA_KNEE_BODIES, ScalingMode
-from .orchestrator import scale_comak_model
+from .config import LONG_AXIS_INDEX, WA_KNEE_BODIES, MassRule, ScalingMode
+from .orchestrator import scale_comak_model, volume_rule_masses
 from .validate import GenericSkeletonMismatchError, check_ab_generic, measure_skeleton
 
 __all__ = [
     "LONG_AXIS_INDEX",
     "WA_KNEE_BODIES",
     "GenericSkeletonMismatchError",
+    "MassRule",
     "ScalingMode",
     "check_ab_generic",
     "measure_skeleton",
     "scale_comak_model",
+    "volume_rule_masses",
 ]

@@ -7,7 +7,7 @@ from typing import Dict, Optional, Tuple
 
 import opensim as osim
 
-from .config import WA_KNEE_BODIES, ScalingMode
+from .config import WA_KNEE_BODIES, MassRule, ScalingMode
 from .knee_geometry import bake_knee_geometry
 from .markers import swap_markerset
 from .model_fixes import fix_in_place
@@ -140,6 +140,76 @@ def _apply_per_body_masses(
     return audit
 
 
+def volume_rule_masses(
+    base_masses: Dict[str, float],
+    volume_factors: Dict[str, float],
+    total_mass: float,
+) -> Tuple[Dict[str, float], float]:
+    """Per-body masses by OpenSim's volume rule. Returns ``({body: kg}, c)``.
+
+    ``m_i = base_i * V_i * c`` with ``c = total_mass / sum_j(base_j * V_j)``, so the masses sum to
+    ``total_mass``. ``V_i`` is the product of body *i*'s three scale factors (a body absent from
+    ``volume_factors`` has ``V = 1``). This is what ScaleTool does with ``preserve_mass_distribution=False`` and a
+    subject mass, and what AddBiomechanics' output masses are: AB's per-body masses equal this rule applied to AB's
+    generic with AB's factors, to machine precision (comak rerun-v3 sub-plan 02, ``ab_mass_rule.py``).
+    """
+    weighted = {name: m * abs(volume_factors.get(name, 1.0)) for name, m in base_masses.items()}
+    denominator = sum(weighted.values())
+    if denominator <= 1e-12:
+        raise RuntimeError("Model has zero total body mass -- cannot apply the volume rule.")
+    c = float(total_mass) / denominator
+    return {name: w * c for name, w in weighted.items()}, c
+
+
+def _apply_volume_rule_masses(
+    output_osim: Path,
+    volume_factors: Dict[str, float],
+    ab_bodies: set,
+    target_total_mass: float,
+) -> Dict[str, dict]:
+    """Set the scaled model's masses by the volume rule (``mass_rule="volume"``).
+
+    Runs on ScaleTool's output, made with ``preserve_mass_distribution=True``: there every body still has its base
+    mass and its inertia is scaled geometrically only. Each body's mass becomes ``volume_rule_masses``' value and its
+    inertia (moments and products) is multiplied by ``final / base``, so the inertia per unit mass stays ScaleTool's
+    geometric scaling. AB's own per-body masses are not read: they are this same rule applied to AB's generic, and
+    on a COMAK model they would leave out the bodies AB does not model.
+
+    Returns a per-body audit, plus ``__c`` (the normalisation) and ``__fraction_absent_from_ab`` (the share of the
+    final mass in bodies that AB's skeleton does not have: the arms on an armless skeleton, the knee sub-bodies).
+    """
+    model = osim.Model(str(output_osim))
+    model.initSystem()
+    bs = model.updBodySet()
+    names = [bs.get(i).getName() for i in range(bs.getSize())]
+    base = {name: float(bs.get(name).getMass()) for name in names}
+    final, c = volume_rule_masses(base, volume_factors, target_total_mass)
+
+    audit: Dict[str, dict] = {}
+    for name in names:
+        body = bs.get(name)
+        body.setMass(final[name])
+        if base[name] > 1e-12:
+            ratio = final[name] / base[name]
+            inertia = body.getInertia()
+            mo = [inertia.getMoments()[k] * ratio for k in range(3)]
+            po = [inertia.getProducts()[k] * ratio for k in range(3)]
+            body.setInertia(osim.Inertia(mo[0], mo[1], mo[2], po[0], po[1], po[2]))
+        audit[name] = {
+            "base_kg": base[name],
+            "volume_factor": abs(volume_factors.get(name, 1.0)),
+            "final_kg": final[name],
+            "in_ab_skeleton": name in ab_bodies,
+        }
+
+    model.finalizeConnections()
+    model.printToXML(str(output_osim))
+    absent = sum(final[n] for n in names if n not in ab_bodies)
+    audit["__c"] = c  # type: ignore[assignment]
+    audit["__fraction_absent_from_ab"] = absent / float(target_total_mass)  # type: ignore[assignment]
+    return audit
+
+
 def _read_ab_factors_for_mass(ab_osim: Path) -> Dict[str, Tuple[float, float, float]]:
     """Like read_ab_factors() but kept local so the orchestrator can call it
     without import-cycle risk. AB reports ``(1,1,1)`` for bodies it didn't
@@ -159,6 +229,8 @@ def scale_comak_model(
     report_json: Optional[Path] = None,
     backup_markerset_xml: Optional[Path] = None,
     allow_generic_mismatch: bool = False,
+    mass_rule: MassRule = "as_run",
+    recorded_mass_kg: Optional[float] = None,
 ) -> Path:
     """Produce a scaled COMAK model from a base + AB output.
 
@@ -207,14 +279,8 @@ def scale_comak_model(
          the parent bone's anisotropic AB factors, not by s_wa). Body masses
          (kg) pass through unchanged on ScaleTool's preserve-mass-distribution
          path; inertia (kg·m²) is scaled geometrically by scale².
-      4. Two-pass per-body mass transfer (the post-2026-05-31 fix):
-           Pass 1: target each AB-characterised body to AB's per-body mass;
-                   target the rest to base_mass × global_ratio.
-           Pass 2: renormalise so the total body mass equals
-                   ``subject_mass`` exactly.
-         This preserves AB's per-body physics-tuned distribution (pelvis ≈
-         21 % BW, etc.) while keeping the COMAK extras (menisci, fatpad,
-         knee subbodies) from inflating the total.
+      4. Per-body masses, by ``mass_rule`` (see "Mass rule" below); the total
+         body mass equals ``subject_mass`` exactly either way.
       5. Copy base Geometry/ → output_geometry_dir/.
       6. Bake the knee-body geometry into its STLs: multiply each knee STL's
          vertices (meters) by the isotropic, dimensionless ``s_wa`` about the
@@ -238,11 +304,31 @@ def scale_comak_model(
         float to override (e.g. for unit tests or when the AB tuning is
         suspect).
 
-        AB's per-body masses are also transferred (not just the total) — see
-        pipeline step 4 above and ``_apply_per_body_masses``. The two-pass
-        renormalisation ensures the final total matches ``subject_mass``
-        exactly even though COMAK has bodies that AB doesn't model (which
-        otherwise causes a ~18% overcount).
+        ``recorded_mass_kg`` (optional) is the mass typed into AB, e.g. the
+        participant's recorded body mass. It never sets a mass: it is written
+        to the report beside AB's total (``ab_total_mass_kg``) and their
+        difference, as a sanity check on AB's physics-pass estimate.
+
+    Mass rule (``mass_rule``):
+        ``"as_run"`` (default; how the Paper-1 v2 models were made) -- the
+        two-pass transfer in ``_apply_per_body_masses``. Pass 1 targets each
+        AB-scaled body to AB's per-body mass and the rest to base_mass ×
+        global_ratio; pass 2 renormalises to ``subject_mass``. Because AB's
+        masses already sum to the subject mass, the bodies AB does not model
+        (arms, knee sub-bodies) are counted on top and everything is shrunk
+        (v2: ×0.848; report ``mass_transfer_renormalize_correction``).
+
+        ``"volume"`` -- ``_apply_volume_rule_masses``: OpenSim's volume rule on
+        this model's own base masses, ``m_i = base_i · (sx·sy·sz)_i · c``,
+        normalised to ``subject_mass``. AB's per-body masses are this same rule
+        on AB's generic, so where the generic and ``base_osim`` carry the same
+        masses (the stripped COMAK skeleton) the AB bodies keep AB's ratios
+        exactly; bodies AB lacks take their share out of the same total (arms:
+        volume factor 1; knee sub-bodies, patella and menisci: ``s_wa³``).
+        Requires ``preserve_mass_distribution=True``, so ScaleTool scales the
+        geometry only. Report: ``mass_normalisation_c``,
+        ``mass_fraction_in_bodies_absent_from_ab`` and per body
+        ``{base_kg, volume_factor, final_kg, in_ab_skeleton}``.
 
     AB-input check (``allow_generic_mismatch``):
         Raises ``GenericSkeletonMismatchError`` if AB's generic model is missing
@@ -274,6 +360,14 @@ def scale_comak_model(
             f"(output_osim.parent / 'Geometry'), got {output_geometry_dir}"
         )
 
+    if mass_rule not in ("as_run", "volume"):
+        raise ValueError(f"mass_rule must be 'as_run' or 'volume', got {mass_rule!r}")
+    if mass_rule == "volume" and not preserve_mass_distribution:
+        raise ValueError(
+            "mass_rule='volume' sets every mass itself and needs ScaleTool to scale the geometry only: "
+            "pass preserve_mass_distribution=True"
+        )
+
     ab_generic_check = check_ab_generic(
         ab_scaled_osim, base_osim, allow_generic_mismatch=allow_generic_mismatch
     )
@@ -292,8 +386,9 @@ def scale_comak_model(
     factors = read_ab_factors(ab_scaled_osim, generic_osim=generic)
     scale_set, s_wa = build_scale_set(factors, mode=mode)
 
+    ab_total_mass = _total_body_mass(ab_scaled_osim)
     if subject_mass is None:
-        subject_mass_effective = _total_body_mass(ab_scaled_osim)
+        subject_mass_effective = ab_total_mass
         log.info(
             "Auto-detected subject_mass=%.4f kg from AB model %s",
             subject_mass_effective,
@@ -324,15 +419,29 @@ def scale_comak_model(
         geometry_dir=output_geometry_dir,
     )
 
-    # Two-pass per-body mass transfer — runs AFTER geometry copy + bake so
-    # the model loads cleanly (contact meshes are resolvable).
-    ab_masses = _read_ab_per_body_masses(ab_scaled_osim)
-    mass_audit = _apply_per_body_masses(
-        output_osim=output_osim,
-        ab_per_body_masses=ab_masses,
-        ab_factors=factors,
-        target_total_mass=subject_mass_effective,
-    )
+    scale_set_dump = {}
+    for i in range(scale_set.getSize()):
+        s = scale_set.get(i)
+        sf = s.getScaleFactors()
+        scale_set_dump[s.getSegmentName()] = (float(sf[0]), float(sf[1]), float(sf[2]))
+
+    # Per-body masses -- AFTER the geometry copy + bake so the model loads
+    # cleanly (contact meshes are resolvable).
+    if mass_rule == "volume":
+        mass_audit = _apply_volume_rule_masses(
+            output_osim=output_osim,
+            volume_factors={k: v[0] * v[1] * v[2] for k, v in scale_set_dump.items()},
+            ab_bodies=set(factors),
+            target_total_mass=subject_mass_effective,
+        )
+    else:
+        ab_masses = _read_ab_per_body_masses(ab_scaled_osim)
+        mass_audit = _apply_per_body_masses(
+            output_osim=output_osim,
+            ab_per_body_masses=ab_masses,
+            ab_factors=factors,
+            target_total_mass=subject_mass_effective,
+        )
 
     n_added, n_dropped = swap_markerset(
         scaled_osim=output_osim,
@@ -345,16 +454,21 @@ def scale_comak_model(
     report_path = (
         Path(report_json) if report_json is not None else output_osim.with_suffix(".scaling.json")
     )
-    scale_set_dump = {}
-    for i in range(scale_set.getSize()):
-        s = scale_set.get(i)
-        sf = s.getScaleFactors()
-        scale_set_dump[s.getSegmentName()] = (float(sf[0]), float(sf[1]), float(sf[2]))
     output_mass = _total_body_mass(output_osim)
     # Split the audit into the per-body table + scalar metadata before serialising.
     per_body_audit = {k: v for k, v in mass_audit.items() if not str(k).startswith("__")}
-    renormalize_correction = mass_audit.get("__renormalize_correction", 1.0)
-    provisional_total = mass_audit.get("__provisional_total_kg", subject_mass_effective)
+    if mass_rule == "volume":
+        mass_fields = {
+            "mass_normalisation_c": mass_audit["__c"],
+            "mass_fraction_in_bodies_absent_from_ab": mass_audit["__fraction_absent_from_ab"],
+        }
+    else:
+        mass_fields = {
+            "mass_transfer_provisional_total_kg": mass_audit.get(
+                "__provisional_total_kg", subject_mass_effective
+            ),
+            "mass_transfer_renormalize_correction": mass_audit.get("__renormalize_correction", 1.0),
+        }
     write_report(
         report_path,
         mode=mode,
@@ -369,10 +483,15 @@ def scale_comak_model(
         preserve_mass_distribution=preserve_mass_distribution,
         subject_mass_kg=subject_mass_effective,
         subject_mass_source=("override" if subject_mass is not None else "ab_total_body_mass"),
+        ab_total_mass_kg=ab_total_mass,
+        recorded_mass_kg=recorded_mass_kg,
+        ab_total_minus_recorded_kg=(
+            ab_total_mass - float(recorded_mass_kg) if recorded_mass_kg is not None else None
+        ),
         base_total_mass_kg=base_mass,
         output_total_mass_kg=output_mass,
-        mass_transfer_provisional_total_kg=provisional_total,
-        mass_transfer_renormalize_correction=renormalize_correction,
+        mass_rule=mass_rule,
+        **mass_fields,
         per_body_mass_audit=per_body_audit,
         ab_factors={k: list(v) for k, v in factors.items()},
         scale_set=scale_set_dump,

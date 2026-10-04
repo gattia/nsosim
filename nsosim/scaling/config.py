@@ -9,6 +9,15 @@ from typing import Literal, Tuple
 
 ScalingMode = Literal["WA", "LA", "AB"]
 
+# How body masses are set after ScaleTool (scale_comak_model's ``mass_rule``):
+#   "as_run" -- the Paper-1 v2 rule (_apply_per_body_masses): AB's per-body masses imported for the bodies AB
+#               scaled, a global ratio for the rest, everything renormalised to the total. On a COMAK model this
+#               counts the bodies AB does not model twice (v2: x0.848). Kept so v2 can be reproduced exactly.
+#   "volume" -- OpenSim's own rule, which AB's masses follow exactly: m_i = base_i * (sx*sy*sz)_i * c, with c set
+#               so the total is the subject mass. Bodies with no scale (arms on an armless AB skeleton) keep
+#               volume factor 1; the knee bodies take s_wa**3. Paper-1 rerun v3, decisions D4a/D4b.
+MassRule = Literal["as_run", "volume"]
+
 # Index into a body's (x, y, z) scale-factor triplet for the long
 # (superior-inferior) axis. In the OpenSim femur_r / tibia_r body frames
 # x = anterior-posterior, y = superior-inferior, z = mediolateral -- verified by
